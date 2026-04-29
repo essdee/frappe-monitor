@@ -184,8 +184,13 @@ func readDisks(s Section) ([]metrics.DiskMount, error) {
 	}
 	out := make([]metrics.DiskMount, 0, len(by))
 	for mount, a := range by {
-		if !a.hasUsed || !a.hasTotal {
-			return nil, fmt.Errorf("disk %q missing used or total", mount)
+		switch {
+		case !a.hasUsed && !a.hasTotal:
+			return nil, fmt.Errorf("disk %q missing both used and total", mount)
+		case !a.hasUsed:
+			return nil, fmt.Errorf("disk %q missing disk_used_bytes", mount)
+		case !a.hasTotal:
+			return nil, fmt.Errorf("disk %q missing disk_total_bytes", mount)
 		}
 		out = append(out, metrics.DiskMount{Mount: mount, UsedBytes: a.used, TotalBytes: a.total})
 	}
@@ -227,8 +232,13 @@ func readNet(s Section) ([]metrics.NetIface, error) {
 	}
 	out := make([]metrics.NetIface, 0, len(by))
 	for name, a := range by {
-		if !a.hasRx || !a.hasTx {
-			return nil, fmt.Errorf("iface %q missing rx or tx", name)
+		switch {
+		case !a.hasRx && !a.hasTx:
+			return nil, fmt.Errorf("iface %q missing both rx and tx", name)
+		case !a.hasRx:
+			return nil, fmt.Errorf("iface %q missing net_rx_bytes", name)
+		case !a.hasTx:
+			return nil, fmt.Errorf("iface %q missing net_tx_bytes", name)
 		}
 		out = append(out, metrics.NetIface{Name: name, RxBytes: a.rx, TxBytes: a.tx})
 	}

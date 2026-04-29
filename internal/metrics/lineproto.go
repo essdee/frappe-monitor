@@ -79,10 +79,11 @@ func (m ServerMetrics) LineProtocol(serverLabel string) string {
 }
 
 // escapeTag escapes characters that are special in influx line protocol
-// tag-key/tag-value position: comma, equals, space. Backslash-escape per
-// the spec. Other characters (including `/` in mount paths) are
-// safe as-is.
+// tag-key/tag-value position: backslash (must be first so it doesn't
+// double-escape the others), comma, equals, space. Other characters
+// (including `/` in mount paths) are safe as-is.
 var tagEscaper = strings.NewReplacer(
+	`\`, `\\`,
 	`,`, `\,`,
 	`=`, `\=`,
 	` `, `\ `,

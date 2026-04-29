@@ -38,6 +38,16 @@ Each item has a phase target (when we'd want to address it by) and the review th
 |---|---|---|---|---|
 | R1 | `client.Schema.Create(ctx)` runs on every store open. | Task 4 review | Phase 7+ | Switch to versioned migrations (e.g. ent's `migrate.Diff` workflow) once schema mutations become regular events. |
 
+### Parser / metrics
+
+| # | Item | Source | Phase target | Notes |
+|---|---|---|---|---|
+| P1 | Tokenizer drops per-line line numbers when materializing `Section.KVs`. Errors from `ServerFromSections` cite field names but not file-position. | Task 13 review | Phase 7 | Adequate for Phase 2 triage; revisit if support ever needs to pinpoint torn output to a line. |
+| P2 | `splitLabeledKey` doesn't handle backslash-escaped quotes in label values, and depends on the tokenizer's lucky-not-designed behavior for `}` inside quoted regions. | Task 13 review | Phase 3 | Phase 2 collector emits only `mount="/<path>"` and `iface="<name>"` — no quotes, no braces. Phase 3 collectors with richer labels will need a quote-aware splitter before this is exposed to bench/site sections. |
+| P3 | Empty `Disks` / `Net` slices are accepted by `ServerFromSections`. | Task 13 review | Phase 7 polish | A real Linux host always has at least `/` mounted and one non-`lo` iface, so empty is itself a torn-read indicator. Cheap to add `len(m.Disks) >= 1` and `len(m.Net) >= 1` checks. Possibly better as a pipeline-layer policy than a parser-layer schema rule. |
+| M1 | `tagEscaper`-vs-Influx full spec gap. | Task 14 review | Phase 7 | Already addresses backslash; remaining unhandled chars (e.g. literal newlines in tag values) aren't expected from our controlled inputs. Document any new tag source's escaping requirements before adopting. |
+| M2 | No gzip request-body compression on the VM push. | Task 14 review | Phase 7 / scale | Phase 2 emits ~25 lines per server per pull cycle; well below any compression-relevant threshold. Add `Content-Encoding: gzip` + `gzip.Writer` once line counts approach kilobyte territory. |
+
 ### Tooling / smoke
 
 | # | Item | Source | Phase target | Notes |

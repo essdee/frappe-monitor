@@ -79,6 +79,7 @@ func TestEscapeTag_HandlesSpecialChars(t *testing.T) {
 	require.Equal(t, `a\,b`, escapeTag("a,b"))
 	require.Equal(t, `k\=v`, escapeTag("k=v"))
 	require.Equal(t, `/boot/efi`, escapeTag("/boot/efi"), "slash is not special")
+	require.Equal(t, `a\\b`, escapeTag(`a\b`), "backslash must be escaped first")
 }
 
 func TestServerMetrics_LineCountMatches(t *testing.T) {
