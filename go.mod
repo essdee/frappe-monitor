@@ -1,6 +1,6 @@
 module frappe-monitor
 
-go 1.26.2
+go 1.25.0
 
 require (
 	entgo.io/ent v0.14.6
