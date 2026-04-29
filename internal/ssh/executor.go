@@ -39,8 +39,13 @@ func (t Target) addr() string {
 }
 
 // Executor runs a command on a remote host and returns its combined stdout/stderr.
+//
+// Run is for commands that take no stdin. RunWithInput pipes the supplied
+// stdin string to the command's stdin and returns its combined stdout/stderr;
+// passing "" for stdin is equivalent to Run.
 type Executor interface {
 	Run(ctx context.Context, tgt Target, cmd string) (string, error)
+	RunWithInput(ctx context.Context, tgt Target, cmd, stdin string) (string, error)
 }
 
 // Ping executes a no-op command and returns the round-trip latency.
