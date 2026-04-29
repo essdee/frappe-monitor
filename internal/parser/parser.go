@@ -26,6 +26,18 @@ type Output struct {
 	Sections []Section
 }
 
+// Section returns the section with the given name and true if present.
+// Linear scan; the section list is small (master plan §5: META + SERVER
+// + per-bench + per-site, never thousands).
+func (o Output) Section(name string) (Section, bool) {
+	for _, s := range o.Sections {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return Section{}, false
+}
+
 // Tokenize splits the collector script's stdout into Sections. It returns
 // an error on:
 //   - missing ###END terminator
