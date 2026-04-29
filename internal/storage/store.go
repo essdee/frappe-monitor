@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-var ErrNotFound = errors.New("storage: not found")
+var (
+	ErrNotFound          = errors.New("storage: not found")
+	ErrDuplicateHostname = errors.New("storage: hostname already exists")
+)
 
 type Server struct {
 	ID           int
