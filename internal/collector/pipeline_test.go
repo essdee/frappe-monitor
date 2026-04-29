@@ -209,11 +209,8 @@ func TestPullOnce_BodyContainsSSHTargetData(t *testing.T) {
 	// This guards against a regression where the body uses the OS-reported
 	// hostname (which can drift) instead of the user-supplied stable name.
 	p, push, exec, store := newTestPipeline(t)
-	_ = makeServer(t, store, "stable-name-123", "host-f")
+	srv := makeServer(t, store, "stable-name-123", "host-f")
 	exec.SetResponse("host-f", loadGoldenCollectorOutput(t), nil)
-
-	srv, err := store.GetServer(context.Background(), 1)
-	require.NoError(t, err)
 
 	require.NoError(t, p.PullOnce(context.Background(), srv.ID))
 

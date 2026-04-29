@@ -48,6 +48,15 @@ Each item has a phase target (when we'd want to address it by) and the review th
 | M1 | `tagEscaper`-vs-Influx full spec gap. | Task 14 review | Phase 7 | Already addresses backslash; remaining unhandled chars (e.g. literal newlines in tag values) aren't expected from our controlled inputs. Document any new tag source's escaping requirements before adopting. |
 | M2 | No gzip request-body compression on the VM push. | Task 14 review | Phase 7 / scale | Phase 2 emits ~25 lines per server per pull cycle; well below any compression-relevant threshold. Add `Content-Encoding: gzip` + `gzip.Writer` once line counts approach kilobyte territory. |
 
+### Collector pipeline
+
+| # | Item | Source | Phase target | Notes |
+|---|---|---|---|---|
+| C1 | `ServerFromSections` returns `Disks` / `Net` in non-deterministic order (map iteration). Body bytes therefore vary across pulls. | Task 17 review | Phase 7 polish | Sort `m.Disks` by `Mount` and `m.Net` by `Name` inside `ServerFromSections`. Enables future golden-byte tests of the line-protocol body. |
+| C2 | Pipeline success log lacks per-stage timings. | Task 17 review | Phase 7 polish | Add `ssh_ms` / `parse_ms` / `push_ms` to the "pull ok" log line. Useful when scheduler timeouts start firing in production. |
+| C3 | Collector tests share a single in-memory SQLite DSN string. | Task 17 review | If/when `t.Parallel()` is added | Per-test DSN via `"file:pipeline-"+t.Name()+"?…"` to avoid cross-test row leakage if parallel testing is ever enabled. |
+| C4 | Push errors and probe errors share `last_error` field on the server row. | Task 17 review | Phase 3 (UI) | Distinguish `last_push_error` from `last_error` if/when Phase 3's UI wants to surface push failures separately from server-reachability failures. |
+
 ### Tooling / smoke
 
 | # | Item | Source | Phase target | Notes |

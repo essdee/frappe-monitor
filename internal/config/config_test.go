@@ -112,6 +112,26 @@ func TestLoad_RejectsNonPositiveNumbers(t *testing.T) {
 			yaml:      `server: {write_timeout_seconds: 0}`,
 			errSubstr: "server.write_timeout_seconds",
 		},
+		{
+			name:      "metrics push timeout",
+			yaml:      `metrics: {push_timeout_seconds: 0}`,
+			errSubstr: "metrics.push_timeout_seconds",
+		},
+		{
+			name:      "scheduler default interval",
+			yaml:      `scheduler: {default_interval_seconds: 0}`,
+			errSubstr: "scheduler.default_interval_seconds",
+		},
+		{
+			name:      "scheduler max parallel",
+			yaml:      `scheduler: {max_parallel: 0}`,
+			errSubstr: "scheduler.max_parallel",
+		},
+		{
+			name:      "scheduler per-job timeout",
+			yaml:      `scheduler: {per_job_timeout_seconds: 0}`,
+			errSubstr: "scheduler.per_job_timeout_seconds",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,4 +144,29 @@ func TestLoad_RejectsNonPositiveNumbers(t *testing.T) {
 			require.Contains(t, err.Error(), tc.errSubstr)
 		})
 	}
+}
+
+func TestLoad_RejectsEmptyVMURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "monitor.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`metrics: {vm_url: ""}`), 0o600))
+
+	_, err := Load(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "metrics.vm_url")
+}
+
+func TestLoad_NewSectionsHaveDefaults(t *testing.T) {
+	// Empty config → defaults populate metrics + scheduler too.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "monitor.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`# empty`), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:8428", cfg.Metrics.VMURL)
+	require.Equal(t, 5, cfg.Metrics.PushTimeoutSeconds)
+	require.Equal(t, 900, cfg.Scheduler.DefaultIntervalSeconds)
+	require.Equal(t, 10, cfg.Scheduler.MaxParallel)
+	require.Equal(t, 30, cfg.Scheduler.PerJobTimeoutSeconds)
 }

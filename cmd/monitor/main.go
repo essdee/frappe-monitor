@@ -16,7 +16,10 @@ import (
 	"time"
 
 	"frappe-monitor/internal/api"
+	"frappe-monitor/internal/collector"
 	"frappe-monitor/internal/config"
+	"frappe-monitor/internal/metrics"
+	"frappe-monitor/internal/scheduler"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 )
@@ -46,7 +49,8 @@ func run(cfgPath string) error {
 	// Signal-aware root context: cancellation here propagates to the HTTP
 	// server's BaseContext, which is the parent of every request context,
 	// which is what handlers pass to sshpkg.Ping. So SIGTERM cancels
-	// in-flight SSH probes too.
+	// in-flight SSH probes too. The scheduler also uses its own internal
+	// parent context — we cancel it explicitly via Stop below.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
@@ -65,6 +69,30 @@ func run(cfgPath string) error {
 		CommandTimeout: time.Duration(cfg.SSH.CommandTimeoutSeconds) * time.Second,
 	})
 	defer pool.Close()
+
+	// Phase 2: metrics push + scheduler.
+	vmClient := metrics.NewVMClient(
+		cfg.Metrics.VMURL,
+		time.Duration(cfg.Metrics.PushTimeoutSeconds)*time.Second,
+	)
+	pipeline := &collector.Pipeline{
+		Store:  store,
+		Exec:   pool,
+		Push:   vmClient,
+		Logger: logger,
+	}
+	sched := scheduler.New(
+		cfg.Scheduler.MaxParallel,
+		time.Duration(cfg.Scheduler.PerJobTimeoutSeconds)*time.Second,
+		logger,
+	)
+	if err := registerScheduledPulls(ctx, sched, store, pipeline, cfg.Scheduler.DefaultIntervalSeconds, logger); err != nil {
+		return fmt.Errorf("register pulls: %w", err)
+	}
+	sched.Start()
+	logger.Info("scheduler started",
+		"default_interval_seconds", cfg.Scheduler.DefaultIntervalSeconds,
+		"max_parallel", cfg.Scheduler.MaxParallel)
 
 	router := api.NewRouter(api.Deps{
 		Store:    store,
@@ -101,11 +129,55 @@ func run(cfgPath string) error {
 		return nil
 	}
 
+	// Stop the scheduler FIRST so in-flight pulls get a chance to drain
+	// before the HTTP server shuts down. The scheduler's own grace
+	// window matches the HTTP shutdown window.
 	shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
+	if err := sched.Stop(shutdownCtx); err != nil {
+		logger.Error("scheduler stop", "err", err)
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("http shutdown: %w", err)
 	}
+	return nil
+}
+
+// registerScheduledPulls lists every server in the store and adds a
+// scheduler entry per server. Phase 2 uses one global cron spec
+// (default_interval_seconds); Phase 3 will support per-server overrides.
+//
+// Note: this is one-shot at boot. Servers added via the API after boot
+// are not auto-scheduled until the next process restart. Hot reload is
+// a Phase 3 concern.
+func registerScheduledPulls(
+	ctx context.Context,
+	sched *scheduler.Scheduler,
+	store storage.Store,
+	pipeline *collector.Pipeline,
+	defaultIntervalSeconds int,
+	logger *slog.Logger,
+) error {
+	servers, err := store.ListServers(ctx)
+	if err != nil {
+		return err
+	}
+	spec := fmt.Sprintf("@every %ds", defaultIntervalSeconds)
+	for _, s := range servers {
+		serverID := s.ID // capture per iteration
+		err := sched.Add(spec, scheduler.Job{
+			ServerID: serverID,
+			Run: func(ctx context.Context) error {
+				return pipeline.PullOnce(ctx, serverID)
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("schedule server %d: %w", serverID, err)
+		}
+	}
+	logger.Info("scheduled pulls registered",
+		"server_count", len(servers),
+		"spec", spec)
 	return nil
 }
 
