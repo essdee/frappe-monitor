@@ -30,6 +30,7 @@ Each item has a phase target (when we'd want to address it by) and the review th
 | A2 | No `http.MaxBytesReader` wrapping request bodies. | Task 7 review | Phase 7 | Pathological large bodies would be parsed. Cap at e.g. 1 MiB project-wide via middleware. |
 | A3 | No API-layer range check on `ssh_port` (e.g. negative or > 65535). | Task 7 review | Phase 7 | Storage's `Positive()` catches negative but error message is opaque ent text. Add a clear API-layer check: `ssh_port >= 1 && ssh_port <= 65535`. |
 | A4 | `chi.URLParam` + `strconv.Atoi` repeated across handlers. | Task 7 review | When count hits 3+ | Currently 2 sites (`get`, `testConnection`). Extract `idFromURL(r) (int, error)` once a 3rd appears. |
+| A5 | `cmd/monitor/main.go` logs `"http listening"` *before* `srv.ListenAndServe()` returns. A bind failure (port in use) emits the optimistic log line followed by the error — confusing. | Task 9 review | Phase 1 polish | Move the "http listening" log into the goroutine *after* the listener binds successfully, e.g. by calling `net.Listen` first then logging then `srv.Serve(l)`. |
 
 ### Storage / runtime
 
