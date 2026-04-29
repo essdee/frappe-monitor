@@ -21,15 +21,15 @@ func NewRouter(d Deps) http.Handler {
 		d.Logger = slog.Default()
 	}
 	r := chi.NewRouter()
-	r.Use(requestLogger(d.Logger))
+	// Order matters: recoverer must be outermost so a panic in any inner
+	// middleware (including the logger) is caught and turned into a 500.
 	r.Use(recoverer(d.Logger))
+	r.Use(requestLogger(d.Logger))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	// Mount /api/v1/... — populated in Task 7 & 8.
 	r.Route("/api/v1", func(api chi.Router) {
 		h := &serverHandlers{store: d.Store, exec: d.Executor, logger: d.Logger}
 		h.mount(api)
