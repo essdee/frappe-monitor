@@ -10,7 +10,10 @@
 
 services:
   victoriametrics:
-    image: victoriametrics/victoria-metrics:latest
+    # Pinned tag (not :latest) so the smoke contract doesn't break the day VM
+    # ships an incompatible flag rename. Verified: v1.142.0 ingests our line
+    # protocol and honors -influxSkipSingleField. Bump deliberately when needed.
+    image: victoriametrics/victoria-metrics:v1.142.0
     container_name: frappe-monitor-vm
     # Bind to localhost only — VM is not a public-facing service.
     ports:

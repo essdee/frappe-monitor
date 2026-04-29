@@ -49,7 +49,12 @@ curl 'http://127.0.0.1:8428/api/v1/query?query=frappe_server_load_1m'
 
 # 5. When done, tear down VM (data persists in named volume `frappe-monitor-vm-data`).
 make vm-down
+
+# To wipe accumulated dev metrics history, also remove the volume:
+docker volume rm frappe-monitor-vm-data
 ```
+
+If you copy `deploy/docker-compose.dev.yml` to another project, **keep the `-influxSkipSingleField` flag** in the VM command. Without it, VictoriaMetrics's Influx-line-protocol ingestion appends `_value` to every metric name (so `frappe_server_load_1m` becomes `frappe_server_load_1m_value`) and PromQL queries written against the master plan §4 naming convention will silently miss every series.
 
 Send `SIGTERM` (or Ctrl+C) to the monitor for graceful shutdown — the scheduler stops accepting new ticks, in-flight pulls observe ctx.Done() and unwind, then `srv.Shutdown` drains HTTP. Combined budget is 10s.
 
@@ -94,7 +99,7 @@ tasks/                     # gitignored review-loop folder
 make test
 ```
 
-Phase 2 has **80 tests across 9 packages**: api (14), collector (7), config (10), metrics (7), parser (16), scheduler (5), ssh (6), storage (6), scripts (2). The `ent/` subpackages contain only generated code and have no test files (expected).
+Phase 2 has 9 test packages: `internal/{api, collector, config, metrics, parser, scheduler, ssh, storage}` and `scripts`. The `ent/` subpackages contain only generated code and have no test files (expected). The full suite runs in under 30 s; `make test` is the canonical run.
 
 ## Workflow
 
