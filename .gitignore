@@ -23,3 +23,6 @@ coverage.out
 .idea/
 .vscode/
 .DS_Store
+
+# review-loop workflow folder (local handoff between worker and reviewer)
+/tasks/
