@@ -38,6 +38,14 @@ Each item has a phase target (when we'd want to address it by) and the review th
 |---|---|---|---|---|
 | R1 | `client.Schema.Create(ctx)` runs on every store open. | Task 4 review | Phase 7+ | Switch to versioned migrations (e.g. ent's `migrate.Diff` workflow) once schema mutations become regular events. |
 
+### Tooling / smoke
+
+| # | Item | Source | Phase target | Notes |
+|---|---|---|---|---|
+| T1 | `scripts/smoke.sh` CGO assertion silently passes if `readelf` is missing. | Task 10 review | Phase 7 polish | `readelf -d "$BINARY" 2>/dev/null` produces empty output on systems without binutils, so the `if !grep -q NEEDED` branch incorrectly returns success. Defensive fix: `command -v readelf` check + fallback to `file "$BINARY" \| grep -q 'statically linked'` or `! ldd "$BINARY" 2>&1 \| grep -q '=> /'`. |
+| T2 | Smoke script's hardcoded `:18080` blocks parallel runs. | Task 10 review | Phase 7 polish | `PORT` env var already overrides — just needs a one-liner in README about parallel CI shards if that ever becomes routine. |
+| T3 | "Bogus host" smoke step actually exercises `loadKey` failure (file-not-found), not a real dial-timeout path. | Task 10 review | Phase 7 polish | Sub-second probe; doesn't validate `DialTimeout` enforcement. If the smoke is ever switched to a real-but-unreachable hostname with a real key, the test will absorb up to `dial_timeout_seconds` per probe — adjust expected timing accordingly. |
+
 ## Done
 
 _(empty — items move here with a commit ref when addressed)_
