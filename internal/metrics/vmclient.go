@@ -42,7 +42,14 @@ func (c *VMClient) Push(ctx context.Context, body string) error {
 	if err != nil {
 		return fmt.Errorf("vmclient: post: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// Drain so HTTP/1.1 keep-alive can reuse the conn. VM's /write
+		// returns 204 with empty body on success so this is normally a
+		// no-op — but if VM ever switches to a non-empty body, we want
+		// the connection back in the pool.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 
 	if resp.StatusCode/100 != 2 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))

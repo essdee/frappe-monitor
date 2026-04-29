@@ -40,9 +40,21 @@ type Scheduler struct {
 
 // New builds a scheduler with the supplied parallelism cap and per-job
 // timeout. logger is required (non-nil) — caller's responsibility.
+//
+// maxParallel < 1 clamps to 1. perJobTimeout < 1s clamps to 1s — a
+// zero or sub-second timeout would create an already- or near-already-
+// cancelled context, which is almost always a config bug.
+//
+// Drift / catch-up behavior follows robfig/cron/v3's default: missed
+// ticks during a process pause are dropped (no catch-up) and at most
+// one fire per boundary is queued. Acceptable for metrics; not for
+// tasks that must execute every interval no matter what.
 func New(maxParallel int, perJobTimeout time.Duration, logger *slog.Logger) *Scheduler {
 	if maxParallel < 1 {
 		maxParallel = 1
+	}
+	if perJobTimeout < time.Second {
+		perJobTimeout = time.Second
 	}
 	pctx, pcancel := context.WithCancel(context.Background())
 	return &Scheduler{
@@ -68,8 +80,8 @@ func (s *Scheduler) Add(spec string, j Job) error {
 	return nil
 }
 
-// Start begins the cron loop. Idempotent only in the sense that calling
-// it twice is harmless; cron internally guards.
+// Start begins the cron loop. Caller must invoke at most once; cron/v3
+// does NOT guard against double-start (it spawns a second run loop).
 func (s *Scheduler) Start() {
 	s.cron.Start()
 }

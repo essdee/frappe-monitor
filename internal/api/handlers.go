@@ -226,8 +226,12 @@ func (h *serverHandlers) testConnection(w http.ResponseWriter, r *http.Request) 
 }
 
 type deployCollectorResp struct {
-	Deployed bool   `json:"deployed"`
-	Version  string `json:"version"`
+	Deployed bool `json:"deployed"`
+	// Version is the version of the *deployed* collector — the value
+	// from the embedded scripts.CollectorVersion(). It is not probed
+	// from the remote target; the SSH exec returning success is taken
+	// as proof that the deployment landed.
+	Version string `json:"version"`
 }
 
 // deployCollector pipes the embedded collector script to the target via
