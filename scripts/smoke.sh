@@ -174,4 +174,99 @@ grep -q '"shutdown signal received"' "$TMPDIR/server.log" \
 ok "shutdown signal log line present"
 
 PID=""  # so the trap doesn't try to kill again
+
+# ---------------------------------------------------------------------------
+# Step 6: Phase 2 — VictoriaMetrics round-trip
+# ---------------------------------------------------------------------------
+# Verifies the load-bearing -influxSkipSingleField flag in
+# deploy/docker-compose.dev.yml: a frappe_server_load_1m line written to
+# VM's /write must come back from /api/v1/label/__name__/values as the
+# bare metric name (not frappe_server_load_1m_value, which would be VM's
+# default behavior without the flag and would silently break every
+# master-plan PromQL query).
+#
+# Requires Docker. Skipped with a notice if `docker compose` isn't
+# available (so smoke is still runnable in non-containerized CI shards).
+
+echo "==> Phase 2 (VictoriaMetrics)"
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+    echo "  skip: docker compose not available — Phase 2 wiring not exercised"
+    echo "==> ALL CHECKS PASSED"
+    exit 0
+fi
+
+# Make sure no leftover container OR volume from a previous run is using
+# port 8428 — fresh volume is required so the metric-name regression
+# assertion (no `_value` suffix) is actually meaningful.
+make vm-down >/dev/null 2>&1 || true
+docker volume rm frappe-monitor-vm-data >/dev/null 2>&1 || true
+
+VM_TRAP_PREV="$(trap -p EXIT)"
+trap 'make vm-down >/dev/null 2>&1 || true; docker volume rm frappe-monitor-vm-data >/dev/null 2>&1 || true; eval "$VM_TRAP_PREV"' EXIT
+
+make vm-up >/dev/null
+ok "vm-up dispatched (fresh volume)"
+
+# Wait for VM /health to be 200 (max ~15s).
+for _ in $(seq 1 30); do
+    if curl -fsS http://127.0.0.1:8428/health >/dev/null 2>&1; then break; fi
+    sleep 0.5
+done
+curl -fsS http://127.0.0.1:8428/health >/dev/null \
+    || { docker compose -f deploy/docker-compose.dev.yml logs --tail 30 victoriametrics >&2; fail "VM /health never returned 200"; }
+ok "VM /health → 200"
+
+# Direct write of one line — same shape ServerMetrics.LineProtocol emits.
+NOW_NS=$(date +%s%N)
+SERIES_LABEL="smoke-$(date +%s)"
+curl -fsS -X POST 'http://127.0.0.1:8428/write' \
+    -d "frappe_server_load_1m,server=$SERIES_LABEL value=1.5 $NOW_NS" >/dev/null
+ok "wrote frappe_server_load_1m,server=$SERIES_LABEL value=1.5 to /write"
+
+# VM ingestion is async; wait for the data point to be visible. Up to ~10s.
+SERIES_FOUND=""
+for _ in $(seq 1 20); do
+    sleep 0.5
+    NAMES_JSON=$(curl -fsS 'http://127.0.0.1:8428/api/v1/label/__name__/values')
+    if echo "$NAMES_JSON" | grep -q 'frappe_server_load_1m'; then
+        SERIES_FOUND=1
+        break
+    fi
+done
+[ -n "$SERIES_FOUND" ] || fail "frappe_server_load_1m never appeared in VM after 10s; names=$NAMES_JSON"
+
+# Assertion 1: the metric name in VM is exactly `frappe_server_load_1m`.
+# Because we started with a fresh volume, anything else in the names
+# list is a defect we should know about.
+echo "$NAMES_JSON" | python3 -c "
+import json, sys
+names = json.load(sys.stdin)['data']
+if 'frappe_server_load_1m_value' in names:
+    print('REGRESSION: metric stored as frappe_server_load_1m_value — is -influxSkipSingleField missing from compose?', file=sys.stderr)
+    sys.exit(1)
+if 'frappe_server_load_1m' not in names:
+    print(f'metric frappe_server_load_1m absent from VM. names: {names}', file=sys.stderr)
+    sys.exit(1)
+" || fail "metric-name regression: $NAMES_JSON"
+ok "VM stores metric as 'frappe_server_load_1m' (no _value suffix — flag honored)"
+
+# Assertion 2: the server label we wrote is present in VM's label values.
+# This proves the specific write (not just any historical data) round-tripped.
+SERVER_LABELS=$(curl -fsS 'http://127.0.0.1:8428/api/v1/label/server/values')
+echo "$SERVER_LABELS" | python3 -c "
+import json, sys
+labels = json.load(sys.stdin)['data']
+target = '$SERIES_LABEL'
+if target not in labels:
+    print(f'expected server={target} in label values, got {labels}', file=sys.stderr)
+    sys.exit(1)
+" || fail "server label not present: $SERVER_LABELS"
+ok "VM has server=$SERIES_LABEL in label values"
+
+make vm-down >/dev/null
+ok "vm-down clean"
+
+# Restore the original trap (no need to vm-down twice on EXIT).
+eval "$VM_TRAP_PREV"
+
 echo "==> ALL CHECKS PASSED"
