@@ -12,10 +12,12 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `koanf:"server"`
-	Database DatabaseConfig `koanf:"database"`
-	SSH      SSHConfig      `koanf:"ssh"`
-	Log      LogConfig      `koanf:"log"`
+	Server    ServerConfig    `koanf:"server"`
+	Database  DatabaseConfig  `koanf:"database"`
+	SSH       SSHConfig       `koanf:"ssh"`
+	Log       LogConfig       `koanf:"log"`
+	Metrics   MetricsConfig   `koanf:"metrics"`
+	Scheduler SchedulerConfig `koanf:"scheduler"`
 }
 
 type ServerConfig struct {
@@ -39,18 +41,36 @@ type LogConfig struct {
 	Format string `koanf:"format"`
 }
 
+// MetricsConfig is the VictoriaMetrics push target.
+type MetricsConfig struct {
+	VMURL              string `koanf:"vm_url"` // e.g. http://127.0.0.1:8428
+	PushTimeoutSeconds int    `koanf:"push_timeout_seconds"`
+}
+
+// SchedulerConfig governs the per-server pull cadence and parallelism.
+type SchedulerConfig struct {
+	DefaultIntervalSeconds int `koanf:"default_interval_seconds"`
+	MaxParallel            int `koanf:"max_parallel"`
+	PerJobTimeoutSeconds   int `koanf:"per_job_timeout_seconds"`
+}
+
 func defaults() *koanf.Koanf {
 	k := koanf.New(".")
 	if err := k.Load(confmap.Provider(map[string]any{
-		"server.listen_addr":           ":8080",
-		"server.read_timeout_seconds":  15,
-		"server.write_timeout_seconds": 15,
-		"database.path":                "./data/monitor.db",
-		"ssh.dial_timeout_seconds":     10,
-		"ssh.command_timeout_seconds":  30,
-		"ssh.max_connections_per_host": 2,
-		"log.level":                    "info",
-		"log.format":                   "json",
+		"server.listen_addr":                 ":8080",
+		"server.read_timeout_seconds":        15,
+		"server.write_timeout_seconds":       15,
+		"database.path":                      "./data/monitor.db",
+		"ssh.dial_timeout_seconds":           10,
+		"ssh.command_timeout_seconds":        30,
+		"ssh.max_connections_per_host":       2,
+		"log.level":                          "info",
+		"log.format":                         "json",
+		"metrics.vm_url":                     "http://127.0.0.1:8428",
+		"metrics.push_timeout_seconds":       5,
+		"scheduler.default_interval_seconds": 900, // 15 min — master plan §5 default
+		"scheduler.max_parallel":             10,
+		"scheduler.per_job_timeout_seconds":  30,
 	}, "."), nil); err != nil {
 		panic(fmt.Sprintf("config defaults: %v", err))
 	}
@@ -117,6 +137,22 @@ func (c *Config) validate() error {
 	}
 	if c.SSH.MaxConnectionsPerHost < 1 {
 		return fmt.Errorf("ssh.max_connections_per_host must be >= 1, got %d", c.SSH.MaxConnectionsPerHost)
+	}
+
+	if c.Metrics.VMURL == "" {
+		return fmt.Errorf("metrics.vm_url is required")
+	}
+	if c.Metrics.PushTimeoutSeconds < 1 {
+		return fmt.Errorf("metrics.push_timeout_seconds must be >= 1, got %d", c.Metrics.PushTimeoutSeconds)
+	}
+	if c.Scheduler.DefaultIntervalSeconds < 1 {
+		return fmt.Errorf("scheduler.default_interval_seconds must be >= 1, got %d", c.Scheduler.DefaultIntervalSeconds)
+	}
+	if c.Scheduler.MaxParallel < 1 {
+		return fmt.Errorf("scheduler.max_parallel must be >= 1, got %d", c.Scheduler.MaxParallel)
+	}
+	if c.Scheduler.PerJobTimeoutSeconds < 1 {
+		return fmt.Errorf("scheduler.per_job_timeout_seconds must be >= 1, got %d", c.Scheduler.PerJobTimeoutSeconds)
 	}
 
 	return nil
