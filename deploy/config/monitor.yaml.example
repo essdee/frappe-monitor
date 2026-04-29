@@ -1,0 +1,17 @@
+# frappe-monitor config
+server:
+  listen_addr: ":8080"
+  read_timeout_seconds: 15
+  write_timeout_seconds: 15
+
+database:
+  path: "./data/monitor.db"
+
+ssh:
+  dial_timeout_seconds: 10
+  command_timeout_seconds: 30
+  max_connections_per_host: 2
+
+log:
+  level: "info"   # debug | info | warn | error
+  format: "json"  # json | text
