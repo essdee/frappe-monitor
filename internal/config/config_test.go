@@ -170,3 +170,21 @@ func TestLoad_NewSectionsHaveDefaults(t *testing.T) {
 	require.Equal(t, 10, cfg.Scheduler.MaxParallel)
 	require.Equal(t, 30, cfg.Scheduler.PerJobTimeoutSeconds)
 }
+
+func TestLoad_NewSectionsHonorEnvOverrides(t *testing.T) {
+	// Env vars should override defaults for the new metrics + scheduler
+	// sections through the same MONITOR_<SECTION>__<KEY> transform used
+	// for the existing sections. Important for Task 19 (docker-compose
+	// will set MONITOR_METRICS__VM_URL=http://victoriametrics:8428).
+	dir := t.TempDir()
+	path := filepath.Join(dir, "monitor.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`# empty`), 0o600))
+
+	t.Setenv("MONITOR_METRICS__VM_URL", "http://victoriametrics:8428")
+	t.Setenv("MONITOR_SCHEDULER__DEFAULT_INTERVAL_SECONDS", "5")
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "http://victoriametrics:8428", cfg.Metrics.VMURL)
+	require.Equal(t, 5, cfg.Scheduler.DefaultIntervalSeconds)
+}

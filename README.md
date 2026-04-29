@@ -2,11 +2,9 @@
 
 Monitoring and alerting for multi-server, multi-bench, multi-site Frappe deployments.
 
-See `docs/2026-04-22/1.md` for the master design plan and `docs/2026-04-22/2.md` for the Phase 1 implementation plan. Subsequent dated `docs/YYYY-MM-DD/` folders capture decisions and amendments. `docs/hardening-backlog.md` tracks known non-blocking quality items.
+See `docs/2026-04-22/1.md` for the master design plan, `docs/2026-04-22/2.md` for the Phase 1 plan, and `docs/2026-04-29/3.md` for the Phase 2 plan. Subsequent dated `docs/YYYY-MM-DD/` folders capture decisions and amendments. `docs/hardening-backlog.md` tracks known non-blocking quality items.
 
-## Phase 1 surface
-
-After Phase 1, the binary exposes five HTTP routes:
+## Phase 1 surface (HTTP)
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -14,26 +12,48 @@ After Phase 1, the binary exposes five HTTP routes:
 | POST | `/api/v1/servers` | Create a server. 409 on duplicate hostname; 400 on bad JSON or missing required fields. |
 | GET  | `/api/v1/servers` | List all servers. |
 | GET  | `/api/v1/servers/{id}` | Fetch one server. 404 on unknown id. |
-| POST | `/api/v1/servers/{id}/test-connection` | Probe via SSH. Always 200 (or 404 if id unknown). Body: `{reachable, latency_ms, error?, error_kind?}`. |
+| POST | `/api/v1/servers/{id}/test-connection` | Diagnostic SSH probe. Always 200 (or 404 if id unknown). Body: `{reachable, latency_ms, error?, error_kind?}`. |
 
-## Run
+## Phase 2 surface (HTTP + scheduler)
+
+Phase 2 adds the metrics pipeline:
+
+- `POST /api/v1/servers/{id}/deploy-collector` — pipes the embedded `frappe-monitor-collect.sh` to the target via SSH and `chmod +x`'s it. Returns 200 with `{deployed, version}`.
+- A **per-server scheduler** registered at boot: every `cfg.scheduler.default_interval_seconds` (default 900s = 15 min), the binary SSHes to each server, runs the collector, parses the output, and pushes influx-line-protocol to VictoriaMetrics.
+- Server status is updated in storage on every cycle: `reachable` on success, `unreachable` with `last_error` on SSH or parse failure. **VM push failure does NOT mark the server unreachable** — the bench is fine; the metrics backend is the failure domain.
+
+## Run (Phase 1 only — no metrics flow)
 
 ```bash
-# 1. Build (static, CGO disabled)
 make build
-
-# 2. Create a config from the example
 cp deploy/config/monitor.yaml.example config/monitor.yaml
-
-# 3. Run. The binary auto-creates the parent of database.path
-#    (default ./data/) at mode 0o750 on first run, so no manual mkdir
-#    is required.
 make run
 ```
 
-The binary listens on `cfg.server.listen_addr` (default `:8080`). Send `SIGTERM` (or Ctrl+C) for graceful shutdown — in-flight HTTP requests and SSH probes are cancelled via context propagation, then `srv.Shutdown` waits up to 10 s for active connections to drain.
+The binary auto-creates the parent of `database.path` (default `./data/`) at mode 0o750 on first run.
 
-### Smoke test
+## Run (Phase 2 — with VictoriaMetrics)
+
+```bash
+# 1. Bring up VictoriaMetrics in a Docker container, bound to 127.0.0.1:8428.
+make vm-up
+
+# 2. Run the monitor on the host. It pushes to http://127.0.0.1:8428.
+make run
+
+# 3. Tail VM logs in another terminal (optional).
+make vm-logs
+
+# 4. Query metrics:
+curl 'http://127.0.0.1:8428/api/v1/query?query=frappe_server_load_1m'
+
+# 5. When done, tear down VM (data persists in named volume `frappe-monitor-vm-data`).
+make vm-down
+```
+
+Send `SIGTERM` (or Ctrl+C) to the monitor for graceful shutdown — the scheduler stops accepting new ticks, in-flight pulls observe ctx.Done() and unwind, then `srv.Shutdown` drains HTTP. Combined budget is 10s.
+
+### Smoke test (Phase 1 only)
 
 `scripts/smoke.sh` exercises every Phase 1 route end-to-end against a local hermetic config (its own port and tempdir, doesn't touch your real config or data), verifies the duplicate-hostname-409 contract, the test-connection-on-unknown-id-404 contract, and the SIGTERM ≤10s clean-exit contract.
 
@@ -41,7 +61,7 @@ The binary listens on `cfg.server.listen_addr` (default `:8080`). Send `SIGTERM`
 ./scripts/smoke.sh
 ```
 
-Expected last line: `==> ALL CHECKS PASSED`.
+Expected last line: `==> ALL CHECKS PASSED`. Phase 2 smoke (with VM) lands in Task 20.
 
 ## Project layout
 
@@ -49,26 +69,34 @@ Expected last line: `==> ALL CHECKS PASSED`.
 cmd/monitor/main.go        # binary entry point
 internal/
   api/                     # chi router, middleware, handlers
+  collector/               # ssh→parse→push pipeline (Phase 2)
   config/                  # koanf-backed loader
-  ssh/                     # executor interface, pool, fake, sentinels
+  metrics/                 # ServerMetrics + VictoriaMetrics push client
+  parser/                  # collector-output tokenizer + ServerFromSections
+  scheduler/               # robfig/cron + semaphore + per-job timeout
+  ssh/                     # executor interface, pool, fake, typed errors
   storage/                 # store interface, ent-backed sqlite
 ent/                       # ent schema + generated client (committed)
-deploy/config/             # example monitor.yaml
-docs/                      # design docs + hardening backlog
-scripts/smoke.sh           # phase 1 smoke
+scripts/
+  frappe-monitor-collect.sh  # bash collector (embedded into binary)
+  embed.go                   # //go:embed wiring + version helper
+  smoke.sh                   # Phase 1 smoke
+deploy/
+  config/monitor.yaml.example
+  docker-compose.dev.yml     # VictoriaMetrics for dev (Phase 2)
+docs/                      # design docs + hardening backlog + dated decisions
 tasks/                     # gitignored review-loop folder
 ```
 
 ## Tests
 
 ```bash
-go test ./... -race -count=1
+make test
 ```
 
-Phase 1 has 26 tests across `internal/api` (10), `internal/config` (6), `internal/ssh` (4), and `internal/storage` (6). The `ent/` subpackages contain only generated code and have no test files (expected).
+Phase 2 has **80 tests across 9 packages**: api (14), collector (7), config (10), metrics (7), parser (16), scheduler (5), ssh (6), storage (6), scripts (2). The `ent/` subpackages contain only generated code and have no test files (expected).
 
 ## Workflow
 
-- All work targets `develop`. Each feature branch PRs into `develop`; the user merges manually.
 - Per-task review uses the gitignored `tasks/` folder — see `tasks/README.md` for the convention.
 - Decisions go in `docs/YYYY-MM-DD/N.md`; non-blocking quality items go in `docs/hardening-backlog.md`.
