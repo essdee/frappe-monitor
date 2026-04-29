@@ -129,9 +129,11 @@ func run(cfgPath string) error {
 		return nil
 	}
 
-	// Stop the scheduler FIRST so in-flight pulls get a chance to drain
-	// before the HTTP server shuts down. The scheduler's own grace
-	// window matches the HTTP shutdown window.
+	// Stop the scheduler FIRST so in-flight pulls get a chance to finish
+	// before we tear down dependent resources (store, pool, HTTP server).
+	// Scheduler jobs go SSH→VM directly — they don't flow through the
+	// HTTP server — but they DO use the store and pool, which are
+	// closed via deferreds when run() returns.
 	shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
 	if err := sched.Stop(shutdownCtx); err != nil {

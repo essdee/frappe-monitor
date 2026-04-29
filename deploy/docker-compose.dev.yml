@@ -1,0 +1,39 @@
+# Dev-only docker-compose: brings up VictoriaMetrics for local
+# development. The frappe-monitor binary runs on the host and points
+# at 127.0.0.1:8428 (matches deploy/config/monitor.yaml.example).
+#
+# Up:    make vm-up
+# Down:  make vm-down
+#
+# Production compose (with monitor + Loki + Caddy) lives separately
+# and is not part of this file — see master plan §10.
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: frappe-monitor-vm
+    # Bind to localhost only — VM is not a public-facing service.
+    ports:
+      - "127.0.0.1:8428:8428"
+    command:
+      - "--storageDataPath=/data"
+      - "--retentionPeriod=30d"
+      - "--httpListenAddr=:8428"
+      # Without this, VM's Influx-line-protocol ingestion appends the
+      # field name ("_value") to the metric name. We emit one field per
+      # line so the suffix is always "_value"; this flag keeps the
+      # metric name as written, matching the master plan's labelling
+      # convention (frappe_server_load_1m, not frappe_server_load_1m_value).
+      - "-influxSkipSingleField"
+    volumes:
+      - vm-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8428/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 6
+
+volumes:
+  vm-data:
+    name: frappe-monitor-vm-data
