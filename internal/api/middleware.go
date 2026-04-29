@@ -42,7 +42,7 @@ func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 						"panic", rv,
 						"stack", string(debug.Stack()),
 					)
-					http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+					writeErr(w, http.StatusInternalServerError, "internal")
 				}
 			}()
 			next.ServeHTTP(w, r)
