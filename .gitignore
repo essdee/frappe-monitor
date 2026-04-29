@@ -1,0 +1,25 @@
+# build output
+/monitor-server
+/bin/
+
+# test + coverage
+*.out
+coverage.out
+
+# sqlite runtime files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/data/
+
+# secrets + local config
+.env
+/ssh-keys/*
+!/ssh-keys/.gitkeep
+/config/monitor.yaml
+
+# editor + os
+.idea/
+.vscode/
+.DS_Store
