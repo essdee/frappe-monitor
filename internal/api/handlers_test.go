@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -116,4 +119,105 @@ func TestGetServer_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestTestConnection_Reachable(t *testing.T) {
+	store := openMemStore(t)
+	s, err := store.CreateServer(context.Background(), storage.NewServer{
+		Name: "p", Hostname: "host-a", SSHUser: "monitor", SSHPort: 22, SSHKeyPath: "/tmp/k",
+	})
+	require.NoError(t, err)
+
+	exec := sshpkg.NewFakeExecutor()
+	exec.SetResponse("host-a", "ok\n", nil)
+
+	ts := newAPIServer(t, store, exec)
+	resp, err := http.Post(ts.URL+"/api/v1/servers/"+strconv.Itoa(s.ID)+"/test-connection", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Equal(t, true, body["reachable"])
+	require.Contains(t, body, "latency_ms", "latency_ms always emitted on success")
+	require.GreaterOrEqual(t, body["latency_ms"].(float64), float64(0))
+	require.NotContains(t, body, "error_kind", "no error_kind on success")
+
+	refreshed, err := store.GetServer(context.Background(), s.ID)
+	require.NoError(t, err)
+	require.Equal(t, "reachable", refreshed.Status)
+	require.NotNil(t, refreshed.LastPingedAt)
+}
+
+func TestTestConnection_Unreachable(t *testing.T) {
+	store := openMemStore(t)
+	s, err := store.CreateServer(context.Background(), storage.NewServer{
+		Name: "p", Hostname: "host-b", SSHUser: "monitor", SSHPort: 22, SSHKeyPath: "/tmp/k",
+	})
+	require.NoError(t, err)
+
+	exec := sshpkg.NewFakeExecutor()
+	exec.SetResponse("host-b", "", errors.New("auth failed"))
+
+	ts := newAPIServer(t, store, exec)
+	resp, err := http.Post(ts.URL+"/api/v1/servers/"+strconv.Itoa(s.ID)+"/test-connection", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Equal(t, false, body["reachable"])
+	require.Contains(t, body["error"], "auth failed")
+	// Plain error not wrapping a sentinel → "unknown".
+	require.Equal(t, "unknown", body["error_kind"])
+
+	refreshed, err := store.GetServer(context.Background(), s.ID)
+	require.NoError(t, err)
+	require.Equal(t, "unreachable", refreshed.Status)
+}
+
+func TestTestConnection_ServerNotFound(t *testing.T) {
+	ts := newAPIServer(t, openMemStore(t), sshpkg.NewFakeExecutor())
+	resp, err := http.Post(ts.URL+"/api/v1/servers/9999/test-connection", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestTestConnection_ErrorKindFromSentinels(t *testing.T) {
+	cases := []struct {
+		name       string
+		sentinel   error
+		wantKind   string
+	}{
+		{"auth", sshpkg.ErrAuth, "auth"},
+		{"dial", sshpkg.ErrDial, "dial"},
+		{"timeout", sshpkg.ErrTimeout, "timeout"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openMemStore(t)
+			host := "host-" + tc.name
+			s, err := store.CreateServer(context.Background(), storage.NewServer{
+				Name: tc.name, Hostname: host, SSHUser: "monitor", SSHPort: 22, SSHKeyPath: "/tmp/k",
+			})
+			require.NoError(t, err)
+
+			exec := sshpkg.NewFakeExecutor()
+			exec.SetResponse(host, "", fmt.Errorf("simulated %s: %w", tc.name, tc.sentinel))
+
+			ts := newAPIServer(t, store, exec)
+			resp, err := http.Post(ts.URL+"/api/v1/servers/"+strconv.Itoa(s.ID)+"/test-connection", "application/json", nil)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			require.Equal(t, false, body["reachable"])
+			require.Equal(t, tc.wantKind, body["error_kind"])
+		})
+	}
 }

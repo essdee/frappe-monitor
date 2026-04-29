@@ -24,7 +24,7 @@ func (h *serverHandlers) mount(r chi.Router) {
 	r.Post("/servers", h.create)
 	r.Get("/servers", h.list)
 	r.Get("/servers/{id}", h.get)
-	// /servers/{id}/test-connection added in Task 8
+	r.Post("/servers/{id}/test-connection", h.testConnection)
 }
 
 type createServerReq struct {
@@ -128,4 +128,75 @@ func (h *serverHandlers) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toDTO(s))
+}
+
+// testConnectionResp is the body shape returned by POST /servers/{id}/test-connection.
+//
+// HTTP status is always 200 for a completed probe (success OR failure) and 404
+// only when the server id does not exist. This is intentional: this is a
+// diagnostic endpoint, and the diagnosis lives in the body. Callers that want
+// a structured error type (auth/dial/timeout/unknown) read `error_kind`.
+type testConnectionResp struct {
+	Reachable bool   `json:"reachable"`
+	LatencyMs int64  `json:"latency_ms"` // always present; only meaningful when Reachable=true
+	Error     string `json:"error,omitempty"`
+	ErrorKind string `json:"error_kind,omitempty"` // "auth" | "dial" | "timeout" | "unknown"
+}
+
+// classifyPingError maps the ssh package's typed sentinels into the
+// stable string set returned to clients. Unknown errors land in "unknown"
+// rather than panicking, so the field is always meaningful when present.
+func classifyPingError(err error) string {
+	switch {
+	case errors.Is(err, sshpkg.ErrAuth):
+		return "auth"
+	case errors.Is(err, sshpkg.ErrDial):
+		return "dial"
+	case errors.Is(err, sshpkg.ErrTimeout):
+		return "timeout"
+	default:
+		return "unknown"
+	}
+}
+
+func (h *serverHandlers) testConnection(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	srv, err := h.store.GetServer(r.Context(), id)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	tgt := sshpkg.Target{
+		Host: srv.Hostname, Port: srv.SSHPort, User: srv.SSHUser, KeyPath: srv.SSHKeyPath,
+	}
+	lat, pingErr := sshpkg.Ping(r.Context(), h.exec, tgt)
+
+	if pingErr != nil {
+		if upd := h.store.SetServerStatus(r.Context(), id, "unreachable", pingErr.Error()); upd != nil {
+			h.logger.Error("set status", "err", upd)
+		}
+		writeJSON(w, http.StatusOK, testConnectionResp{
+			Reachable: false,
+			Error:     pingErr.Error(),
+			ErrorKind: classifyPingError(pingErr),
+		})
+		return
+	}
+
+	if upd := h.store.SetServerStatus(r.Context(), id, "reachable", ""); upd != nil {
+		h.logger.Error("set status", "err", upd)
+	}
+	writeJSON(w, http.StatusOK, testConnectionResp{
+		Reachable: true,
+		LatencyMs: lat.Milliseconds(),
+	})
 }
