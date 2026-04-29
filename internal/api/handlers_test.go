@@ -221,3 +221,78 @@ func TestTestConnection_ErrorKindFromSentinels(t *testing.T) {
 		})
 	}
 }
+
+func TestDeployCollector_HappyPath(t *testing.T) {
+	store := openMemStore(t)
+	s, err := store.CreateServer(context.Background(), storage.NewServer{
+		Name: "p", Hostname: "deploy-host", SSHUser: "monitor", SSHPort: 22, SSHKeyPath: "/tmp/k",
+	})
+	require.NoError(t, err)
+
+	exec := sshpkg.NewFakeExecutor()
+	exec.SetResponse("deploy-host", "", nil)
+
+	ts := newAPIServer(t, store, exec)
+	resp, err := http.Post(ts.URL+"/api/v1/servers/"+strconv.Itoa(s.ID)+"/deploy-collector", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Equal(t, true, body["deployed"])
+	require.Regexp(t, `^\d+\.\d+\.\d+$`, body["version"], "version should be semver")
+
+	// FakeExecutor captured the embedded collector script as stdin.
+	stdin := exec.LastStdin("deploy-host")
+	require.Contains(t, stdin, "###META", "deployed script should be the embedded collector")
+	require.Contains(t, stdin, "###SERVER")
+	require.Contains(t, stdin, "###END")
+	cmd := exec.LastCmd("deploy-host")
+	require.Contains(t, cmd, "/usr/local/bin/frappe-monitor-collect.sh")
+	require.Contains(t, cmd, "chmod +x")
+}
+
+func TestDeployCollector_ServerNotFound(t *testing.T) {
+	ts := newAPIServer(t, openMemStore(t), sshpkg.NewFakeExecutor())
+	resp, err := http.Post(ts.URL+"/api/v1/servers/9999/deploy-collector", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestDeployCollector_SSHFailureMaps(t *testing.T) {
+	cases := []struct {
+		name       string
+		sentinel   error
+		wantStatus int
+	}{
+		{"auth_502", sshpkg.ErrAuth, http.StatusBadGateway},
+		{"dial_502", sshpkg.ErrDial, http.StatusBadGateway},
+		{"timeout_504", sshpkg.ErrTimeout, http.StatusGatewayTimeout},
+		{"other_500", errors.New("filesystem full"), http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openMemStore(t)
+			host := "deploy-fail-" + tc.name
+			s, err := store.CreateServer(context.Background(), storage.NewServer{
+				Name: tc.name, Hostname: host, SSHUser: "monitor", SSHPort: 22, SSHKeyPath: "/tmp/k",
+			})
+			require.NoError(t, err)
+
+			exec := sshpkg.NewFakeExecutor()
+			exec.SetResponse(host, "", fmt.Errorf("simulated: %w", tc.sentinel))
+
+			ts := newAPIServer(t, store, exec)
+			resp, err := http.Post(ts.URL+"/api/v1/servers/"+strconv.Itoa(s.ID)+"/deploy-collector", "application/json", nil)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, tc.wantStatus, resp.StatusCode)
+
+			var body map[string]string
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			require.Contains(t, body["error"], "deploy failed")
+		})
+	}
+}

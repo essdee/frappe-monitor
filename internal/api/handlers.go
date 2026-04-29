@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"frappe-monitor/scripts"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 )
@@ -25,6 +26,29 @@ func (h *serverHandlers) mount(r chi.Router) {
 	r.Get("/servers", h.list)
 	r.Get("/servers/{id}", h.get)
 	r.Post("/servers/{id}/test-connection", h.testConnection)
+	r.Post("/servers/{id}/deploy-collector", h.deployCollector)
+}
+
+// tgtFromServer builds an SSH Target from a stored Server record.
+func tgtFromServer(s *storage.Server) sshpkg.Target {
+	return sshpkg.Target{
+		Host: s.Hostname, Port: s.SSHPort, User: s.SSHUser, KeyPath: s.SSHKeyPath,
+	}
+}
+
+// statusForSSHError maps the ssh package's typed sentinels to HTTP status
+// codes for write-style endpoints (deploy-collector, future scheduler-
+// triggered ops surfaced via API). Diagnostic endpoints (test-connection)
+// use a different convention (200-always).
+func statusForSSHError(err error) int {
+	switch {
+	case errors.Is(err, sshpkg.ErrAuth), errors.Is(err, sshpkg.ErrDial):
+		return http.StatusBadGateway // 502 — couldn't reach upstream
+	case errors.Is(err, sshpkg.ErrTimeout):
+		return http.StatusGatewayTimeout // 504
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 type createServerReq struct {
@@ -198,5 +222,41 @@ func (h *serverHandlers) testConnection(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, testConnectionResp{
 		Reachable: true,
 		LatencyMs: lat.Milliseconds(),
+	})
+}
+
+type deployCollectorResp struct {
+	Deployed bool   `json:"deployed"`
+	Version  string `json:"version"`
+}
+
+// deployCollector pipes the embedded collector script to the target via
+// SSH and chmods it executable. Returns 200 on success with the deployed
+// version. SSH failures map to 502 / 504 / 500 per statusForSSHError.
+func (h *serverHandlers) deployCollector(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	srv, err := h.store.GetServer(r.Context(), id)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	const cmd = `cat > /usr/local/bin/frappe-monitor-collect.sh && ` +
+		`chmod +x /usr/local/bin/frappe-monitor-collect.sh`
+	if _, err := h.exec.RunWithInput(r.Context(), tgtFromServer(srv), cmd, scripts.CollectorScript); err != nil {
+		writeErr(w, statusForSSHError(err), "deploy failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, deployCollectorResp{
+		Deployed: true,
+		Version:  scripts.CollectorVersion(),
 	})
 }

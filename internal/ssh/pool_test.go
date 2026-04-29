@@ -45,3 +45,26 @@ func TestPing_WrapsExecutorError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "auth failed")
 }
+
+func TestFakeExecutor_RunWithInput_CapturesStdin(t *testing.T) {
+	f := NewFakeExecutor()
+	f.SetResponse("host-e", "ok\n", nil)
+
+	out, err := f.RunWithInput(context.Background(), Target{Host: "host-e"},
+		"cat > /tmp/x", "hello world")
+	require.NoError(t, err)
+	require.Equal(t, "ok\n", out)
+	require.Equal(t, 1, f.CallCount("host-e"))
+	require.Equal(t, "hello world", f.LastStdin("host-e"))
+	require.Equal(t, "cat > /tmp/x", f.LastCmd("host-e"))
+}
+
+func TestFakeExecutor_Run_RecordsEmptyStdin(t *testing.T) {
+	f := NewFakeExecutor()
+	f.SetResponse("host-f", "", nil)
+
+	_, err := f.Run(context.Background(), Target{Host: "host-f"}, "uptime")
+	require.NoError(t, err)
+	require.Equal(t, "", f.LastStdin("host-f"), "Run should record empty stdin")
+	require.Equal(t, "uptime", f.LastCmd("host-f"))
+}

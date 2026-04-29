@@ -11,16 +11,23 @@ type fakeResp struct {
 	err error
 }
 
+type fakeCall struct {
+	cmd   string
+	stdin string
+}
+
 type FakeExecutor struct {
-	mu    sync.Mutex
-	resp  map[string]fakeResp
-	calls map[string]int
+	mu     sync.Mutex
+	resp   map[string]fakeResp
+	calls  map[string]int
+	lastIn map[string]fakeCall // per-host last cmd + stdin
 }
 
 func NewFakeExecutor() *FakeExecutor {
 	return &FakeExecutor{
-		resp:  map[string]fakeResp{},
-		calls: map[string]int{},
+		resp:   map[string]fakeResp{},
+		calls:  map[string]int{},
+		lastIn: map[string]fakeCall{},
 	}
 }
 
@@ -36,10 +43,30 @@ func (f *FakeExecutor) CallCount(host string) int {
 	return f.calls[host]
 }
 
-func (f *FakeExecutor) Run(_ context.Context, tgt Target, _ string) (string, error) {
+// LastStdin returns the stdin string captured on the most recent call to
+// this host (Run captures ""); useful in tests for deploy-style commands.
+func (f *FakeExecutor) LastStdin(host string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastIn[host].stdin
+}
+
+// LastCmd returns the cmd string captured on the most recent call.
+func (f *FakeExecutor) LastCmd(host string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastIn[host].cmd
+}
+
+func (f *FakeExecutor) Run(ctx context.Context, tgt Target, cmd string) (string, error) {
+	return f.RunWithInput(ctx, tgt, cmd, "")
+}
+
+func (f *FakeExecutor) RunWithInput(_ context.Context, tgt Target, cmd, stdin string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls[tgt.Host]++
+	f.lastIn[tgt.Host] = fakeCall{cmd: cmd, stdin: stdin}
 	r, ok := f.resp[tgt.Host]
 	if !ok {
 		return "", fmt.Errorf("fake: no response configured for %q", tgt.Host)

@@ -43,6 +43,10 @@ func (p *Pool) Close() {
 }
 
 func (p *Pool) Run(ctx context.Context, tgt Target, cmd string) (string, error) {
+	return p.RunWithInput(ctx, tgt, cmd, "")
+}
+
+func (p *Pool) RunWithInput(ctx context.Context, tgt Target, cmd, stdin string) (string, error) {
 	client, err := p.getOrDial(ctx, tgt)
 	if err != nil {
 		return "", err
@@ -65,6 +69,9 @@ func (p *Pool) Run(ctx context.Context, tgt Target, cmd string) (string, error) 
 	var out bytes.Buffer
 	sess.Stdout = &out
 	sess.Stderr = &out
+	if stdin != "" {
+		sess.Stdin = strings.NewReader(stdin)
+	}
 
 	// Buffer 1: the goroutine can always write and exit even after a
 	// timeout/cancel select branch returns. Combined with defer sess.Close()
