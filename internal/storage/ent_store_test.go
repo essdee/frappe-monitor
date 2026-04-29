@@ -49,7 +49,20 @@ func TestCreateServer_DuplicateHostname(t *testing.T) {
 	_, err := s.CreateServer(ctx, in)
 	require.NoError(t, err)
 	_, err = s.CreateServer(ctx, in)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrDuplicateHostname)
+}
+
+func TestCreateServer_LabelsNormalizedToEmpty(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	created, err := s.CreateServer(ctx, NewServer{
+		Name: "x", Hostname: "x.example.com", SSHUser: "monitor",
+		SSHPort: 22, SSHKeyPath: "/tmp/k",
+		// no Labels set
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created.Labels, "Labels must be non-nil so callers can read/write without checks")
+	require.Empty(t, created.Labels)
 }
 
 func TestListServers(t *testing.T) {

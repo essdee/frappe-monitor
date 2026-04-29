@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -36,10 +38,8 @@ func OpenEntStore(ctx context.Context, dsn string) (*EntStore, error) {
 }
 
 func (s *EntStore) Close() error {
-	if err := s.client.Close(); err != nil {
-		return err
-	}
-	return s.sqlDB.Close()
+	// Both layers must be closed; errors.Join surfaces both if either fails.
+	return errors.Join(s.client.Close(), s.sqlDB.Close())
 }
 
 func (s *EntStore) CreateServer(ctx context.Context, in NewServer) (*Server, error) {
@@ -54,9 +54,24 @@ func (s *EntStore) CreateServer(ctx context.Context, in NewServer) (*Server, err
 	}
 	created, err := b.Save(ctx)
 	if err != nil {
+		if isUniqueHostnameViolation(err) {
+			return nil, ErrDuplicateHostname
+		}
 		return nil, err
 	}
 	return entToServer(created), nil
+}
+
+// isUniqueHostnameViolation detects the SQLite UNIQUE constraint failure on
+// servers.hostname. ent does not expose typed errors per-column, so this
+// matches on the error string. The combination of ent.IsConstraintError +
+// substring "hostname" is specific enough since no other column shares that
+// substring in our schema.
+func isUniqueHostnameViolation(err error) bool {
+	if !ent.IsConstraintError(err) {
+		return false
+	}
+	return strings.Contains(err.Error(), "hostname")
 }
 
 func (s *EntStore) GetServer(ctx context.Context, id int) (*Server, error) {
@@ -111,6 +126,11 @@ func entToServer(e *ent.Server) *Server {
 		LastError:  e.LastError,
 		CreatedAt:  e.CreatedAt,
 		UpdatedAt:  e.UpdatedAt,
+	}
+	// Normalize labels to a non-nil empty map so callers never need to
+	// nil-check before reading or writing.
+	if out.Labels == nil {
+		out.Labels = map[string]string{}
 	}
 	if e.LastPingedAt != nil {
 		t := *e.LastPingedAt
