@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
@@ -40,7 +41,7 @@ type LogConfig struct {
 
 func defaults() *koanf.Koanf {
 	k := koanf.New(".")
-	_ = k.Load(confmapProvider(map[string]any{
+	if err := k.Load(confmap.Provider(map[string]any{
 		"server.listen_addr":           ":8080",
 		"server.read_timeout_seconds":  15,
 		"server.write_timeout_seconds": 15,
@@ -50,7 +51,9 @@ func defaults() *koanf.Koanf {
 		"ssh.max_connections_per_host": 2,
 		"log.level":                    "info",
 		"log.format":                   "json",
-	}), nil)
+	}, "."), nil); err != nil {
+		panic(fmt.Sprintf("config defaults: %v", err))
+	}
 	return k
 }
 
@@ -76,6 +79,11 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// validate enforces invariants on the merged config. It guards against
+// explicit empty overrides (e.g. `path: ""` in YAML) and out-of-range
+// values for fields wired into long-lived runtime components like the
+// SSH pool and HTTP server. Absent keys fall back to defaults() and
+// never reach these checks.
 func (c *Config) validate() error {
 	if c.Database.Path == "" {
 		return fmt.Errorf("database.path is required")
@@ -83,5 +91,33 @@ func (c *Config) validate() error {
 	if c.Server.ListenAddr == "" {
 		return fmt.Errorf("server.listen_addr is required")
 	}
+
+	switch c.Log.Level {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("log.level must be one of debug|info|warn|error, got %q", c.Log.Level)
+	}
+	switch c.Log.Format {
+	case "json", "text":
+	default:
+		return fmt.Errorf("log.format must be one of json|text, got %q", c.Log.Format)
+	}
+
+	if c.Server.ReadTimeoutSeconds < 1 {
+		return fmt.Errorf("server.read_timeout_seconds must be >= 1, got %d", c.Server.ReadTimeoutSeconds)
+	}
+	if c.Server.WriteTimeoutSeconds < 1 {
+		return fmt.Errorf("server.write_timeout_seconds must be >= 1, got %d", c.Server.WriteTimeoutSeconds)
+	}
+	if c.SSH.DialTimeoutSeconds < 1 {
+		return fmt.Errorf("ssh.dial_timeout_seconds must be >= 1, got %d", c.SSH.DialTimeoutSeconds)
+	}
+	if c.SSH.CommandTimeoutSeconds < 1 {
+		return fmt.Errorf("ssh.command_timeout_seconds must be >= 1, got %d", c.SSH.CommandTimeoutSeconds)
+	}
+	if c.SSH.MaxConnectionsPerHost < 1 {
+		return fmt.Errorf("ssh.max_connections_per_host must be >= 1, got %d", c.SSH.MaxConnectionsPerHost)
+	}
+
 	return nil
 }

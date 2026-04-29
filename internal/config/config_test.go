@@ -58,3 +58,70 @@ func TestLoad_Validates(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "database.path")
 }
+
+func TestLoad_RejectsInvalidLogLevel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "monitor.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`log: {level: "warning"}`), 0o600))
+
+	_, err := Load(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "log.level")
+	require.Contains(t, err.Error(), "warning")
+}
+
+func TestLoad_RejectsInvalidLogFormat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "monitor.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`log: {format: "yaml"}`), 0o600))
+
+	_, err := Load(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "log.format")
+	require.Contains(t, err.Error(), "yaml")
+}
+
+func TestLoad_RejectsNonPositiveNumbers(t *testing.T) {
+	cases := []struct {
+		name      string
+		yaml      string
+		errSubstr string
+	}{
+		{
+			name:      "zero dial timeout",
+			yaml:      `ssh: {dial_timeout_seconds: 0}`,
+			errSubstr: "ssh.dial_timeout_seconds",
+		},
+		{
+			name:      "negative command timeout",
+			yaml:      `ssh: {command_timeout_seconds: -1}`,
+			errSubstr: "ssh.command_timeout_seconds",
+		},
+		{
+			name:      "zero max connections",
+			yaml:      `ssh: {max_connections_per_host: 0}`,
+			errSubstr: "ssh.max_connections_per_host",
+		},
+		{
+			name:      "zero read timeout",
+			yaml:      `server: {read_timeout_seconds: 0}`,
+			errSubstr: "server.read_timeout_seconds",
+		},
+		{
+			name:      "zero write timeout",
+			yaml:      `server: {write_timeout_seconds: 0}`,
+			errSubstr: "server.write_timeout_seconds",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "monitor.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(tc.yaml), 0o600))
+
+			_, err := Load(path)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.errSubstr)
+		})
+	}
+}
