@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 .PHONY: build build-no-web web-build web-install run test tidy fmt generate \
-        vm-up vm-down vm-logs loki-logs install uninstall
+        vm-up vm-down vm-logs loki-logs install uninstall local-test
 
 # `make build` runs the frontend build first and then the Go build with
 # the embed_dist tag so the SPA bundle ends up in the binary. For Go-
@@ -67,3 +67,10 @@ install:
 
 uninstall:
 	sudo deploy/install.sh --uninstall
+
+# `make local-test` brings up the whole stack on a laptop with seeded
+# demo data so every page has something to show. No sudo, no systemd,
+# no real bench server required. Ctrl+C to stop and tear down. See
+# docs/guide/local-test.md for the full walkthrough.
+local-test:
+	deploy/local-test.sh
