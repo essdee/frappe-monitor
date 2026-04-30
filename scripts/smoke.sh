@@ -388,6 +388,116 @@ HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/v1/metrics/query?start=
 [ "$HTTP" = "400" ] || fail "expected 400 for missing query param, got $HTTP"
 ok "GET /api/v1/metrics/query without query → 400"
 
+# ---------------------------------------------------------------------------
+# Step 9: Phase 5 — bench/site hierarchy endpoints derived from VM
+# ---------------------------------------------------------------------------
+# Push a synthetic bench (apps_count, supervisor_*, redis_queue_depth) and
+# a synthetic site (is_healthy, http_status_code, http_response_ms) into
+# VM, then verify the four new VM-derived endpoints return them. Same
+# binary as Phase 4; VM is already up. Dev compose sets
+# -search.latencyOffset=0 so /api/v1/query reflects writes immediately.
+
+echo "==> Phase 5 (hierarchy endpoints)"
+
+P5_SRV="smoke-srv-$(date +%s)"
+P5_BENCH="bench-1"
+P5_SITE="alpha.smoke.test"
+P5_NS=$(date +%s%N)
+
+# Bench-level metrics.
+curl -fsS -X POST 'http://127.0.0.1:8428/write' --data-binary "$(cat <<EOF
+frappe_bench_apps_count,server=$P5_SRV,bench=$P5_BENCH value=7 $P5_NS
+frappe_bench_supervisor_running,server=$P5_SRV,bench=$P5_BENCH value=4 $P5_NS
+frappe_bench_supervisor_total,server=$P5_SRV,bench=$P5_BENCH value=4 $P5_NS
+frappe_bench_redis_queue_depth,server=$P5_SRV,bench=$P5_BENCH,queue=default value=12 $P5_NS
+frappe_bench_redis_queue_depth,server=$P5_SRV,bench=$P5_BENCH,queue=long value=0 $P5_NS
+frappe_bench_info,server=$P5_SRV,bench=$P5_BENCH,frappe_version=v15.42.1 value=1 $P5_NS
+frappe_site_is_healthy,server=$P5_SRV,bench=$P5_BENCH,site=$P5_SITE value=1 $P5_NS
+frappe_site_http_status_code,server=$P5_SRV,bench=$P5_BENCH,site=$P5_SITE value=200 $P5_NS
+frappe_site_http_response_ms,server=$P5_SRV,bench=$P5_BENCH,site=$P5_SITE value=42.5 $P5_NS
+EOF
+)" >/dev/null
+ok "wrote bench + site metrics for $P5_SRV/$P5_BENCH/$P5_SITE"
+
+# Poll /benches until our synthetic bench shows up. VM ingest is async.
+P5_BENCH_FOUND=""
+for _ in $(seq 1 20); do
+    sleep 0.5
+    BLIST=$(curl -fsS "$BASE/api/v1/benches" 2>/dev/null || echo '[]')
+    if echo "$BLIST" | python3 -c "
+import json, sys
+arr = json.load(sys.stdin)
+for b in arr:
+    if b.get('server') == '$P5_SRV' and b.get('bench') == '$P5_BENCH':
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null; then
+        P5_BENCH_FOUND=1
+        break
+    fi
+done
+[ -n "$P5_BENCH_FOUND" ] || fail "bench $P5_SRV/$P5_BENCH never appeared in /api/v1/benches: $BLIST"
+ok "GET /api/v1/benches contains $P5_SRV/$P5_BENCH"
+
+# Bench detail.
+BD=$(curl -fsS "$BASE/api/v1/benches/$P5_SRV/$P5_BENCH")
+echo "$BD" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+def need(k, exp):
+    if d.get(k) != exp:
+        print(f'bench detail {k}: expected {exp!r}, got {d.get(k)!r}', file=sys.stderr)
+        sys.exit(1)
+need('server', '$P5_SRV')
+need('bench', '$P5_BENCH')
+need('apps_count', 7)
+need('supervisor_running', 4)
+need('supervisor_total', 4)
+if d.get('frappe_version') != 'v15.42.1':
+    print(f'expected frappe_version=v15.42.1, got {d.get(\"frappe_version\")!r}', file=sys.stderr)
+    sys.exit(1)
+qs = d.get('redis_queues', {})
+if qs.get('default') != 12 or qs.get('long') != 0:
+    print(f'unexpected redis_queues: {qs}', file=sys.stderr)
+    sys.exit(1)
+" || fail "bench detail wrong: $BD"
+ok "GET /api/v1/benches/$P5_SRV/$P5_BENCH → all fields populated"
+
+# Sites list.
+SLIST=$(curl -fsS "$BASE/api/v1/sites")
+echo "$SLIST" | python3 -c "
+import json, sys
+arr = json.load(sys.stdin)
+for s in arr:
+    if (s.get('server') == '$P5_SRV'
+        and s.get('bench') == '$P5_BENCH'
+        and s.get('site') == '$P5_SITE'):
+        sys.exit(0)
+print(f'site triple not in list: {arr}', file=sys.stderr)
+sys.exit(1)
+" || fail "sites list missing entry: $SLIST"
+ok "GET /api/v1/sites contains $P5_SRV/$P5_BENCH/$P5_SITE"
+
+# Site detail.
+SD=$(curl -fsS "$BASE/api/v1/sites/$P5_SRV/$P5_BENCH/$P5_SITE")
+echo "$SD" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+def need(k, exp):
+    if d.get(k) != exp:
+        print(f'site detail {k}: expected {exp!r}, got {d.get(k)!r}', file=sys.stderr)
+        sys.exit(1)
+need('server', '$P5_SRV')
+need('bench', '$P5_BENCH')
+need('site', '$P5_SITE')
+need('http_status_code', 200)
+need('is_healthy', 1)
+if abs(d.get('http_response_ms', 0) - 42.5) > 0.01:
+    print(f'expected http_response_ms~=42.5, got {d.get(\"http_response_ms\")}', file=sys.stderr)
+    sys.exit(1)
+" || fail "site detail wrong: $SD"
+ok "GET /api/v1/sites/$P5_SRV/$P5_BENCH/$P5_SITE → all fields populated"
+
 # 8b. SIGTERM clean exit (no scheduler ticks to drain since no servers
 # are registered, so the budget here is much smaller than Phase 1's).
 kill -TERM "$P4_PID"
