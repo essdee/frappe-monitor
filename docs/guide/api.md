@@ -2,7 +2,18 @@
 
 All HTTP endpoints exposed by the monitor binary. Mounted on the address from `server.listen_addr` (default `:8080`). Curl examples assume `http://127.0.0.1:8080`; replace with your host.
 
-There is **no auth** today — anyone who can reach the listen address can call any endpoint. Restrict at the network or reverse-proxy layer until Phase 7. See [`deployment.md`](deployment.md#optional-tls-via-caddy) for the Caddy IP-allowlist pattern.
+## Auth
+
+If `auth.password` is set in the config, every `/api/v1/*` route and the SPA root require HTTP basic auth. `/healthz` stays open so external probes work without credentials. The username is ignored — any value works as long as the password matches.
+
+```bash
+# With auth enabled:
+curl -u "admin:<password>" http://127.0.0.1:8080/api/v1/servers
+
+# Browsers handle the credential prompt natively — no SPA login page.
+```
+
+When `auth.password` is empty, the API is open. Restrict at the network layer if exposed (see [`deployment.md`](deployment.md#optional-tls-via-caddy)).
 
 ## Health
 
@@ -67,6 +78,41 @@ curl -fsS http://127.0.0.1:8080/api/v1/servers/1
 |---|---|
 | 200 | Found. |
 | 404 | Unknown id. |
+
+### `PATCH /api/v1/servers/{id}` — partial update
+
+Body is JSON with any subset of these fields. Absent (or `null`) fields are left unchanged.
+
+```json
+{
+  "name": "renamed",
+  "hostname": "new-host.example.com",
+  "ssh_user": "frappe",
+  "ssh_port": 2222,
+  "ssh_key_path": "/var/lib/frappe-monitor/.ssh/id_ed25519",
+  "labels": { "env": "staging" }
+}
+```
+
+| Status | Meaning |
+|---|---|
+| 200 | Updated. Body is the full server record. |
+| 400 | Bad JSON, invalid `ssh_port` (must be > 0). |
+| 404 | Unknown id. |
+| 409 | Hostname rename collides with another server. |
+
+### `DELETE /api/v1/servers/{id}` — remove
+
+```bash
+curl -X DELETE http://127.0.0.1:8080/api/v1/servers/1
+```
+
+| Status | Meaning |
+|---|---|
+| 204 | Deleted. The schema's edge cascade removes log cursors. Alert states age out on the next reconciliation cycle. |
+| 404 | Unknown id. |
+
+Existing metrics + logs in VictoriaMetrics / Loki age out on their retention. The dashboard stops listing the server immediately.
 
 ### `POST /api/v1/servers/{id}/test-connection` — diagnostic SSH probe
 

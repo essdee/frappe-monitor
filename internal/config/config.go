@@ -19,6 +19,8 @@ type Config struct {
 	Metrics   MetricsConfig   `koanf:"metrics"`
 	Logs      LogsConfig      `koanf:"logs"`
 	Scheduler SchedulerConfig `koanf:"scheduler"`
+	Auth      AuthConfig      `koanf:"auth"`
+	Alerts    AlertsConfig    `koanf:"alerts"`
 }
 
 type ServerConfig struct {
@@ -63,6 +65,42 @@ type SchedulerConfig struct {
 	PerJobTimeoutSeconds   int `koanf:"per_job_timeout_seconds"`
 }
 
+// AuthConfig is the Phase 7 single-tenant auth knob. Empty Password
+// means auth is off (the dashboard + API are open). Non-empty
+// password applies HTTP basic auth — browsers prompt for credentials
+// natively, so the SPA needs no login page.
+type AuthConfig struct {
+	Password string `koanf:"password"`
+	Realm    string `koanf:"realm"`
+}
+
+// AlertsConfig mirrors internal/alerts.Config. Duplicated here as a
+// flat struct so koanf binds it from yaml; the alerts package's
+// Config has the canonical Validate().
+type AlertsConfig struct {
+	Enabled                   bool             `koanf:"enabled"`
+	EvaluationIntervalSeconds int              `koanf:"evaluation_interval_seconds"`
+	NotifyRepeatSeconds       int              `koanf:"notify_repeat_seconds"`
+	VMQueryTimeoutSeconds     int              `koanf:"vm_query_timeout_seconds"`
+	Telegram                  AlertsTelegram   `koanf:"telegram"`
+	Rules                     []AlertsRule     `koanf:"rules"`
+	DisableDefaults           bool             `koanf:"disable_defaults"`
+}
+
+type AlertsTelegram struct {
+	BotToken           string   `koanf:"bot_token"`
+	ChatIDs            []string `koanf:"chat_ids"`
+	SendTimeoutSeconds int      `koanf:"send_timeout_seconds"`
+}
+
+type AlertsRule struct {
+	Name              string   `koanf:"name"`
+	Expr              string   `koanf:"expr"`
+	Severity          string   `koanf:"severity"`
+	Message           string   `koanf:"message"`
+	FingerprintLabels []string `koanf:"fingerprint_labels"`
+}
+
 func defaults() *koanf.Koanf {
 	k := koanf.New(".")
 	if err := k.Load(confmap.Provider(map[string]any{
@@ -84,6 +122,14 @@ func defaults() *koanf.Koanf {
 		"scheduler.default_interval_seconds": 900, // 15 min — master plan §5 default
 		"scheduler.max_parallel":             10,
 		"scheduler.per_job_timeout_seconds":  30,
+		"auth.password":                      "",
+		"auth.realm":                         "frappe-monitor",
+		"alerts.enabled":                     false,
+		"alerts.evaluation_interval_seconds": 60,
+		"alerts.notify_repeat_seconds":       3600,
+		"alerts.vm_query_timeout_seconds":    10,
+		"alerts.telegram.send_timeout_seconds": 5,
+		"alerts.disable_defaults":            false,
 	}, "."), nil); err != nil {
 		panic(fmt.Sprintf("config defaults: %v", err))
 	}
@@ -178,6 +224,22 @@ func (c *Config) validate() error {
 	}
 	if c.Scheduler.PerJobTimeoutSeconds < 1 {
 		return fmt.Errorf("scheduler.per_job_timeout_seconds must be >= 1, got %d", c.Scheduler.PerJobTimeoutSeconds)
+	}
+
+	// Alerts: the alerts package validates the deeper invariants
+	// (telegram bot token, chat IDs, per-rule fields). Here we only
+	// guard the koanf-bound numeric fields so a typo doesn't divide
+	// by zero somewhere downstream.
+	if c.Alerts.Enabled {
+		if c.Alerts.EvaluationIntervalSeconds < 15 {
+			return fmt.Errorf("alerts.evaluation_interval_seconds must be >= 15, got %d", c.Alerts.EvaluationIntervalSeconds)
+		}
+		if c.Alerts.VMQueryTimeoutSeconds < 1 {
+			return fmt.Errorf("alerts.vm_query_timeout_seconds must be >= 1, got %d", c.Alerts.VMQueryTimeoutSeconds)
+		}
+		if c.Alerts.NotifyRepeatSeconds < 0 {
+			return fmt.Errorf("alerts.notify_repeat_seconds must be >= 0, got %d", c.Alerts.NotifyRepeatSeconds)
+		}
 	}
 
 	return nil

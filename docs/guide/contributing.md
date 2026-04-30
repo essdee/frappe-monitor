@@ -117,8 +117,9 @@ The master plan is in `docs/2026-04-22/1.md`. Current state:
 | 3 — Bench/site metrics + Loki | ✓ |
 | 4 — Dashboard foundation | ✓ |
 | 5 — Dashboard full coverage | ✓ |
-| 6 — Telegram alerting | not started |
-| 7 — Ship (auth, search, deploy markers, multi-tenant) | not started |
+| 6 — Telegram alerting | ✓ |
+| 7 v1 — Auth + in-dashboard server CRUD | ✓ |
+| 7 v2 — Deploy markers, multi-tenant, search | post-v1 backlog |
 
 Each phase has a planning doc in `docs/YYYY-MM-DD/N.md` and an acceptance writeup the day it's signed off.
 

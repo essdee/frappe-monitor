@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"frappe-monitor/internal/alerts"
 	"frappe-monitor/internal/api"
 	"frappe-monitor/internal/collector"
 	"frappe-monitor/internal/config"
@@ -94,6 +95,44 @@ func run(cfgPath string) error {
 		"default_interval_seconds", cfg.Scheduler.DefaultIntervalSeconds,
 		"max_parallel", cfg.Scheduler.MaxParallel)
 
+	// Phase 6: alerts service. New() returns nil when alerts.enabled=false,
+	// which the rest of the wiring treats as "no-op" — no goroutine, no
+	// telegram traffic, no extra rows in SQLite. Validation surfaces
+	// missing telegram config etc. before we ever start.
+	alertsCfg := alerts.Config{
+		Enabled:                   cfg.Alerts.Enabled,
+		EvaluationIntervalSeconds: cfg.Alerts.EvaluationIntervalSeconds,
+		NotifyRepeatSeconds:       cfg.Alerts.NotifyRepeatSeconds,
+		VMQueryTimeoutSeconds:     cfg.Alerts.VMQueryTimeoutSeconds,
+		Telegram: alerts.TelegramConfig{
+			BotToken:           cfg.Alerts.Telegram.BotToken,
+			ChatIDs:            cfg.Alerts.Telegram.ChatIDs,
+			SendTimeoutSeconds: cfg.Alerts.Telegram.SendTimeoutSeconds,
+		},
+		DisableDefaults: cfg.Alerts.DisableDefaults,
+	}
+	for _, r := range cfg.Alerts.Rules {
+		alertsCfg.Rules = append(alertsCfg.Rules, alerts.Rule{
+			Name:              r.Name,
+			Expr:              r.Expr,
+			Severity:          r.Severity,
+			Message:           r.Message,
+			FingerprintLabels: r.FingerprintLabels,
+		})
+	}
+	alertsSvc, err := alerts.New(alertsCfg, cfg.Metrics.VMURL, store, logger)
+	if err != nil {
+		return fmt.Errorf("alerts: %w", err)
+	}
+	if alertsSvc != nil {
+		alertsSvc.Start(ctx)
+		logger.Info("alerts service started",
+			"interval_seconds", cfg.Alerts.EvaluationIntervalSeconds,
+			"chat_ids", len(cfg.Alerts.Telegram.ChatIDs),
+			"rule_count_default", len(alerts.DefaultRules()),
+			"rule_count_user", len(cfg.Alerts.Rules))
+	}
+
 	router := api.NewRouter(api.Deps{
 		Store:    store,
 		Executor: pool,
@@ -104,6 +143,10 @@ func run(cfgPath string) error {
 		LogsBaseURL:         cfg.Logs.LokiURL,
 		MetricsQueryTimeout: time.Duration(cfg.Metrics.QueryTimeoutSeconds) * time.Second,
 		LogsQueryTimeout:    time.Duration(cfg.Logs.QueryTimeoutSeconds) * time.Second,
+
+		// Phase 7: HTTP basic auth.
+		AuthPassword: cfg.Auth.Password,
+		AuthRealm:    cfg.Auth.Realm,
 	})
 
 	srv := &http.Server{
@@ -144,6 +187,9 @@ func run(cfgPath string) error {
 	defer stop()
 	if err := sched.Stop(shutdownCtx); err != nil {
 		logger.Error("scheduler stop", "err", err)
+	}
+	if alertsSvc != nil {
+		alertsSvc.Stop()
 	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("http shutdown: %w", err)

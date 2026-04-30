@@ -116,6 +116,22 @@ sudo -u frappe chmod 600 /home/frappe/.ssh/authorized_keys
 
 The key path you'll use when registering each server is `/var/lib/frappe-monitor/.ssh/id_ed25519`. See [`usage.md`](usage.md) for the registration call.
 
+## Set a password (do this before exposing the dashboard)
+
+The dashboard ships with auth disabled. For any deployment outside a trusted network, set `auth.password`:
+
+```bash
+# Generate a strong random password.
+openssl rand -base64 32
+
+# Edit /etc/frappe-monitor/monitor.yaml — set the value:
+#   auth:
+#     password: "<the random string>"
+sudo systemctl restart frappe-monitor
+```
+
+Browsers prompt for credentials on first request and cache them per session. Username is ignored — any value works as long as the password matches. `/healthz` stays open so external probes (load balancer, uptime monitor) work without credentials.
+
 ## Optional: TLS via Caddy
 
 The monitor itself speaks plain HTTP on `:8080`. For internet-facing deployments, put Caddy in front:

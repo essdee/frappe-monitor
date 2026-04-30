@@ -498,6 +498,42 @@ if abs(d.get('http_response_ms', 0) - 42.5) > 0.01:
 " || fail "site detail wrong: $SD"
 ok "GET /api/v1/sites/$P5_SRV/$P5_BENCH/$P5_SITE → all fields populated"
 
+# ---------------------------------------------------------------------------
+# Step 10: Phase 7 — server CRUD (PATCH + DELETE)
+# ---------------------------------------------------------------------------
+# Phase 7 added rename + delete. Smoke covers both paths so a regression
+# in the storage update logic is caught.
+echo "==> Phase 7 (server CRUD)"
+
+# Re-register a fresh server (the Phase 1 binary went down between Phase 1
+# and Phase 4; the Phase 4 binary is using the same DB path though, so
+# the original id=1 from Phase 1 is still there. Use a new hostname to
+# avoid colliding.)
+P7_CREATE=$(curl -fsS -X POST "$BASE/api/v1/servers" \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"crud-target","hostname":"crud.local","ssh_user":"monitor","ssh_port":22,"ssh_key_path":"/nonexistent/k"}')
+P7_ID=$(echo "$P7_CREATE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+ok "registered crud-target id=$P7_ID"
+
+# PATCH: rename + change ssh user.
+PATCHED=$(curl -fsS -X PATCH "$BASE/api/v1/servers/$P7_ID" \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"renamed","ssh_user":"frappe"}')
+NAME=$(echo "$PATCHED" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')
+USR=$(echo "$PATCHED" | python3 -c 'import json,sys; print(json.load(sys.stdin)["ssh_user"])')
+[ "$NAME" = "renamed" ] && [ "$USR" = "frappe" ] || fail "patch did not apply: $PATCHED"
+ok "PATCH /api/v1/servers/$P7_ID renamed + changed ssh_user"
+
+# DELETE.
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE/api/v1/servers/$P7_ID")
+[ "$HTTP" = "204" ] || fail "expected 204 on delete, got $HTTP"
+ok "DELETE /api/v1/servers/$P7_ID → 204"
+
+# GET after DELETE → 404.
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/v1/servers/$P7_ID")
+[ "$HTTP" = "404" ] || fail "expected 404 after delete, got $HTTP"
+ok "GET /api/v1/servers/$P7_ID → 404 (deleted)"
+
 # 8b. SIGTERM clean exit (no scheduler ticks to drain since no servers
 # are registered, so the budget here is much smaller than Phase 1's).
 kill -TERM "$P4_PID"
@@ -511,6 +547,81 @@ fi
 wait "$P4_PID" 2>/dev/null || true
 P4_PID=""
 ok "Phase 4 binary exited cleanly on SIGTERM"
+
+# ---------------------------------------------------------------------------
+# Step 11: Phase 7 — auth (HTTP basic) round-trip
+# ---------------------------------------------------------------------------
+# Start a new binary with auth.password set, hit /healthz (must be 200
+# without credentials), hit /api/v1/servers (must be 401 without, 200
+# with). Same VM/Loki backend as Phase 4 (still up).
+
+echo "==> Phase 7 (auth)"
+
+cat > "$TMPDIR/monitor-auth.yaml" <<EOF
+server:
+  listen_addr: ":$PORT"
+  read_timeout_seconds: 15
+  write_timeout_seconds: 15
+database:
+  path: "$TMPDIR/data/monitor.db"
+ssh:
+  dial_timeout_seconds: 10
+  command_timeout_seconds: 30
+  max_connections_per_host: 2
+log:
+  level: "info"
+  format: "json"
+auth:
+  password: "smoke-pw-$$"
+  realm: "frappe-monitor"
+EOF
+
+"$BINARY" --config "$TMPDIR/monitor-auth.yaml" > "$TMPDIR/server-p7.log" 2>&1 &
+P7_AUTH_PID=$!
+trap 'kill -KILL "$P7_AUTH_PID" 2>/dev/null || true; eval "$VM_TRAP_PREV"' EXIT
+for _ in $(seq 1 50); do
+    if curl -fsS "$BASE/healthz" >/dev/null 2>&1; then break; fi
+    sleep 0.1
+done
+curl -fsS "$BASE/healthz" >/dev/null \
+    || { cat "$TMPDIR/server-p7.log" >&2; fail "auth binary never came up"; }
+ok "auth binary up"
+
+# /healthz must be 200 without auth (external probes need this).
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/healthz")
+[ "$HTTP" = "200" ] || fail "expected /healthz=200 unauth'd, got $HTTP"
+ok "GET /healthz → 200 (no auth required)"
+
+# /api/v1/servers must be 401 without auth.
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/v1/servers")
+[ "$HTTP" = "401" ] || fail "expected /api/v1/servers=401 unauth'd, got $HTTP"
+WWW_AUTH=$(curl -s -o /dev/null -D - "$BASE/api/v1/servers" | grep -i '^www-authenticate:' || true)
+[ -n "$WWW_AUTH" ] || fail "expected WWW-Authenticate header, got none"
+ok "GET /api/v1/servers → 401 with WWW-Authenticate header"
+
+# With wrong password → 401.
+HTTP=$(curl -s -u "x:wrong" -o /dev/null -w "%{http_code}" "$BASE/api/v1/servers")
+[ "$HTTP" = "401" ] || fail "expected 401 for wrong password, got $HTTP"
+ok "GET /api/v1/servers (wrong password) → 401"
+
+# With correct password → 200.
+HTTP=$(curl -s -u "x:smoke-pw-$$" -o /dev/null -w "%{http_code}" "$BASE/api/v1/servers")
+[ "$HTTP" = "200" ] || fail "expected 200 for correct password, got $HTTP"
+ok "GET /api/v1/servers (correct password) → 200"
+
+# SPA must also be auth-gated.
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/")
+[ "$HTTP" = "401" ] || fail "expected SPA root=401 unauth'd, got $HTTP"
+ok "GET / (SPA) → 401 without auth"
+
+kill -TERM "$P7_AUTH_PID"
+for _ in $(seq 1 110); do
+    if ! kill -0 "$P7_AUTH_PID" 2>/dev/null; then break; fi
+    sleep 0.1
+done
+wait "$P7_AUTH_PID" 2>/dev/null || true
+P7_AUTH_PID=""
+ok "auth binary exited cleanly on SIGTERM"
 
 make vm-down >/dev/null
 ok "vm-down clean"

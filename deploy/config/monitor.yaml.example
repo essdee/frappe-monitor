@@ -38,3 +38,47 @@ scheduler:
   max_parallel: 10
   # Per-job ctx timeout. Pick well above P99(ssh + parse + push).
   per_job_timeout_seconds: 30
+
+# --- Phase 7 auth ---------------------------------------------------------
+# HTTP basic auth. Empty password = auth disabled (dev / behind-internal-
+# network deploys). When set, the dashboard + API require credentials —
+# any username + this password. Browsers handle the prompt natively, so
+# the SPA needs no login page. /healthz stays unauthenticated for probes.
+auth:
+  password: ""
+  realm: "frappe-monitor"
+
+# --- Phase 6 alerts -------------------------------------------------------
+# Telegram alerting. enabled=false means no goroutine, no telegram
+# traffic, no extra rows in SQLite.
+#
+# To enable:
+#   1. Create a bot via @BotFather, copy the token.
+#   2. Add the bot to a chat (or DM it), get the chat_id from
+#      https://api.telegram.org/bot<token>/getUpdates after sending /start.
+#   3. Set enabled: true and fill in bot_token + chat_ids.
+#
+# Default rules cover server_unreachable, disk_almost_full, site_unhealthy,
+# redis_queue_high. Override or add via the rules: list below; the
+# defaults still fire unless disable_defaults: true.
+alerts:
+  enabled: false
+  evaluation_interval_seconds: 60
+  notify_repeat_seconds: 3600
+  vm_query_timeout_seconds: 10
+  telegram:
+    bot_token: ""
+    chat_ids: []
+    send_timeout_seconds: 5
+  disable_defaults: false
+  rules: []
+  # Example custom rule:
+  #   - name: cpu_saturated
+  #     expr: 100 * (1 - rate(frappe_server_cpu_idle[5m]) /
+  #                       rate(frappe_server_cpu_user[5m] +
+  #                            frappe_server_cpu_system[5m] +
+  #                            frappe_server_cpu_idle[5m] +
+  #                            frappe_server_cpu_iowait[5m])) > 95
+  #     severity: warning
+  #     fingerprint_labels: [server]
+  #     message: "CPU on {{.Labels.server}} is {{printf \"%.1f\" .Value}}% used."

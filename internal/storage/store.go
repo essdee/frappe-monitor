@@ -45,15 +45,48 @@ type NewServer struct {
 	Labels     map[string]string
 }
 
+// UpdateServer carries optional fields. nil means "leave unchanged"; a
+// pointer to the zero value means "explicit set to that value". Lets a
+// PATCH handler accept partial input without ambiguity.
+type UpdateServer struct {
+	Name       *string
+	Hostname   *string
+	SSHUser    *string
+	SSHPort    *int
+	SSHKeyPath *string
+	Labels     *map[string]string
+}
+
+// AlertState mirrors ent/schema/alertstate.go. The alerts package's
+// reconciler reads/writes these via the Store interface.
+type AlertState struct {
+	ID             int
+	RuleName       string
+	Fingerprint    string
+	Labels         map[string]string
+	Status         string // "firing" | "resolved"
+	Value          float64
+	FirstFiredAt   time.Time
+	LastNotifiedAt time.Time
+	UpdatedAt      time.Time
+}
+
 type Store interface {
 	CreateServer(ctx context.Context, in NewServer) (*Server, error)
 	GetServer(ctx context.Context, id int) (*Server, error)
 	ListServers(ctx context.Context) ([]*Server, error)
+	UpdateServer(ctx context.Context, id int, in UpdateServer) (*Server, error)
+	DeleteServer(ctx context.Context, id int) error
 	SetServerStatus(ctx context.Context, id int, status string, lastErr string) error
 
 	// Log cursors — Phase 3.
 	GetLogCursor(ctx context.Context, serverID int, logPath string) (*LogCursor, error)
 	UpsertLogCursor(ctx context.Context, c LogCursor) error
+
+	// Alert state — Phase 6.
+	ListAlertStatesByRule(ctx context.Context, ruleName string) ([]*AlertState, error)
+	UpsertAlertState(ctx context.Context, in AlertState) (*AlertState, error)
+	DeleteAlertState(ctx context.Context, id int) error
 
 	Close() error
 }

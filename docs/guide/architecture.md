@@ -43,11 +43,12 @@ What runs where, why, and how data flows.
 Single static Go binary. Includes:
 
 - **Embedded SPA** — `web/dist/` baked in via `//go:embed` (with the `embed_dist` build tag), served on every non-API, non-`/healthz` path. Build-tag fallback (`embed_placeholder.go`) lets `go build` work without npm.
-- **chi router** — HTTP handlers under `/api/v1/`, plus `/healthz` and the SPA fallback. Middleware: recoverer (outermost) → request logger.
-- **Storage** — SQLite via [ent](https://entgo.io/) (pure-Go driver `modernc.org/sqlite`, so CGO stays disabled). Stores: `Server` (registry), `LogCursor` (per-file tail offsets).
+- **chi router** — HTTP handlers under `/api/v1/`, plus `/healthz` and the SPA fallback. Middleware: recoverer (outermost) → request logger → optional HTTP basic auth (when `auth.password` is set).
+- **Storage** — SQLite via [ent](https://entgo.io/) (pure-Go driver `modernc.org/sqlite`, so CGO stays disabled). Stores: `Server` (registry), `LogCursor` (per-file tail offsets), `AlertState` (per-(rule, fingerprint) firing/resolved status).
 - **SSH pool** — per-host connection pool with typed errors (`ErrAuth`, `ErrDial`, `ErrTimeout`). Underpins the test-connection diagnostic and every scheduled pull.
 - **Scheduler** — `robfig/cron/v3` ticking at `scheduler.default_interval_seconds`. A semaphore caps concurrency at `scheduler.max_parallel`. Each tick fans out one job per registered server.
 - **Collector pipeline** — for one server: `ssh exec collect.sh → parse output → push metrics to VM → tail logs → push to Loki → upsert cursor`. Failures are typed: SSH/parse failures mark the server unreachable; VM/Loki push failures don't (the bench is fine; the metrics tier is the failure domain).
+- **Alerts service** (Phase 6) — independent goroutine ticking at `alerts.evaluation_interval_seconds`. For each rule, queries VM for the firing series, reconciles against last-cycle state in SQLite, fans out new fires + resolutions to Telegram. Send-only, no acks.
 
 ### VictoriaMetrics
 
@@ -133,12 +134,13 @@ The proxy is intentionally thin — no PromQL rewriting, no auth (yet), no cachi
 
 ## What's deferred
 
-| Item | Phase |
+| Item | Status |
 |---|---|
-| Telegram alerting (rules engine, fan-out to admin chat IDs) | 6 |
-| Built-in API auth (today: no auth) | 7 |
-| Per-server schedule overrides | 7 |
-| Site-scoped log labels | 7 |
-| Deploy markers (annotation timeline) | 7 |
-| Multi-tenant access scoping | 7 |
-| In-dashboard "add server" form + delete endpoint | 7 |
+| Telegram alerting | shipped (Phase 6) |
+| Built-in HTTP basic auth | shipped (Phase 7 v1) |
+| In-dashboard "add server" form + delete + rename | shipped (Phase 7 v1) |
+| Per-server schedule overrides | post-v1 backlog |
+| Site-scoped log labels | post-v1 backlog |
+| Deploy markers (annotation timeline) | post-v1 backlog |
+| Multi-tenant access scoping (per-team password / SSO) | post-v1 backlog |
+| p95 / quantile_over_time on site detail (currently avg_over_time) | post-v1 backlog |

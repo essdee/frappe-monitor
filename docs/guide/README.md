@@ -26,10 +26,11 @@ These docs are **evergreen** — kept current with the code. Dated decisions and
 | 3 | Bench + site collectors → metrics + logs (Loki) | done |
 | 4 | Dashboard foundation: SPA, query proxies, timeline filter | done |
 | 5 | Dashboard full coverage: benches, sites, log feeds | done |
-| 6 | Telegram alerting | not started |
-| 7 | Ship: deploy markers, search, multi-tenant, prod TLS auth | not started |
+| 6 | Telegram alerting (rules engine + state + fan-out) | done |
+| 7 v1 | HTTP basic auth, in-dashboard add/edit/delete | done |
+| 7 v2 | Deploy markers, multi-tenant scoping, search UI | post-v1 backlog |
 
-For "complete" the remaining work is alerting (Phase 6) and access-control / search (Phase 7). Everything below this line works today.
+The single-tenant production-shippable v1 is complete. v2 items (multi-tenant access, deploy timeline annotations) are tracked in `docs/hardening-backlog.md`.
 
 ## Convention
 

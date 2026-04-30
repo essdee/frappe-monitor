@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"frappe-monitor/ent/alertstate"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/schema"
 	"frappe-monitor/ent/server"
@@ -13,6 +14,34 @@ import (
 // (default values, validators, hooks and policies) and stitches it
 // to their package variables.
 func init() {
+	alertstateFields := schema.AlertState{}.Fields()
+	_ = alertstateFields
+	// alertstateDescRuleName is the schema descriptor for rule_name field.
+	alertstateDescRuleName := alertstateFields[0].Descriptor()
+	// alertstate.RuleNameValidator is a validator for the "rule_name" field. It is called by the builders before save.
+	alertstate.RuleNameValidator = alertstateDescRuleName.Validators[0].(func(string) error)
+	// alertstateDescFingerprint is the schema descriptor for fingerprint field.
+	alertstateDescFingerprint := alertstateFields[1].Descriptor()
+	// alertstate.FingerprintValidator is a validator for the "fingerprint" field. It is called by the builders before save.
+	alertstate.FingerprintValidator = alertstateDescFingerprint.Validators[0].(func(string) error)
+	// alertstateDescValue is the schema descriptor for value field.
+	alertstateDescValue := alertstateFields[4].Descriptor()
+	// alertstate.DefaultValue holds the default value on creation for the value field.
+	alertstate.DefaultValue = alertstateDescValue.Default.(float64)
+	// alertstateDescFirstFiredAt is the schema descriptor for first_fired_at field.
+	alertstateDescFirstFiredAt := alertstateFields[5].Descriptor()
+	// alertstate.DefaultFirstFiredAt holds the default value on creation for the first_fired_at field.
+	alertstate.DefaultFirstFiredAt = alertstateDescFirstFiredAt.Default.(func() time.Time)
+	// alertstateDescLastNotifiedAt is the schema descriptor for last_notified_at field.
+	alertstateDescLastNotifiedAt := alertstateFields[6].Descriptor()
+	// alertstate.DefaultLastNotifiedAt holds the default value on creation for the last_notified_at field.
+	alertstate.DefaultLastNotifiedAt = alertstateDescLastNotifiedAt.Default.(func() time.Time)
+	// alertstateDescUpdatedAt is the schema descriptor for updated_at field.
+	alertstateDescUpdatedAt := alertstateFields[7].Descriptor()
+	// alertstate.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	alertstate.DefaultUpdatedAt = alertstateDescUpdatedAt.Default.(func() time.Time)
+	// alertstate.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	alertstate.UpdateDefaultUpdatedAt = alertstateDescUpdatedAt.UpdateDefault.(func() time.Time)
 	logcursorFields := schema.LogCursor{}.Fields()
 	_ = logcursorFields
 	// logcursorDescLogPath is the schema descriptor for log_path field.

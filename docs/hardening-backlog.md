@@ -57,6 +57,17 @@ Each item has a phase target (when we'd want to address it by) and the review th
 | C3 | Collector tests share a single in-memory SQLite DSN string. | Task 17 review | If/when `t.Parallel()` is added | Per-test DSN via `"file:pipeline-"+t.Name()+"?…"` to avoid cross-test row leakage if parallel testing is ever enabled. |
 | C4 | Push errors and probe errors share `last_error` field on the server row. | Task 17 review | Phase 3 (UI) | Distinguish `last_push_error` from `last_error` if/when Phase 3's UI wants to surface push failures separately from server-reachability failures. |
 
+### Phase 7 v2 (deferred from "finish v1")
+
+| # | Item | Source | Phase target | Notes |
+|---|---|---|---|---|
+| V1 | Multi-tenant access scoping (per-team password / SSO / role labels on servers) | docs/2026-04-30/2.md | Phase 7 v2 | Single-tenant HTTP basic suffices for v1. v2 wants per-user auth + per-server visibility. |
+| V2 | Deploy markers (annotation timeline alongside metric charts) | docs/2026-04-30/2.md | Phase 7 v2 | Needs a `deploy_events` table and POST endpoint for the bench's post-merge hook. |
+| V3 | Per-server schedule overrides (faster cadence on hot prod, slower on staging) | docs/2026-04-30/2.md | Phase 7 v2 | Phase 6 ships one global cadence; per-server is small but not blocking. |
+| V4 | Site-scoped log labels (Loki streams currently tagged only with bench/server) | docs/2026-04-30/2.md | Phase 7 v2 | Frappe writes per-site logs at `sites/<site>/logs/`; collector needs to discover and tail. |
+| V5 | p95 / quantile_over_time on site detail (currently `avg_over_time(...[1h])`) | Phase 5 acceptance | Phase 7 v2 | quantile_over_time has higher VM cost; benchmark before flipping. |
+| V6 | Search UI for benches + servers (Sites already has substring filter) | docs/2026-04-30/2.md | Phase 7 v2 | Low priority for ≤25 servers. |
+
 ### Tooling / smoke
 
 | # | Item | Source | Phase target | Notes |

@@ -25,6 +25,8 @@ func (h *serverHandlers) mount(r chi.Router) {
 	r.Post("/servers", h.create)
 	r.Get("/servers", h.list)
 	r.Get("/servers/{id}", h.get)
+	r.Patch("/servers/{id}", h.patch)
+	r.Delete("/servers/{id}", h.delete)
 	r.Post("/servers/{id}/test-connection", h.testConnection)
 	r.Post("/servers/{id}/deploy-collector", h.deployCollector)
 }
@@ -134,6 +136,80 @@ func (h *serverHandlers) list(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toDTO(s))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// patchServerReq is the body for PATCH /api/v1/servers/{id}. All fields
+// are pointers so "absent" (nil) means "leave unchanged"; explicit
+// values overwrite. JSON null on a field is treated identically to
+// absent — it's the cheapest backward-compatible way to roll out new
+// fields without breaking older clients that don't send them.
+type patchServerReq struct {
+	Name       *string            `json:"name,omitempty"`
+	Hostname   *string            `json:"hostname,omitempty"`
+	SSHUser    *string            `json:"ssh_user,omitempty"`
+	SSHPort    *int               `json:"ssh_port,omitempty"`
+	SSHKeyPath *string            `json:"ssh_key_path,omitempty"`
+	Labels     *map[string]string `json:"labels,omitempty"`
+}
+
+func (h *serverHandlers) patch(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req patchServerReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.SSHPort != nil && *req.SSHPort <= 0 {
+		writeErr(w, http.StatusBadRequest, "ssh_port must be positive")
+		return
+	}
+	updated, err := h.store.UpdateServer(r.Context(), id, storage.UpdateServer{
+		Name:       req.Name,
+		Hostname:   req.Hostname,
+		SSHUser:    req.SSHUser,
+		SSHPort:    req.SSHPort,
+		SSHKeyPath: req.SSHKeyPath,
+		Labels:     req.Labels,
+	})
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if errors.Is(err, storage.ErrDuplicateHostname) {
+		writeErr(w, http.StatusConflict, "hostname already exists")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, toDTO(updated))
+}
+
+// delete removes a server by id. Cascading delete on the schema's
+// log_cursors edge cleans up cursor rows; alert states (Phase 6) age
+// out on the next reconciliation cycle when their series disappears.
+// Returns 204 on success, 404 if id unknown.
+func (h *serverHandlers) delete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	err = h.store.DeleteServer(r.Context(), id)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *serverHandlers) get(w http.ResponseWriter, r *http.Request) {
