@@ -61,6 +61,29 @@ note() { echo "  >> $*"; }
 
 [ "$(id -u)" -eq 0 ] || fail "must run as root (use sudo)"
 
+# sudo strips PATH and replaces it with secure_path from /etc/sudoers,
+# which usually doesn't include /usr/local/go/bin or per-user shim
+# directories. This is the most common first-run failure: "go not
+# found" even though the invoking user has it installed. Augment PATH
+# with the standard install locations relative to the invoking user's
+# home so the require_cmd checks below succeed.
+if [ -n "${SUDO_USER:-}" ]; then
+    USER_HOME=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || echo "")
+    if [ -n "$USER_HOME" ]; then
+        # asdf shims must come first so they shadow system Go, etc.
+        if [ -d "$USER_HOME/.asdf/shims" ]; then
+            PATH="$USER_HOME/.asdf/shims:$PATH"
+        fi
+        PATH="$PATH:/usr/local/go/bin:$USER_HOME/go/bin:$USER_HOME/.local/bin"
+        if [ -d "$USER_HOME/.nvm" ]; then
+            # Pick the active nvm-installed node, if any.
+            NVM_NODE_BIN=$(ls -1d "$USER_HOME"/.nvm/versions/node/*/bin 2>/dev/null | tail -1 || true)
+            [ -n "$NVM_NODE_BIN" ] && PATH="$NVM_NODE_BIN:$PATH"
+        fi
+    fi
+fi
+export PATH
+
 # ---------------------------------------------------------------------------
 # Uninstall path
 # ---------------------------------------------------------------------------
@@ -87,7 +110,21 @@ echo "==> checking prerequisites"
 
 require_cmd() {
     local cmd="$1"; local hint="$2"
-    command -v "$cmd" >/dev/null 2>&1 || fail "$cmd not found. Install with: $hint"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        cat >&2 <<EOF
+FAIL: '$cmd' not found in PATH.
+  Searched: $PATH
+
+  If you have $cmd installed as your normal user but sudo can't see
+  it, re-run preserving your PATH:
+
+      sudo env "PATH=\$PATH" ./deploy/install.sh
+
+  Otherwise install $cmd system-wide:
+      $hint
+EOF
+        exit 1
+    fi
 }
 
 require_cmd go    "https://go.dev/doc/install — frappe-monitor needs Go ≥ 1.25"
