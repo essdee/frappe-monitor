@@ -68,16 +68,32 @@ sudo make install
 That's it. The script:
 
 1. Verifies Go, Node, Docker.
-2. Runs `make build` (npm install + Vite build + Go build with `-tags=embed_dist`).
-3. Creates the `frappe-monitor` system user (no shell, no home).
-4. Lays out `/etc/frappe-monitor/`, `/var/lib/frappe-monitor/`, `/opt/frappe-monitor/`.
-5. Atomically installs the binary at `/usr/local/bin/frappe-monitor`.
-6. Copies `monitor.yaml.example` to `/etc/frappe-monitor/monitor.yaml` (only on first install).
-7. Installs two systemd units: `frappe-monitor.service` (the binary) and `frappe-monitor-stack.service` (VM + Loki via docker compose).
-8. Enables and starts both.
-9. Prints status + dashboard URL.
+2. **Prompts for credentials** on first install (skipped if `monitor.yaml` already exists):
+   - Dashboard password (Enter to auto-generate a random one — printed for you to save).
+   - Whether to enable Telegram alerts; if yes, prompts for bot token + chat IDs.
+3. Runs `make build` (npm install + Vite build + Go build with `-tags=embed_dist`).
+4. Creates the `frappe-monitor` system user (no shell, no home).
+5. Lays out `/etc/frappe-monitor/`, `/var/lib/frappe-monitor/`, `/opt/frappe-monitor/`.
+6. Atomically installs the binary at `/usr/local/bin/frappe-monitor`.
+7. Writes `/etc/frappe-monitor/monitor.yaml` with the values you supplied (mode 0640, owner `root:frappe-monitor`).
+8. Installs two systemd units: `frappe-monitor.service` (the binary) and `frappe-monitor-stack.service` (VM + Loki via docker compose).
+9. Enables and starts both.
+10. Prints status + dashboard URL.
 
-After it finishes, the dashboard is at `http://<host>:8080`. Move the cloned repo (`/tmp/frappe-monitor-src`) wherever you keep source — the installer copied everything it needs into `/opt/frappe-monitor/deploy/`.
+After it finishes, the dashboard is at `http://<host>:8080` — log in with any username and the password you set. Move the cloned repo (`/tmp/frappe-monitor-src`) wherever you keep source — the installer copied everything it needs into `/opt/frappe-monitor/deploy/`.
+
+### Skipping the prompts (CI / unattended install)
+
+Pass values via env or args; the script only prompts for what's missing.
+
+```bash
+sudo MONITOR_PASSWORD=hunter2 ./deploy/install.sh
+# or
+sudo ./deploy/install.sh --password=hunter2 \
+    --enable-alerts --bot-token=<TOKEN> --chat-ids=12345,67890
+```
+
+If `--password` and `MONITOR_PASSWORD` are both empty and stdin isn't a TTY, the script auto-generates a 32-char password and prints it before continuing.
 
 ## Layout produced
 
@@ -116,17 +132,13 @@ sudo -u frappe chmod 600 /home/frappe/.ssh/authorized_keys
 
 The key path you'll use when registering each server is `/var/lib/frappe-monitor/.ssh/id_ed25519`. See [`usage.md`](usage.md) for the registration call.
 
-## Set a password (do this before exposing the dashboard)
+## Changing the password later
 
-The dashboard ships with auth disabled. For any deployment outside a trusted network, set `auth.password`:
+The installer collects the password on first install and writes it to `/etc/frappe-monitor/monitor.yaml`. To change it later:
 
 ```bash
-# Generate a strong random password.
-openssl rand -base64 32
-
-# Edit /etc/frappe-monitor/monitor.yaml — set the value:
-#   auth:
-#     password: "<the random string>"
+sudoedit /etc/frappe-monitor/monitor.yaml
+# Find auth.password and change the value, save, exit.
 sudo systemctl restart frappe-monitor
 ```
 
@@ -168,15 +180,14 @@ The script rebuilds the binary, atomically replaces `/usr/local/bin/frappe-monit
 ## Uninstall
 
 ```bash
+# Soft uninstall — keeps config + data so you can reinstall later
+# without re-entering credentials or losing collected metrics:
 sudo ./deploy/install.sh --uninstall
-```
 
-Stops both services, disables them, removes the binary and systemd units. **Config and data are preserved** — you delete those manually if you really mean it:
-
-```bash
-sudo rm -rf /etc/frappe-monitor /var/lib/frappe-monitor
-sudo userdel frappe-monitor
-docker volume rm frappe-monitor-vm-data frappe-monitor-loki-data
+# Nuclear — removes config, data, the system user, and the docker
+# volumes. Re-running install.sh after this is a clean slate
+# (re-prompts for password etc.):
+sudo ./deploy/install.sh --purge
 ```
 
 ## Split-tier deploy
