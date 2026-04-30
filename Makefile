@@ -1,11 +1,26 @@
 SHELL := /bin/bash
-.PHONY: build run test tidy fmt generate vm-up vm-down vm-logs loki-logs
+.PHONY: build build-no-web web-build web-install run test tidy fmt generate \
+        vm-up vm-down vm-logs loki-logs
 
-build:
+# `make build` runs the frontend build first and then the Go build with
+# the embed_dist tag so the SPA bundle ends up in the binary. For Go-
+# only iteration without a frontend, `make build-no-web` skips Vite
+# and the binary serves a "frontend not built" placeholder page.
+
+build: web-build
+	CGO_ENABLED=0 go build -tags=embed_dist -ldflags="-s -w" -o bin/monitor-server ./cmd/monitor
+
+build-no-web:
 	CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/monitor-server ./cmd/monitor
 
+web-install:
+	cd web && npm install
+
+web-build: web-install
+	cd web && npm run build
+
 run:
-	go run ./cmd/monitor --config ./config/monitor.yaml
+	go run -tags=embed_dist ./cmd/monitor --config ./config/monitor.yaml
 
 test:
 	go test ./... -race -count=1

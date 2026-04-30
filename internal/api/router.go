@@ -8,6 +8,7 @@ import (
 
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
+	webpkg "frappe-monitor/internal/web"
 )
 
 type Deps struct {
@@ -34,6 +35,13 @@ func NewRouter(d Deps) http.Handler {
 		h := &serverHandlers{store: d.Store, exec: d.Executor, logger: d.Logger}
 		h.mount(api)
 	})
+
+	// SPA mount: every non-/api, non-/healthz path is delegated to the
+	// embedded dashboard. The web handler serves real assets when the
+	// path matches and falls back to index.html for client-side routes.
+	// Registered last so /api/v1/* and /healthz take precedence (chi
+	// resolves more specific routes first).
+	r.Handle("/*", webpkg.Handler())
 
 	return r
 }
