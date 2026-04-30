@@ -78,6 +78,76 @@ func (m ServerMetrics) LineProtocol(serverLabel string) string {
 	return b.String()
 }
 
+// LineProtocol formats a BenchMetrics as influx-line-protocol text. Every
+// line carries `server=<serverLabel>,bench=<m.Bench>` tags (plus
+// queue=<name> for redis_queue_depth) per master plan §4.
+func (m BenchMetrics) LineProtocol(serverLabel string) string {
+	tsNs := m.Timestamp.UnixNano()
+	tags := "server=" + escapeTag(serverLabel) + ",bench=" + escapeTag(m.Bench)
+
+	var b strings.Builder
+	emit := func(name string, extraTags string, value string) {
+		b.WriteString("frappe_bench_")
+		b.WriteString(name)
+		b.WriteByte(',')
+		b.WriteString(tags)
+		if extraTags != "" {
+			b.WriteByte(',')
+			b.WriteString(extraTags)
+		}
+		b.WriteString(" value=")
+		b.WriteString(value)
+		b.WriteByte(' ')
+		b.WriteString(strconv.FormatInt(tsNs, 10))
+		b.WriteByte('\n')
+	}
+
+	emit("apps_count", "", strconv.FormatInt(m.AppsCount, 10))
+	emit("supervisor_running", "", strconv.FormatInt(m.SupervisorRun, 10))
+	emit("supervisor_total", "", strconv.FormatInt(m.SupervisorTotal, 10))
+
+	// info-style metric so PromQL can join on frappe_version.
+	if m.FrappeVersion != "" {
+		emit("info", "frappe_version="+escapeTag(m.FrappeVersion), "1")
+	}
+
+	for _, q := range m.RedisQueues {
+		emit("redis_queue_depth", "queue="+escapeTag(q.Name),
+			strconv.FormatInt(q.Depth, 10))
+	}
+
+	return b.String()
+}
+
+// LineProtocol formats a SiteMetrics as influx-line-protocol text. Every
+// line carries `server=<serverLabel>,bench=<m.Bench>,site=<m.Site>` tags
+// per master plan §4.
+func (m SiteMetrics) LineProtocol(serverLabel string) string {
+	tsNs := m.Timestamp.UnixNano()
+	tags := "server=" + escapeTag(serverLabel) +
+		",bench=" + escapeTag(m.Bench) +
+		",site=" + escapeTag(m.Site)
+
+	var b strings.Builder
+	emit := func(name, value string) {
+		b.WriteString("frappe_site_")
+		b.WriteString(name)
+		b.WriteByte(',')
+		b.WriteString(tags)
+		b.WriteString(" value=")
+		b.WriteString(value)
+		b.WriteByte(' ')
+		b.WriteString(strconv.FormatInt(tsNs, 10))
+		b.WriteByte('\n')
+	}
+
+	emit("http_status_code", strconv.FormatInt(m.HTTPStatusCode, 10))
+	emit("http_response_ms", strconv.FormatFloat(m.HTTPResponseMs, 'f', -1, 64))
+	emit("is_healthy", strconv.FormatInt(m.IsHealthy, 10))
+
+	return b.String()
+}
+
 // escapeTag escapes characters that are special in influx line protocol
 // tag-key/tag-value position: backslash (must be first so it doesn't
 // double-escape the others), comma, equals, space. Other characters

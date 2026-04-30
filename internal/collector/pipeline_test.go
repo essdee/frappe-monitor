@@ -204,6 +204,72 @@ func TestPullOnce_EmptyDisksRejected(t *testing.T) {
 	require.Equal(t, "unreachable", refreshed.Status)
 }
 
+func loadFullHierarchyOutput(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("../parser/testdata/full-hierarchy.txt")
+	require.NoError(t, err)
+	return string(raw)
+}
+
+func TestPullOnce_FullHierarchy_PushesBenchAndSite(t *testing.T) {
+	p, push, exec, store := newTestPipeline(t)
+	srv := makeServer(t, store, "prod-1", "host-h")
+
+	exec.SetResponse("host-h", loadFullHierarchyOutput(t), nil)
+
+	err := p.PullOnce(context.Background(), srv.ID)
+	require.NoError(t, err)
+
+	body := push.Body()
+	require.NotEmpty(t, body)
+
+	// Server-level lines still present.
+	require.Contains(t, body, "frappe_server_load_1m,server=prod-1")
+
+	// Bench-level lines present, with the right tag set.
+	require.Contains(t, body,
+		"frappe_bench_apps_count,server=prod-1,bench=frappe-bench")
+	require.Contains(t, body,
+		"frappe_bench_supervisor_running,server=prod-1,bench=frappe-bench")
+	require.Contains(t, body,
+		"frappe_bench_redis_queue_depth,server=prod-1,bench=frappe-bench,queue=short")
+
+	// Site-level lines present (at least one of the *.site dirs is in
+	// the captured fixture).
+	require.Contains(t, body, "frappe_site_http_status_code,server=prod-1,bench=frappe-bench,site=")
+	require.Contains(t, body, "frappe_site_http_response_ms,server=prod-1,bench=frappe-bench,site=")
+	require.Contains(t, body, "frappe_site_is_healthy,server=prod-1,bench=frappe-bench,site=")
+
+	// Server status persisted to reachable.
+	refreshed, err := store.GetServer(context.Background(), srv.ID)
+	require.NoError(t, err)
+	require.Equal(t, "reachable", refreshed.Status)
+}
+
+func TestPullOnce_FullHierarchy_PerSectionParseErrorsLogged(t *testing.T) {
+	// Construct an output with a valid SERVER section, a valid BENCH,
+	// and a malformed BENCH (missing apps_count). The valid BENCH should
+	// still appear in the push body; the malformed one should be
+	// skipped without failing the whole cycle.
+	p, push, exec, store := newTestPipeline(t)
+	srv := makeServer(t, store, "prod-1", "host-i")
+
+	// Start from a known-valid full-hierarchy fixture, then surgically
+	// break one of its bench sections by removing apps_count.
+	good := loadFullHierarchyOutput(t)
+	// Inject a second BENCH section with malformed apps_count just before ###END.
+	bad := "###BENCH:malformed\napps_count=not-a-number\nsupervisor_running=0\nsupervisor_total=0\n"
+	combined := strings.Replace(good, "###END", bad+"###END", 1)
+	exec.SetResponse("host-i", combined, nil)
+
+	err := p.PullOnce(context.Background(), srv.ID)
+	require.NoError(t, err, "one bad bench should not fail the whole pull")
+
+	body := push.Body()
+	require.Contains(t, body, "bench=frappe-bench") // good bench landed
+	require.NotContains(t, body, "bench=malformed") // bad bench skipped
+}
+
 func TestPullOnce_BodyContainsSSHTargetData(t *testing.T) {
 	// Use srv.Name as the influx server label, NOT m.Hostname.
 	// This guards against a regression where the body uses the OS-reported
