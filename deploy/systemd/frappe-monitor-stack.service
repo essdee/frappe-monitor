@@ -1,0 +1,16 @@
+[Unit]
+Description=Frappe Monitor backing stack (VictoriaMetrics + Loki)
+Documentation=https://github.com/sakthikumarp/frappe_monitor
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+WorkingDirectory=/opt/frappe-monitor/deploy
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml down
+TimeoutStartSec=120s
+
+[Install]
+WantedBy=multi-user.target

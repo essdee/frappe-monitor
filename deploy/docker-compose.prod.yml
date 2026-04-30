@@ -1,0 +1,59 @@
+# Production compose: VictoriaMetrics + Loki for the frappe-monitor stack.
+#
+# Brought up by the systemd unit frappe-monitor-stack.service so it
+# restarts cleanly on reboot. Both services bind to 127.0.0.1 only —
+# the monitor binary reaches them on the loopback, and external access
+# (if needed at all) is via Caddy on the same host. Do not expose
+# 8428/3100 publicly.
+#
+# Volumes are named so docker volume rm wipes the data deliberately.
+# Retention policies live here; tune them per host capacity.
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.142.0
+    container_name: frappe-monitor-vm
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8428:8428"
+    command:
+      - "--storageDataPath=/data"
+      - "--retentionPeriod=90d"
+      - "--httpListenAddr=:8428"
+      # See deploy/docker-compose.dev.yml for why this flag is load-bearing.
+      - "-influxSkipSingleField"
+      # Default 30s offset on instant queries adds dashboard latency.
+      # The collector is the only writer and pushes complete cycles, so
+      # late samples aren't a concern for us.
+      - "-search.latencyOffset=0s"
+      # Cap memory ceiling. Tune to ~50% of the host's RAM dedicated to
+      # the metrics tier; default is unbounded which can OOM on small VPS.
+      - "-memory.allowedPercent=40"
+    volumes:
+      - vm-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8428/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  loki:
+    image: grafana/loki:3.4.1
+    container_name: frappe-monitor-loki
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:3100/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  vm-data:
+    name: frappe-monitor-vm-data
+  loki-data:
+    name: frappe-monitor-loki-data

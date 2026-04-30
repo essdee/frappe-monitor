@@ -2,71 +2,52 @@
 
 Monitoring and alerting for multi-server, multi-bench, multi-site Frappe deployments.
 
-See `docs/2026-04-22/1.md` for the master design plan, `docs/2026-04-22/2.md` for the Phase 1 plan, and `docs/2026-04-29/3.md` for the Phase 2 plan. Subsequent dated `docs/YYYY-MM-DD/` folders capture decisions and amendments. `docs/hardening-backlog.md` tracks known non-blocking quality items.
+A single Go binary that pulls metrics over SSH, pushes time-series to VictoriaMetrics + logs to Loki, and serves a Vue dashboard from the same process. Designed to run as a systemd service on a small Linux VM next to (or near) your Frappe fleet.
 
-## Phase 1 surface (HTTP)
+## Documentation
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET  | `/healthz` | Liveness; returns `{"status":"ok"}`. |
-| POST | `/api/v1/servers` | Create a server. 409 on duplicate hostname; 400 on bad JSON or missing required fields. |
-| GET  | `/api/v1/servers` | List all servers. |
-| GET  | `/api/v1/servers/{id}` | Fetch one server. 404 on unknown id. |
-| POST | `/api/v1/servers/{id}/test-connection` | Diagnostic SSH probe. Always 200 (or 404 if id unknown). Body: `{reachable, latency_ms, error?, error_kind?}`. |
+The complete operator guide lives in **[`docs/guide/`](docs/guide/)**:
 
-## Phase 2 surface (HTTP + scheduler)
+| | |
+|---|---|
+| Deploy on a fresh server | [`docs/guide/deployment.md`](docs/guide/deployment.md) |
+| Use the dashboard, add servers | [`docs/guide/usage.md`](docs/guide/usage.md) |
+| Day-2 ops (start/stop/upgrade/logs) | [`docs/guide/operations.md`](docs/guide/operations.md) |
+| Config reference | [`docs/guide/configuration.md`](docs/guide/configuration.md) |
+| HTTP API reference | [`docs/guide/api.md`](docs/guide/api.md) |
+| What runs where, why | [`docs/guide/architecture.md`](docs/guide/architecture.md) |
+| Things broken? | [`docs/guide/troubleshooting.md`](docs/guide/troubleshooting.md) |
+| Contributing & maintenance | [`docs/guide/contributing.md`](docs/guide/contributing.md) |
 
-Phase 2 adds the metrics pipeline:
+Design decisions (frozen-in-time) live in `docs/YYYY-MM-DD/N.md`. The Phase 1 master plan is in [`docs/2026-04-22/1.md`](docs/2026-04-22/1.md).
 
-- `POST /api/v1/servers/{id}/deploy-collector` — pipes the embedded `frappe-monitor-collect.sh` to the target via SSH and `chmod +x`'s it. Returns 200 with `{deployed, version}`.
-- A **per-server scheduler** registered at boot: every `cfg.scheduler.default_interval_seconds` (default 900s = 15 min), the binary SSHes to each server, runs the collector, parses the output, and pushes influx-line-protocol to VictoriaMetrics.
-- Server status is updated in storage on every cycle: `reachable` on success, `unreachable` with `last_error` on SSH or parse failure. **VM push failure does NOT mark the server unreachable** — the bench is fine; the metrics backend is the failure domain.
-
-## Run (Phase 1 only — no metrics flow)
-
-```bash
-make build
-cp deploy/config/monitor.yaml.example config/monitor.yaml
-make run
-```
-
-The binary auto-creates the parent of `database.path` (default `./data/`) at mode 0o750 on first run.
-
-## Run (Phase 2 — with VictoriaMetrics)
+## Quick install (production, one shot)
 
 ```bash
-# 1. Bring up VictoriaMetrics in a Docker container, bound to 127.0.0.1:8428.
-make vm-up
-
-# 2. Run the monitor on the host. It pushes to http://127.0.0.1:8428.
-make run
-
-# 3. Tail VM logs in another terminal (optional).
-make vm-logs
-
-# 4. Query metrics:
-curl 'http://127.0.0.1:8428/api/v1/query?query=frappe_server_load_1m'
-
-# 5. When done, tear down VM (data persists in named volume `frappe-monitor-vm-data`).
-make vm-down
-
-# To wipe accumulated dev metrics history, also remove the volume:
-docker volume rm frappe-monitor-vm-data
+git clone <this repo> /tmp/frappe-monitor-src
+cd /tmp/frappe-monitor-src
+sudo ./deploy/install.sh
 ```
 
-If you copy `deploy/docker-compose.dev.yml` to another project, **keep the `-influxSkipSingleField` flag** in the VM command. Without it, VictoriaMetrics's Influx-line-protocol ingestion appends `_value` to every metric name (so `frappe_server_load_1m` becomes `frappe_server_load_1m_value`) and PromQL queries written against the master plan §4 naming convention will silently miss every series.
-
-Send `SIGTERM` (or Ctrl+C) to the monitor for graceful shutdown — the scheduler stops accepting new ticks, in-flight pulls observe ctx.Done() and unwind, then `srv.Shutdown` drains HTTP. Combined budget is 10s.
-
-### Smoke test (Phase 1 only)
-
-`scripts/smoke.sh` exercises every Phase 1 route end-to-end against a local hermetic config (its own port and tempdir, doesn't touch your real config or data), verifies the duplicate-hostname-409 contract, the test-connection-on-unknown-id-404 contract, and the SIGTERM ≤10s clean-exit contract.
+That builds the binary, creates the `frappe-monitor` system user, lays out `/etc/frappe-monitor/`, `/var/lib/frappe-monitor/`, `/opt/frappe-monitor/`, installs two systemd units (`frappe-monitor.service` for the binary, `frappe-monitor-stack.service` for VictoriaMetrics + Loki via docker compose), and starts everything. Idempotent — re-running upgrades in place. See [`docs/guide/deployment.md`](docs/guide/deployment.md) for the full reference.
 
 ```bash
-./scripts/smoke.sh
+sudo systemctl status frappe-monitor              # check it's up
+sudo journalctl -u frappe-monitor -f              # tail logs
+# then open http://<host>:8080
 ```
 
-Expected last line: `==> ALL CHECKS PASSED`. Phase 2 smoke (with VM) lands in Task 20.
+Add your first bench server: [`docs/guide/usage.md`](docs/guide/usage.md).
+
+## Quick start (local dev)
+
+```bash
+make vm-up               # docker compose: VM + Loki on 127.0.0.1
+make build               # builds the SPA + Go binary with embedded assets
+make run                 # runs ./bin/monitor-server on :8080
+```
+
+Requires Go ≥ 1.25, Node ≥ 20, Docker ≥ 24 with the compose plugin.
 
 ## Project layout
 
@@ -74,34 +55,44 @@ Expected last line: `==> ALL CHECKS PASSED`. Phase 2 smoke (with VM) lands in Ta
 cmd/monitor/main.go        # binary entry point
 internal/
   api/                     # chi router, middleware, handlers
-  collector/               # ssh→parse→push pipeline (Phase 2)
+  collector/               # ssh→parse→push pipeline
   config/                  # koanf-backed loader
-  metrics/                 # ServerMetrics + VictoriaMetrics push client
-  parser/                  # collector-output tokenizer + ServerFromSections
+  metrics/                 # VictoriaMetrics push client + line proto
+  logs/                    # Loki push client
+  parser/                  # collector-output tokenizer
   scheduler/               # robfig/cron + semaphore + per-job timeout
   ssh/                     # executor interface, pool, fake, typed errors
-  storage/                 # store interface, ent-backed sqlite
+  storage/                 # ent-backed sqlite
+  web/                     # //go:embed dist
 ent/                       # ent schema + generated client (committed)
+web/                       # Vue 3 + Vite SPA source
 scripts/
   frappe-monitor-collect.sh  # bash collector (embedded into binary)
   embed.go                   # //go:embed wiring + version helper
-  smoke.sh                   # Phase 1 smoke
+  smoke.sh                   # end-to-end smoke
 deploy/
-  config/monitor.yaml.example
-  docker-compose.dev.yml     # VictoriaMetrics for dev (Phase 2)
-docs/                      # design docs + hardening backlog + dated decisions
-tasks/                     # gitignored review-loop folder
+  install.sh                 # production installer (idempotent)
+  systemd/                   # systemd unit files
+  docker-compose.dev.yml     # VM + Loki for dev (make vm-up)
+  docker-compose.prod.yml    # VM + Loki for prod (used by the stack unit)
+  Caddyfile.example          # optional TLS reverse proxy
+docs/
+  guide/                     # evergreen operator docs
+  YYYY-MM-DD/                # dated decisions
+  hardening-backlog.md       # non-blocking quality items
 ```
 
-## Tests
+## Tests + smoke
 
 ```bash
-make test
+make test                  # go test ./... -race -count=1
+./scripts/smoke.sh         # end-to-end: build + VM + Loki + every route
 ```
 
-Phase 2 has 9 test packages: `internal/{api, collector, config, metrics, parser, scheduler, ssh, storage}` and `scripts`. The `ent/` subpackages contain only generated code and have no test files (expected). The full suite runs in under 30 s; `make test` is the canonical run.
+`scripts/smoke.sh` is the canonical "did I break anything" check. Last line on success: `==> ALL CHECKS PASSED`.
 
-## Workflow
+## Project status
 
-- Per-task review uses the gitignored `tasks/` folder — see `tasks/README.md` for the convention.
-- Decisions go in `docs/YYYY-MM-DD/N.md`; non-blocking quality items go in `docs/hardening-backlog.md`.
+Phases 1–5 are done. Phase 6 (Telegram alerting) and Phase 7 (auth, multi-tenant scoping, deploy markers, in-dashboard server CRUD) are not started.
+
+See [`docs/guide/README.md`](docs/guide/README.md) for the phase status table and what each phase delivered.

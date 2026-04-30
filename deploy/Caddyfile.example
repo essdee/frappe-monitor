@@ -1,0 +1,26 @@
+# Example Caddyfile for putting frappe-monitor behind TLS.
+#
+# Caddy auto-provisions and renews Let's Encrypt certs. Replace the
+# hostname below with your real one and copy to /etc/caddy/Caddyfile,
+# then `systemctl reload caddy`.
+#
+# DNS prerequisite: monitor.example.com → A → this host's public IP.
+# Firewall: allow 80 + 443 inbound on this host (LE challenge needs 80).
+#
+# This config does not add auth — Phase 7 ships built-in auth. Until
+# then, restrict by source IP (basicauth or remote_ip) if exposed.
+
+monitor.example.com {
+	encode zstd gzip
+	# Default upstream is the monitor binary on localhost:8080.
+	reverse_proxy 127.0.0.1:8080
+
+	# Optional: limit to your office / VPN ranges until Phase 7 auth.
+	# @internal {
+	#     remote_ip 10.0.0.0/8 192.168.0.0/16
+	# }
+	# handle @internal {
+	#     reverse_proxy 127.0.0.1:8080
+	# }
+	# respond 403
+}
