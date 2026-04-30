@@ -8,7 +8,10 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   plugins: [vue()],
   build: {
-    outDir: 'dist',
+    // Write directly into internal/web/dist so the Go //go:embed
+    // directive in internal/web/embed.go resolves without symlinks
+    // or copy steps.
+    outDir: '../internal/web/dist',
     emptyOutDir: true,
     sourcemap: false,
   },
