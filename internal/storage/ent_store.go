@@ -13,6 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"frappe-monitor/ent"
+	entlogcursor "frappe-monitor/ent/logcursor"
 	entserver "frappe-monitor/ent/server"
 )
 
@@ -111,6 +112,54 @@ func (s *EntStore) SetServerStatus(ctx context.Context, id int, status, lastErr 
 		return err
 	}
 	return nil
+}
+
+// GetLogCursor returns the cursor for (serverID, logPath). ErrNotFound
+// when no cursor exists yet — callers treat that as offset=0.
+func (s *EntStore) GetLogCursor(ctx context.Context, serverID int, logPath string) (*LogCursor, error) {
+	row, err := s.client.LogCursor.Query().
+		Where(entlogcursor.LogPath(logPath)).
+		Where(entlogcursor.HasServerWith(entserver.ID(serverID))).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	out := &LogCursor{
+		ServerID:   serverID,
+		LogPath:    row.LogPath,
+		ByteOffset: row.ByteOffset,
+		LastSeenAt: row.LastSeenAt,
+	}
+	return out, nil
+}
+
+// UpsertLogCursor inserts or updates the cursor for (c.ServerID,
+// c.LogPath). LastSeenAt is set to time.Now() automatically (the
+// schema's UpdateDefault), so callers can leave it zero.
+func (s *EntStore) UpsertLogCursor(ctx context.Context, c LogCursor) error {
+	existing, err := s.client.LogCursor.Query().
+		Where(entlogcursor.LogPath(c.LogPath)).
+		Where(entlogcursor.HasServerWith(entserver.ID(c.ServerID))).
+		Only(ctx)
+	if err != nil && !ent.IsNotFound(err) {
+		return err
+	}
+	if ent.IsNotFound(err) {
+		_, err = s.client.LogCursor.Create().
+			SetLogPath(c.LogPath).
+			SetByteOffset(c.ByteOffset).
+			SetServerID(c.ServerID).
+			Save(ctx)
+		return err
+	}
+	_, err = s.client.LogCursor.UpdateOneID(existing.ID).
+		SetByteOffset(c.ByteOffset).
+		SetLastSeenAt(time.Now().UTC()).
+		Save(ctx)
+	return err
 }
 
 func entToServer(e *ent.Server) *Server {

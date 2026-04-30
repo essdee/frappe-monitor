@@ -8,6 +8,18 @@ import (
 	"frappe-monitor/ent"
 )
 
+// The LogCursorFunc type is an adapter to allow the use of ordinary
+// function as LogCursor mutator.
+type LogCursorFunc func(context.Context, *ent.LogCursorMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f LogCursorFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.LogCursorMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.LogCursorMutation", m)
+}
+
 // The ServerFunc type is an adapter to allow the use of ordinary
 // function as Server mutator.
 type ServerFunc func(context.Context, *ent.ServerMutation) (ent.Value, error)

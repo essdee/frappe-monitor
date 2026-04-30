@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
 	"frappe-monitor/ent/server"
 	"time"
@@ -177,9 +178,45 @@ func (_u *ServerUpdate) SetUpdatedAt(v time.Time) *ServerUpdate {
 	return _u
 }
 
+// AddLogCursorIDs adds the "log_cursors" edge to the LogCursor entity by IDs.
+func (_u *ServerUpdate) AddLogCursorIDs(ids ...int) *ServerUpdate {
+	_u.mutation.AddLogCursorIDs(ids...)
+	return _u
+}
+
+// AddLogCursors adds the "log_cursors" edges to the LogCursor entity.
+func (_u *ServerUpdate) AddLogCursors(v ...*LogCursor) *ServerUpdate {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddLogCursorIDs(ids...)
+}
+
 // Mutation returns the ServerMutation object of the builder.
 func (_u *ServerUpdate) Mutation() *ServerMutation {
 	return _u.mutation
+}
+
+// ClearLogCursors clears all "log_cursors" edges to the LogCursor entity.
+func (_u *ServerUpdate) ClearLogCursors() *ServerUpdate {
+	_u.mutation.ClearLogCursors()
+	return _u
+}
+
+// RemoveLogCursorIDs removes the "log_cursors" edge to LogCursor entities by IDs.
+func (_u *ServerUpdate) RemoveLogCursorIDs(ids ...int) *ServerUpdate {
+	_u.mutation.RemoveLogCursorIDs(ids...)
+	return _u
+}
+
+// RemoveLogCursors removes "log_cursors" edges to LogCursor entities.
+func (_u *ServerUpdate) RemoveLogCursors(v ...*LogCursor) *ServerUpdate {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveLogCursorIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -301,6 +338,51 @@ func (_u *ServerUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(server.FieldUpdatedAt, field.TypeTime, value)
+	}
+	if _u.mutation.LogCursorsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.LogCursorsTable,
+			Columns: []string{server.LogCursorsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedLogCursorsIDs(); len(nodes) > 0 && !_u.mutation.LogCursorsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.LogCursorsTable,
+			Columns: []string{server.LogCursorsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.LogCursorsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.LogCursorsTable,
+			Columns: []string{server.LogCursorsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -471,9 +553,45 @@ func (_u *ServerUpdateOne) SetUpdatedAt(v time.Time) *ServerUpdateOne {
 	return _u
 }
 
+// AddLogCursorIDs adds the "log_cursors" edge to the LogCursor entity by IDs.
+func (_u *ServerUpdateOne) AddLogCursorIDs(ids ...int) *ServerUpdateOne {
+	_u.mutation.AddLogCursorIDs(ids...)
+	return _u
+}
+
+// AddLogCursors adds the "log_cursors" edges to the LogCursor entity.
+func (_u *ServerUpdateOne) AddLogCursors(v ...*LogCursor) *ServerUpdateOne {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddLogCursorIDs(ids...)
+}
+
 // Mutation returns the ServerMutation object of the builder.
 func (_u *ServerUpdateOne) Mutation() *ServerMutation {
 	return _u.mutation
+}
+
+// ClearLogCursors clears all "log_cursors" edges to the LogCursor entity.
+func (_u *ServerUpdateOne) ClearLogCursors() *ServerUpdateOne {
+	_u.mutation.ClearLogCursors()
+	return _u
+}
+
+// RemoveLogCursorIDs removes the "log_cursors" edge to LogCursor entities by IDs.
+func (_u *ServerUpdateOne) RemoveLogCursorIDs(ids ...int) *ServerUpdateOne {
+	_u.mutation.RemoveLogCursorIDs(ids...)
+	return _u
+}
+
+// RemoveLogCursors removes "log_cursors" edges to LogCursor entities.
+func (_u *ServerUpdateOne) RemoveLogCursors(v ...*LogCursor) *ServerUpdateOne {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveLogCursorIDs(ids...)
 }
 
 // Where appends a list predicates to the ServerUpdate builder.
@@ -625,6 +743,51 @@ func (_u *ServerUpdateOne) sqlSave(ctx context.Context) (_node *Server, err erro
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(server.FieldUpdatedAt, field.TypeTime, value)
+	}
+	if _u.mutation.LogCursorsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.LogCursorsTable,
+			Columns: []string{server.LogCursorsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedLogCursorsIDs(); len(nodes) > 0 && !_u.mutation.LogCursorsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.LogCursorsTable,
+			Columns: []string{server.LogCursorsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.LogCursorsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.LogCursorsTable,
+			Columns: []string{server.LogCursorsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
 	_node = &Server{config: _u.config}
 	_spec.Assign = _node.assignValues

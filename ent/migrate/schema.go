@@ -8,6 +8,35 @@ import (
 )
 
 var (
+	// LogCursorsColumns holds the columns for the "log_cursors" table.
+	LogCursorsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "log_path", Type: field.TypeString},
+		{Name: "byte_offset", Type: field.TypeInt64, Default: 0},
+		{Name: "last_seen_at", Type: field.TypeTime},
+		{Name: "server_log_cursors", Type: field.TypeInt},
+	}
+	// LogCursorsTable holds the schema information for the "log_cursors" table.
+	LogCursorsTable = &schema.Table{
+		Name:       "log_cursors",
+		Columns:    LogCursorsColumns,
+		PrimaryKey: []*schema.Column{LogCursorsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "log_cursors_servers_log_cursors",
+				Columns:    []*schema.Column{LogCursorsColumns[4]},
+				RefColumns: []*schema.Column{ServersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "logcursor_log_path_server_log_cursors",
+				Unique:  true,
+				Columns: []*schema.Column{LogCursorsColumns[1], LogCursorsColumns[4]},
+			},
+		},
+	}
 	// ServersColumns holds the columns for the "servers" table.
 	ServersColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -31,9 +60,11 @@ var (
 	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
+		LogCursorsTable,
 		ServersTable,
 	}
 )
 
 func init() {
+	LogCursorsTable.ForeignKeys[0].RefTable = ServersTable
 }

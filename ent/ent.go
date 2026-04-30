@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/server"
 	"reflect"
 	"sync"
@@ -73,7 +74,8 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			server.Table: server.ValidColumn,
+			logcursor.Table: logcursor.ValidColumn,
+			server.Table:    server.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"entgo.io/ent"
+	"entgo.io/ent/schema/edge"
 	"entgo.io/ent/schema/field"
 )
 
@@ -30,5 +31,9 @@ func (Server) Fields() []ent.Field {
 }
 
 func (Server) Edges() []ent.Edge {
-	return nil
+	return []ent.Edge{
+		// One server -> many log cursors. The reverse end lives on
+		// LogCursor (Required + Unique → cascading delete falls out).
+		edge.To("log_cursors", LogCursor.Type),
+	}
 }
