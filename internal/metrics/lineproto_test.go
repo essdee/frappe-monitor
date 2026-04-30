@@ -82,6 +82,66 @@ func TestEscapeTag_HandlesSpecialChars(t *testing.T) {
 	require.Equal(t, `a\\b`, escapeTag(`a\b`), "backslash must be escaped first")
 }
 
+func TestBenchMetrics_ToLineProtocol(t *testing.T) {
+	m := BenchMetrics{
+		Timestamp:       time.Unix(1714363200, 0).UTC(),
+		Server:          "prod-1", // ignored — caller passes label
+		Bench:           "production",
+		FrappeVersion:   "15.0.0",
+		AppsCount:       5,
+		SupervisorRun:   12,
+		SupervisorTotal: 14,
+		RedisQueues: []RedisQueue{
+			{Name: "short", Depth: 3},
+			{Name: "default", Depth: 10},
+			{Name: "long", Depth: 0},
+		},
+	}
+	out := m.LineProtocol("prod-1")
+
+	require.Contains(t, out,
+		"frappe_bench_apps_count,server=prod-1,bench=production value=5 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_bench_supervisor_running,server=prod-1,bench=production value=12 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_bench_info,server=prod-1,bench=production,frappe_version=15.0.0 value=1 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_bench_redis_queue_depth,server=prod-1,bench=production,queue=short value=3 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_bench_redis_queue_depth,server=prod-1,bench=production,queue=long value=0 1714363200000000000\n")
+}
+
+func TestBenchMetrics_OmitsInfoWhenVersionEmpty(t *testing.T) {
+	m := BenchMetrics{
+		Timestamp:       time.Unix(1, 0).UTC(),
+		Bench:           "b",
+		AppsCount:       1,
+		SupervisorRun:   0,
+		SupervisorTotal: 0,
+	}
+	out := m.LineProtocol("s")
+	require.NotContains(t, out, "frappe_bench_info")
+}
+
+func TestSiteMetrics_ToLineProtocol(t *testing.T) {
+	m := SiteMetrics{
+		Timestamp:      time.Unix(1714363200, 0).UTC(),
+		Bench:          "production",
+		Site:           "client-a.com",
+		HTTPStatusCode: 200,
+		HTTPResponseMs: 234.5,
+		IsHealthy:      1,
+	}
+	out := m.LineProtocol("prod-1")
+
+	require.Contains(t, out,
+		"frappe_site_http_status_code,server=prod-1,bench=production,site=client-a.com value=200 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_site_http_response_ms,server=prod-1,bench=production,site=client-a.com value=234.5 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_site_is_healthy,server=prod-1,bench=production,site=client-a.com value=1 1714363200000000000\n")
+}
+
 func TestServerMetrics_LineCountMatches(t *testing.T) {
 	// 8 cpu + 7 mem (5 + 2 swap) + 4 (3 load + uptime) = 19 single-instance.
 	// Plus 2 lines per disk and 2 lines per iface.

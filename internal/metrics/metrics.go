@@ -1,7 +1,7 @@
 // Package metrics holds the typed value model that the parser produces and
-// the VictoriaMetrics client consumes. ServerMetrics is the Phase 2 output
-// of one collector cycle; bench- and site-level metrics will be added in
-// Phase 3.
+// the VictoriaMetrics client consumes. Phase 2 added ServerMetrics; Phase 3
+// adds BenchMetrics and SiteMetrics for the full Server → Bench → Site
+// hierarchy.
 package metrics
 
 import "time"
@@ -58,4 +58,37 @@ type ServerMetrics struct {
 	// Multi-instance gauges.
 	Disks []DiskMount
 	Net   []NetIface
+}
+
+// RedisQueue is one (queue_name, depth) pair from a bench's RQ.
+type RedisQueue struct {
+	Name  string // "short" | "default" | "long"
+	Depth int64
+}
+
+// BenchMetrics is the parsed result of one ###BENCH:<name> section.
+// Server is filled in by the pipeline (the collector script doesn't
+// know its own server label).
+type BenchMetrics struct {
+	Timestamp time.Time
+	Server    string
+	Bench     string
+
+	FrappeVersion   string // info-style; emitted as a tag, not a value
+	AppsCount       int64
+	SupervisorRun   int64
+	SupervisorTotal int64
+	RedisQueues     []RedisQueue
+}
+
+// SiteMetrics is the parsed result of one ###SITE:<bench>:<site> section.
+type SiteMetrics struct {
+	Timestamp time.Time
+	Server    string
+	Bench     string
+	Site      string
+
+	HTTPStatusCode int64
+	HTTPResponseMs float64
+	IsHealthy      int64 // 0 or 1
 }

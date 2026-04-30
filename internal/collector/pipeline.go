@@ -95,8 +95,47 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		return wrapped
 	}
 
-	body := m.LineProtocol(srv.Name)
-	if pushErr := p.Push.Push(ctx, body); pushErr != nil {
+	// Phase 3: build the consolidated line-protocol body across the full
+	// hierarchy. Server section is required (we already validated it
+	// above); per-bench / per-site parse failures are logged but don't
+	// fail the whole cycle — a single misbehaving site shouldn't drop
+	// the rest of the pull.
+	var body strings.Builder
+	body.WriteString(m.LineProtocol(srv.Name))
+
+	benchOK, benchErr := 0, 0
+	for _, benchName := range parser.BenchNames(out) {
+		bm, err := parser.BenchFromSections(out, benchName)
+		if err != nil {
+			benchErr++
+			p.Logger.Warn("collector: bench parse failed (skipped)",
+				"server_id", serverID, "bench", benchName, "err", err)
+			continue
+		}
+		bm.Timestamp = m.Timestamp
+		bm.Server = srv.Name
+		body.WriteString(bm.LineProtocol(srv.Name))
+		benchOK++
+	}
+
+	siteOK, siteErr := 0, 0
+	for _, pair := range parser.SiteNamesFor(out) {
+		benchName, siteName := pair[0], pair[1]
+		sm, err := parser.SiteFromSections(out, benchName, siteName)
+		if err != nil {
+			siteErr++
+			p.Logger.Warn("collector: site parse failed (skipped)",
+				"server_id", serverID, "bench", benchName, "site", siteName, "err", err)
+			continue
+		}
+		sm.Timestamp = m.Timestamp
+		sm.Server = srv.Name
+		body.WriteString(sm.LineProtocol(srv.Name))
+		siteOK++
+	}
+
+	bodyStr := body.String()
+	if pushErr := p.Push.Push(ctx, bodyStr); pushErr != nil {
 		// Server is reachable; the metrics backend failed. Mark reachable
 		// (the probe succeeded) and log the push error loudly so operators
 		// know to look at VM, not the bench server.
@@ -117,7 +156,11 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 	p.Logger.Info("collector: pull ok",
 		"server_id", serverID,
 		"server_name", srv.Name,
-		"body_lines", strings.Count(body, "\n"))
+		"body_lines", strings.Count(bodyStr, "\n"),
+		"benches_ok", benchOK,
+		"benches_err", benchErr,
+		"sites_ok", siteOK,
+		"sites_err", siteErr)
 	return nil
 }
 
