@@ -9,8 +9,8 @@ import TimelineFilter from './components/TimelineFilter.vue'
       <h1 class="brand">frappe-monitor</h1>
       <nav>
         <RouterLink to="/servers" class="nav-link">Servers</RouterLink>
-        <span class="nav-disabled" title="Phase 5">Benches</span>
-        <span class="nav-disabled" title="Phase 5">Sites</span>
+        <RouterLink to="/benches" class="nav-link">Benches</RouterLink>
+        <RouterLink to="/sites" class="nav-link">Sites</RouterLink>
         <span class="nav-disabled" title="Phase 6">Alerts</span>
       </nav>
     </aside>

@@ -66,3 +66,89 @@ export function queryMetrics(query: string, range: TimeRange): Promise<MetricsQu
   })
   return jsonGET<MetricsQueryResponse>(`/api/v1/metrics/query?${params.toString()}`)
 }
+
+// --- Phase 5 hierarchy --------------------------------------------------
+
+export interface BenchPair {
+  server: string
+  bench: string
+}
+
+export interface BenchDetail {
+  server: string
+  bench: string
+  frappe_version?: string
+  apps_count: number
+  supervisor_running: number
+  supervisor_total: number
+  redis_queues: Record<string, number>
+}
+
+export interface SitePair {
+  server: string
+  bench: string
+  site: string
+}
+
+export interface SiteDetail {
+  server: string
+  bench: string
+  site: string
+  http_status_code: number
+  http_response_ms: number
+  is_healthy: number
+  avg_response_ms_1h: number
+}
+
+export function fetchBenches(): Promise<BenchPair[]> {
+  return jsonGET<BenchPair[]>('/api/v1/benches')
+}
+
+export function fetchBench(server: string, bench: string): Promise<BenchDetail> {
+  return jsonGET<BenchDetail>(
+    `/api/v1/benches/${encodeURIComponent(server)}/${encodeURIComponent(bench)}`,
+  )
+}
+
+export function fetchSites(): Promise<SitePair[]> {
+  return jsonGET<SitePair[]>('/api/v1/sites')
+}
+
+export function fetchSite(server: string, bench: string, site: string): Promise<SiteDetail> {
+  return jsonGET<SiteDetail>(
+    `/api/v1/sites/${encodeURIComponent(server)}/${encodeURIComponent(bench)}/${encodeURIComponent(site)}`,
+  )
+}
+
+// --- Logs (LogQL via /api/v1/logs/query proxy) -------------------------
+
+export interface LogStreamEntry {
+  // [unix_nanos_string, log_line]
+  values: [string, string][]
+  stream: Record<string, string>
+}
+
+export interface LogsQueryResponse {
+  status: 'success' | 'error'
+  data: {
+    resultType: string
+    result: LogStreamEntry[]
+  }
+  error?: string
+}
+
+export function queryLogs(
+  query: string,
+  range: TimeRange,
+  limit = 100,
+): Promise<LogsQueryResponse> {
+  const params = new URLSearchParams({
+    query,
+    // Loki accepts unix nanoseconds for start/end.
+    start: String(range.from * 1_000_000_000),
+    end: String(range.to * 1_000_000_000),
+    limit: String(limit),
+    direction: 'backward',
+  })
+  return jsonGET<LogsQueryResponse>(`/api/v1/logs/query?${params.toString()}`)
+}

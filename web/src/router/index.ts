@@ -15,6 +15,35 @@ export const router = createRouter({
       component: () => import('../views/ServerDetail.vue'),
       props: (route) => ({ id: Number(route.params.id) }),
     },
-    // Phase 5+ adds /benches, /sites, /alerts, /settings, etc.
+    {
+      path: '/benches',
+      name: 'benches',
+      component: () => import('../views/Benches.vue'),
+    },
+    {
+      path: '/benches/:server/:bench',
+      name: 'bench-detail',
+      component: () => import('../views/BenchDetail.vue'),
+      props: (route) => ({
+        server: String(route.params.server),
+        bench: String(route.params.bench),
+      }),
+    },
+    {
+      path: '/sites',
+      name: 'sites',
+      component: () => import('../views/Sites.vue'),
+    },
+    {
+      path: '/sites/:server/:bench/:site',
+      name: 'site-detail',
+      component: () => import('../views/SiteDetail.vue'),
+      props: (route) => ({
+        server: String(route.params.server),
+        bench: String(route.params.bench),
+        site: String(route.params.site),
+      }),
+    },
+    // Phase 6+ adds /alerts, /settings.
   ],
 })
