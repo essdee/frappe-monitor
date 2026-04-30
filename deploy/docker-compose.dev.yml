@@ -1,12 +1,13 @@
-# Dev-only docker-compose: brings up VictoriaMetrics for local
-# development. The frappe-monitor binary runs on the host and points
-# at 127.0.0.1:8428 (matches deploy/config/monitor.yaml.example).
+# Dev-only docker-compose: brings up VictoriaMetrics + Loki for local
+# development. The frappe-monitor binary runs on the host and points at
+# 127.0.0.1:8428 (VM) and 127.0.0.1:3100 (Loki).
 #
-# Up:    make vm-up
+# Up:    make vm-up        (brings up both services)
 # Down:  make vm-down
+# Logs:  make vm-logs / make loki-logs
 #
-# Production compose (with monitor + Loki + Caddy) lives separately
-# and is not part of this file — see master plan §10.
+# Production compose (with monitor + Caddy) lives separately and is
+# not part of this file — see master plan §10.
 
 services:
   victoriametrics:
@@ -37,6 +38,26 @@ services:
       timeout: 2s
       retries: 6
 
+  loki:
+    # Pinned for the same reason as VM — Loki's config schema has shifted
+    # between major versions. Verified v3.4.1 with the bundled example
+    # config (no custom config file required for dev).
+    image: grafana/loki:3.4.1
+    container_name: frappe-monitor-loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:3100/ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+
 volumes:
   vm-data:
     name: frappe-monitor-vm-data
+  loki-data:
+    name: frappe-monitor-loki-data

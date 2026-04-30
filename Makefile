@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: build run test tidy fmt generate vm-up vm-down vm-logs
+.PHONY: build run test tidy fmt generate vm-up vm-down vm-logs loki-logs
 
 build:
 	CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/monitor-server ./cmd/monitor
@@ -19,10 +19,14 @@ fmt:
 generate:
 	go generate ./...
 
-# --- dev VictoriaMetrics (Phase 2) ----------------------------------------
-# `make vm-up` brings up VictoriaMetrics on 127.0.0.1:8428 in a Docker
-# container. The monitor binary (run via `make run`) pushes to it via
-# the default cfg.metrics.vm_url=http://127.0.0.1:8428.
+# --- dev backends (Phase 2 + Phase 3) -------------------------------------
+# `make vm-up` brings up the full dev stack: VictoriaMetrics on
+# 127.0.0.1:8428 and Loki on 127.0.0.1:3100. The monitor binary (run via
+# `make run`) pushes to them via the configured cfg.metrics.vm_url and
+# cfg.logs.loki_url defaults.
+#
+# Volumes (frappe-monitor-vm-data, frappe-monitor-loki-data) persist
+# across down/up cycles. To wipe history: `docker volume rm <name>`.
 
 vm-up:
 	docker compose -f deploy/docker-compose.dev.yml up -d
@@ -32,3 +36,6 @@ vm-down:
 
 vm-logs:
 	docker compose -f deploy/docker-compose.dev.yml logs -f victoriametrics
+
+loki-logs:
+	docker compose -f deploy/docker-compose.dev.yml logs -f loki
