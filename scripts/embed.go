@@ -13,12 +13,13 @@ import (
 var CollectorScript string
 
 // CollectorVersion returns the VERSION declared in the embedded
-// collector script. It scans the first ~10 lines for `VERSION="..."`.
+// collector script. It scans for the first top-level `VERSION="..."`
+// assignment — collectors with long header comments are fine.
 // Failure mode: returns "unknown" if the version line is absent — this
 // is a build-time invariant violation, but the runtime should not
 // crash on a malformed embed.
 func CollectorVersion() string {
-	for _, line := range strings.SplitN(CollectorScript, "\n", 12) {
+	for _, line := range strings.Split(CollectorScript, "\n") {
 		line = strings.TrimSpace(line)
 		const prefix = `VERSION="`
 		if !strings.HasPrefix(line, prefix) {
