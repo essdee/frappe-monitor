@@ -98,6 +98,12 @@ func run(cfgPath string) error {
 		Store:    store,
 		Executor: pool,
 		Logger:   logger,
+
+		// Phase 4: query proxies for the dashboard.
+		MetricsBaseURL:      cfg.Metrics.VMURL,
+		LogsBaseURL:         cfg.Logs.LokiURL,
+		MetricsQueryTimeout: time.Duration(cfg.Metrics.QueryTimeoutSeconds) * time.Second,
+		LogsQueryTimeout:    time.Duration(cfg.Logs.QueryTimeoutSeconds) * time.Second,
 	})
 
 	srv := &http.Server{

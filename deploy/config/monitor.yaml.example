@@ -17,9 +17,18 @@ log:
   format: "json"  # json | text
 
 metrics:
-  # VictoriaMetrics endpoint. /write is appended; pass the root URL.
+  # VictoriaMetrics endpoint. /write is appended for pushes; the dashboard
+  # query proxy forwards to /api/v1/query_range. Pass the root URL.
   vm_url: "http://127.0.0.1:8428"
   push_timeout_seconds: 5
+  query_timeout_seconds: 15
+
+logs:
+  # Loki endpoint. /loki/api/v1/push is appended for pushes; the dashboard
+  # query proxy forwards to /loki/api/v1/query_range.
+  loki_url: "http://127.0.0.1:3100"
+  push_timeout_seconds: 5
+  query_timeout_seconds: 15
 
 scheduler:
   # Default per-server pull interval. Master plan §5 default is 15 min;

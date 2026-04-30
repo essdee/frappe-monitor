@@ -17,6 +17,7 @@ type Config struct {
 	SSH       SSHConfig       `koanf:"ssh"`
 	Log       LogConfig       `koanf:"log"`
 	Metrics   MetricsConfig   `koanf:"metrics"`
+	Logs      LogsConfig      `koanf:"logs"`
 	Scheduler SchedulerConfig `koanf:"scheduler"`
 }
 
@@ -41,10 +42,18 @@ type LogConfig struct {
 	Format string `koanf:"format"`
 }
 
-// MetricsConfig is the VictoriaMetrics push target.
+// MetricsConfig is the VictoriaMetrics push + query target.
 type MetricsConfig struct {
-	VMURL              string `koanf:"vm_url"` // e.g. http://127.0.0.1:8428
-	PushTimeoutSeconds int    `koanf:"push_timeout_seconds"`
+	VMURL               string `koanf:"vm_url"` // e.g. http://127.0.0.1:8428
+	PushTimeoutSeconds  int    `koanf:"push_timeout_seconds"`
+	QueryTimeoutSeconds int    `koanf:"query_timeout_seconds"` // for /api/v1/metrics/query proxy
+}
+
+// LogsConfig is the Loki push + query target.
+type LogsConfig struct {
+	LokiURL             string `koanf:"loki_url"` // e.g. http://127.0.0.1:3100
+	PushTimeoutSeconds  int    `koanf:"push_timeout_seconds"`
+	QueryTimeoutSeconds int    `koanf:"query_timeout_seconds"`
 }
 
 // SchedulerConfig governs the per-server pull cadence and parallelism.
@@ -68,6 +77,10 @@ func defaults() *koanf.Koanf {
 		"log.format":                         "json",
 		"metrics.vm_url":                     "http://127.0.0.1:8428",
 		"metrics.push_timeout_seconds":       5,
+		"metrics.query_timeout_seconds":      15,
+		"logs.loki_url":                      "http://127.0.0.1:3100",
+		"logs.push_timeout_seconds":          5,
+		"logs.query_timeout_seconds":         15,
 		"scheduler.default_interval_seconds": 900, // 15 min — master plan §5 default
 		"scheduler.max_parallel":             10,
 		"scheduler.per_job_timeout_seconds":  30,
@@ -144,6 +157,18 @@ func (c *Config) validate() error {
 	}
 	if c.Metrics.PushTimeoutSeconds < 1 {
 		return fmt.Errorf("metrics.push_timeout_seconds must be >= 1, got %d", c.Metrics.PushTimeoutSeconds)
+	}
+	if c.Metrics.QueryTimeoutSeconds < 1 {
+		return fmt.Errorf("metrics.query_timeout_seconds must be >= 1, got %d", c.Metrics.QueryTimeoutSeconds)
+	}
+	if c.Logs.LokiURL == "" {
+		return fmt.Errorf("logs.loki_url is required")
+	}
+	if c.Logs.PushTimeoutSeconds < 1 {
+		return fmt.Errorf("logs.push_timeout_seconds must be >= 1, got %d", c.Logs.PushTimeoutSeconds)
+	}
+	if c.Logs.QueryTimeoutSeconds < 1 {
+		return fmt.Errorf("logs.query_timeout_seconds must be >= 1, got %d", c.Logs.QueryTimeoutSeconds)
 	}
 	if c.Scheduler.DefaultIntervalSeconds < 1 {
 		return fmt.Errorf("scheduler.default_interval_seconds must be >= 1, got %d", c.Scheduler.DefaultIntervalSeconds)

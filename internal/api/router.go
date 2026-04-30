@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -15,6 +16,15 @@ type Deps struct {
 	Store    storage.Store
 	Executor sshpkg.Executor
 	Logger   *slog.Logger
+
+	// Phase 4 query proxies. If MetricsBaseURL or LogsBaseURL is "",
+	// the corresponding endpoint is not mounted (a fresh dev binary
+	// without a configured backend just 404s on /api/v1/metrics/query
+	// and /api/v1/logs/query).
+	MetricsBaseURL      string
+	LogsBaseURL         string
+	MetricsQueryTimeout time.Duration
+	LogsQueryTimeout    time.Duration
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -34,6 +44,20 @@ func NewRouter(d Deps) http.Handler {
 	r.Route("/api/v1", func(api chi.Router) {
 		h := &serverHandlers{store: d.Store, exec: d.Executor, logger: d.Logger}
 		h.mount(api)
+
+		if d.MetricsBaseURL != "" || d.LogsBaseURL != "" {
+			ph := newProxyHandlers(
+				d.MetricsBaseURL, d.LogsBaseURL,
+				d.MetricsQueryTimeout, d.LogsQueryTimeout,
+				d.Logger,
+			)
+			if d.MetricsBaseURL != "" {
+				api.Get("/metrics/query", ph.metricsQuery)
+			}
+			if d.LogsBaseURL != "" {
+				api.Get("/logs/query", ph.logsQuery)
+			}
+		}
 	})
 
 	// SPA mount: every non-/api, non-/healthz path is delegated to the
