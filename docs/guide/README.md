@@ -9,6 +9,7 @@ These docs are **evergreen** — kept current with the code. Dated decisions and
 | You want to… | Read |
 |---|---|
 | Try it on a Mac/Linux laptop in 5 minutes | [`local-test.md`](local-test.md) |
+| Production setup between two laptops (real Frappe bench) | [`two-laptop-setup.md`](two-laptop-setup.md) |
 | Deploy on a fresh server, end-to-end | [`deployment.md`](deployment.md) |
 | Add a bench server and use the dashboard | [`usage.md`](usage.md) |
 | Start, stop, upgrade, see logs, take backups | [`operations.md`](operations.md) |
