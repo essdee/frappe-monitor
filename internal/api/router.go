@@ -58,6 +58,13 @@ func NewRouter(d Deps) http.Handler {
 				api.Get("/logs/query", ph.logsQuery)
 			}
 		}
+
+		// Phase 5 hierarchy endpoints derive bench + site lists from
+		// VM directly, so they only mount when MetricsBaseURL is set.
+		if d.MetricsBaseURL != "" {
+			hh := newHierarchyHandlers(d.MetricsBaseURL, d.MetricsQueryTimeout, d.Logger)
+			hh.mount(api)
+		}
 	})
 
 	// SPA mount: every non-/api, non-/healthz path is delegated to the
