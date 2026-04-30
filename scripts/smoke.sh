@@ -26,9 +26,12 @@ ok()   { echo "  ok: $*"; }
 # Step 1: build (CGO disabled per Phase 1 acceptance)
 # ---------------------------------------------------------------------------
 echo "==> build"
+# `make build` runs web-build first (npm install + npm run build) and
+# then the Go build with -tags=embed_dist so the SPA is bundled into
+# the binary. First run can take ~30s for npm install.
 make build >/dev/null
 [ -x "$BINARY" ] || fail "binary not produced at $BINARY"
-ok "$BINARY built"
+ok "$BINARY built (with embedded SPA)"
 
 # Confirm CGO disabled — readelf works on stripped Go binaries to look for
 # libc dependency. Statically-linked Go binary has no NEEDED entries.
@@ -146,6 +149,17 @@ GOT=$(curl -fsS "$BASE/api/v1/servers/$ID")
 STATUS=$(echo "$GOT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
 [ "$STATUS" = "unreachable" ] || fail "expected status=unreachable, got: $STATUS"
 ok "server status persisted to unreachable after failed probe"
+
+# 6. SPA serves at / (bundled Vite assets present, not the placeholder)
+SPA_HTML=$(curl -fsS "$BASE/")
+echo "$SPA_HTML" | grep -q 'src="/assets/index-' \
+    || fail "GET / didn't reference Vite-built assets — binary missing embed_dist?"
+ok "GET / → SPA index.html (Vite assets present)"
+
+# 6a. SPA client-side routing fallback
+curl -fsS "$BASE/servers/9999" | grep -q 'src="/assets/index-' \
+    || fail "SPA fallback at /servers/9999 didn't return index.html"
+ok "GET /servers/9999 → SPA fallback (vue-router takes over, not 404)"
 
 # ---------------------------------------------------------------------------
 # Step 5: SIGTERM-clean-exit ≤ 10s contract
@@ -329,6 +343,64 @@ sys.exit(1)
 done
 [ -n "$QUERY_OK" ] || fail "Loki query_range never returned the pushed line: $QR"
 ok "Loki query_range returns {server=$LOKI_LABEL,log_type=error} with the pushed line"
+
+# ---------------------------------------------------------------------------
+# Step 8: Phase 4 — metrics-query proxy through the binary
+# ---------------------------------------------------------------------------
+# Start a fresh binary (the Phase 1 SIGTERM closed the previous one)
+# now that VM has data from Phase 2's direct write. Verify that
+# /api/v1/metrics/query proxies cleanly to VM and returns the series
+# we stored. This is the only place the proxy is exercised end-to-end
+# through the running binary.
+
+echo "==> Phase 4 (metrics-query proxy)"
+
+"$BINARY" --config "$TMPDIR/monitor.yaml" > "$TMPDIR/server-p4.log" 2>&1 &
+P4_PID=$!
+trap 'kill -KILL "$P4_PID" 2>/dev/null || true; make vm-down >/dev/null 2>&1 || true; docker volume rm frappe-monitor-vm-data frappe-monitor-loki-data >/dev/null 2>&1 || true; eval "$VM_TRAP_PREV"' EXIT
+
+for _ in $(seq 1 50); do
+    if curl -fsS "$BASE/healthz" >/dev/null 2>&1; then break; fi
+    sleep 0.1
+done
+curl -fsS "$BASE/healthz" >/dev/null \
+    || { cat "$TMPDIR/server-p4.log" >&2; fail "Phase 4 binary never came up"; }
+ok "Phase 4 binary up"
+
+# Use the Phase 2 series we wrote earlier ($SERIES_LABEL).
+T_NOW=$(date +%s)
+PROXY_RESP=$(curl -fsS "$BASE/api/v1/metrics/query?query=frappe_server_load_1m%7Bserver%3D%22$SERIES_LABEL%22%7D&start=$((T_NOW-300))&end=$T_NOW&step=10" 2>&1 || echo '{}')
+echo "$PROXY_RESP" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception as e:
+    print(f'malformed proxy response: {e}', file=sys.stderr)
+    sys.exit(1)
+if d.get('status') != 'success':
+    print(f'expected status=success, got: {d}', file=sys.stderr)
+    sys.exit(1)
+" || fail "proxy response: $PROXY_RESP"
+ok "GET /api/v1/metrics/query proxies to VM (status=success)"
+
+# 8a. Missing 'query' param → 400 from our proxy (rejected before forward)
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/v1/metrics/query?start=1&end=2")
+[ "$HTTP" = "400" ] || fail "expected 400 for missing query param, got $HTTP"
+ok "GET /api/v1/metrics/query without query → 400"
+
+# 8b. SIGTERM clean exit (no scheduler ticks to drain since no servers
+# are registered, so the budget here is much smaller than Phase 1's).
+kill -TERM "$P4_PID"
+for _ in $(seq 1 110); do
+    if ! kill -0 "$P4_PID" 2>/dev/null; then break; fi
+    sleep 0.1
+done
+if kill -0 "$P4_PID" 2>/dev/null; then
+    fail "Phase 4 binary still alive after SIGTERM"
+fi
+wait "$P4_PID" 2>/dev/null || true
+P4_PID=""
+ok "Phase 4 binary exited cleanly on SIGTERM"
 
 make vm-down >/dev/null
 ok "vm-down clean"
