@@ -1,0 +1,55 @@
+[Unit]
+Description=Frappe Monitor (multi-server, multi-bench, multi-site monitoring)
+Documentation=https://github.com/sakthikumarp/frappe_monitor
+After=network-online.target frappe-monitor-stack.service
+Wants=network-online.target
+Requires=frappe-monitor-stack.service
+
+[Service]
+Type=simple
+User=frappe-monitor
+Group=frappe-monitor
+ExecStart=/usr/local/bin/frappe-monitor --config /etc/frappe-monitor/monitor.yaml
+Restart=on-failure
+RestartSec=5s
+
+# Graceful shutdown contract: scheduler stops accepting ticks, in-flight
+# pulls observe ctx.Done() and unwind, HTTP server drains. Combined
+# budget is 10s; keep this above that with a small margin.
+TimeoutStopSec=15s
+KillSignal=SIGTERM
+
+# State directory for the SQLite DB (server registry + log cursors).
+# systemd creates /var/lib/frappe-monitor at start with mode 0750.
+StateDirectory=frappe-monitor
+StateDirectoryMode=0750
+ConfigurationDirectory=frappe-monitor
+ConfigurationDirectoryMode=0750
+WorkingDirectory=/var/lib/frappe-monitor
+
+# Hardening — the binary needs egress to the configured VM/Loki URLs
+# and outbound SSH to bench servers. It does not need privileged
+# capabilities, write access to / outside its state dir, or kernel
+# tunables.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/frappe-monitor
+
+# stdout/stderr go to journald (slog JSON). Tail with:
+#   journalctl -u frappe-monitor -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
