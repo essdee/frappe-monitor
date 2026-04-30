@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+
+# vue-tsc -b emits a compiled .js next to vite.config.ts; not for git.
+vite.config.js
