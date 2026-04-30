@@ -195,17 +195,17 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
     exit 0
 fi
 
-# Make sure no leftover container OR volume from a previous run is using
-# port 8428 — fresh volume is required so the metric-name regression
-# assertion (no `_value` suffix) is actually meaningful.
+# Make sure no leftover containers OR volumes from a previous run are using
+# port 8428/3100 — fresh volumes required so the metric-name regression
+# and Loki round-trip assertions are actually meaningful.
 make vm-down >/dev/null 2>&1 || true
-docker volume rm frappe-monitor-vm-data >/dev/null 2>&1 || true
+docker volume rm frappe-monitor-vm-data frappe-monitor-loki-data >/dev/null 2>&1 || true
 
 VM_TRAP_PREV="$(trap -p EXIT)"
-trap 'make vm-down >/dev/null 2>&1 || true; docker volume rm frappe-monitor-vm-data >/dev/null 2>&1 || true; eval "$VM_TRAP_PREV"' EXIT
+trap 'make vm-down >/dev/null 2>&1 || true; docker volume rm frappe-monitor-vm-data frappe-monitor-loki-data >/dev/null 2>&1 || true; eval "$VM_TRAP_PREV"' EXIT
 
 make vm-up >/dev/null
-ok "vm-up dispatched (fresh volume)"
+ok "vm-up dispatched (fresh volumes — VM + Loki)"
 
 # Wait for VM /health to be 200 (max ~15s).
 for _ in $(seq 1 30); do
@@ -262,6 +262,73 @@ if target not in labels:
     sys.exit(1)
 " || fail "server label not present: $SERVER_LABELS"
 ok "VM has server=$SERIES_LABEL in label values"
+
+# ---------------------------------------------------------------------------
+# Step 7: Phase 3 — Loki round-trip
+# ---------------------------------------------------------------------------
+# Verifies Loki ingest + query path: push a stream with stable labels via
+# /loki/api/v1/push, query it back via /loki/api/v1/query_range, and
+# confirm both the labels and the line round-trip. Same shape that
+# internal/logs.LokiClient.Push emits.
+
+echo "==> Phase 3 (Loki)"
+
+# Loki takes a few seconds longer than VM to be ready. Poll /ready.
+for _ in $(seq 1 30); do
+    if curl -fsS http://127.0.0.1:3100/ready >/dev/null 2>&1; then break; fi
+    sleep 0.5
+done
+curl -fsS http://127.0.0.1:3100/ready >/dev/null \
+    || { docker compose -f deploy/docker-compose.dev.yml logs --tail 30 loki >&2; fail "Loki /ready never returned 200"; }
+ok "Loki /ready → 200"
+
+LOKI_LABEL="smoke-$(date +%s)"
+LOKI_NOW_NS=$(date +%s%N)
+LOKI_LINE="phase3 smoke line $(date +%s)"
+PAYLOAD=$(python3 -c "
+import json, sys
+print(json.dumps({
+    'streams': [{
+        'stream': {'server': '$LOKI_LABEL', 'log_type': 'error'},
+        'values': [['$LOKI_NOW_NS', '$LOKI_LINE']],
+    }]
+}))
+")
+curl -fsS -X POST http://127.0.0.1:3100/loki/api/v1/push \
+    -H 'Content-Type: application/json' \
+    -d "$PAYLOAD" >/dev/null
+ok "wrote stream {server=$LOKI_LABEL,log_type=error} to Loki"
+
+# Loki ingestion is async; poll up to ~10s for the entry to appear.
+QUERY_OK=""
+for _ in $(seq 1 20); do
+    sleep 0.5
+    T_END=$(date +%s)
+    T_START=$((T_END - 60))
+    QR=$(curl -fsS "http://127.0.0.1:3100/loki/api/v1/query_range?query=%7Bserver%3D%22$LOKI_LABEL%22%7D&start=${T_START}000000000&end=${T_END}000000000" 2>/dev/null || echo '{}')
+    if echo "$QR" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+res = d.get('data', {}).get('result', [])
+if not res:
+    sys.exit(1)
+# at least one stream with our label and a value matching our line
+for s in res:
+    if s['stream'].get('server') == '$LOKI_LABEL' and s['stream'].get('log_type') == 'error':
+        for ts, line in s.get('values', []):
+            if line == '$LOKI_LINE':
+                sys.exit(0)
+sys.exit(1)
+" 2>/dev/null; then
+        QUERY_OK=1
+        break
+    fi
+done
+[ -n "$QUERY_OK" ] || fail "Loki query_range never returned the pushed line: $QR"
+ok "Loki query_range returns {server=$LOKI_LABEL,log_type=error} with the pushed line"
 
 make vm-down >/dev/null
 ok "vm-down clean"
