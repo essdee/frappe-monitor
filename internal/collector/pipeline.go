@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"frappe-monitor/internal/logs"
 	"frappe-monitor/internal/parser"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
@@ -22,6 +23,12 @@ import (
 // without standing up VictoriaMetrics. metrics.VMClient implements it.
 type Pusher interface {
 	Push(ctx context.Context, body string) error
+}
+
+// LogPusher abstracts the Loki-side write so the pipeline can be tested
+// without standing up Loki. logs.LokiClient implements it.
+type LogPusher interface {
+	Push(ctx context.Context, streams []logs.Stream) error
 }
 
 // Pipeline owns the per-server pull. The exec, push, and store
@@ -162,6 +169,110 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		"sites_ok", siteOK,
 		"sites_err", siteErr)
 	return nil
+}
+
+// PullLogsOnce tails the supplied log files for the given server and
+// pushes any new entries to the configured LogPusher (Loki). For each
+// file it advances the per-(server, path) cursor in storage on success.
+//
+// Per-file failures are logged at warn-level and skipped — one bad file
+// shouldn't block the rest. Returns the number of files that succeeded
+// (advanced their cursor) and the number that errored. A single Loki
+// push covers all files in this cycle (one HTTP request).
+//
+// Caller supplies the LogFile list — typically derived from the bench
+// list reported by the most recent metrics pull, plus any server-wide
+// files like the MariaDB slow query log. Phase 3 v1 doesn't auto-
+// discover log paths server-side.
+func (p *Pipeline) PullLogsOnce(
+	ctx context.Context,
+	serverID int,
+	logPusher LogPusher,
+	tailer *LogTailer,
+	files []LogTailFile,
+) (ok int, errs int, err error) {
+	srv, err := p.Store.GetServer(ctx, serverID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("collector logs: get server %d: %w", serverID, err)
+	}
+	target := sshpkg.Target{
+		Host: srv.Hostname, Port: srv.SSHPort, User: srv.SSHUser, KeyPath: srv.SSHKeyPath,
+	}
+
+	// Tail every file; collect (TailResult, file) pairs for the ones
+	// that yielded entries so we can push in one shot at the end.
+	var streams []logs.Stream
+	type pendingCursor struct {
+		path   string
+		offset int64
+	}
+	var pending []pendingCursor
+
+	for _, f := range files {
+		labels := map[string]string{
+			"server":   srv.Name,
+			"log_type": f.Type,
+		}
+		if f.Bench != "" {
+			labels["bench"] = f.Bench
+		}
+
+		res, terr := tailer.TailFile(ctx, target, serverID, labels, LogFile{
+			Path: f.Path, Type: f.Type,
+		})
+		if terr != nil {
+			errs++
+			p.Logger.Warn("collector: log tail failed (skipped)",
+				"server_id", serverID, "path", f.Path, "err", terr)
+			continue
+		}
+
+		if len(res.Stream.Entries) > 0 {
+			streams = append(streams, res.Stream)
+		}
+		pending = append(pending, pendingCursor{path: f.Path, offset: res.NewOffset})
+		ok++
+	}
+
+	// One Loki push covers all files in this cycle. Empty input is a
+	// no-op in LokiClient.Push, so the call is safe regardless.
+	if pushErr := logPusher.Push(ctx, streams); pushErr != nil {
+		// Don't advance any cursors on push failure — re-pushing the
+		// same entries on the next cycle is preferable to losing them.
+		p.Logger.Error("collector: loki push failed",
+			"server_id", serverID, "files", len(pending), "err", pushErr)
+		return ok, errs, fmt.Errorf("loki push: %w", pushErr)
+	}
+
+	// Push succeeded — advance every cursor.
+	for _, pc := range pending {
+		if cerr := p.Store.UpsertLogCursor(ctx, storage.LogCursor{
+			ServerID:   serverID,
+			LogPath:    pc.path,
+			ByteOffset: pc.offset,
+		}); cerr != nil {
+			p.Logger.Error("collector: cursor update failed",
+				"server_id", serverID, "path", pc.path, "err", cerr)
+			// Don't return — best-effort cursor advance.
+		}
+	}
+
+	p.Logger.Info("collector: logs pulled",
+		"server_id", serverID,
+		"server_name", srv.Name,
+		"files_ok", ok,
+		"files_err", errs,
+		"streams_pushed", len(streams))
+	return ok, errs, nil
+}
+
+// LogTailFile is one entry in the list passed to PullLogsOnce. Bench is
+// optional — server-wide files (like MariaDB's slow query log) leave it
+// empty so the resulting Loki stream has no `bench` label.
+type LogTailFile struct {
+	Path  string
+	Type  string // "error" | "slow_query" | etc.
+	Bench string // "" for server-wide files
 }
 
 // markUnreachable updates the server's status row, capping the recorded

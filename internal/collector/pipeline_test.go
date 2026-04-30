@@ -6,15 +6,19 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"frappe-monitor/internal/logs"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 )
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 // fakePusher captures the most recent body and lets tests inject errors.
 type fakePusher struct {
@@ -268,6 +272,138 @@ func TestPullOnce_FullHierarchy_PerSectionParseErrorsLogged(t *testing.T) {
 	body := push.Body()
 	require.Contains(t, body, "bench=frappe-bench") // good bench landed
 	require.NotContains(t, body, "bench=malformed") // bad bench skipped
+}
+
+// fakeLogPusher captures pushed streams for assertion + lets tests inject errors.
+type fakeLogPusher struct {
+	streams [][]logs.Stream
+	pushErr error
+}
+
+func (f *fakeLogPusher) Push(_ context.Context, streams []logs.Stream) error {
+	f.streams = append(f.streams, streams)
+	return f.pushErr
+}
+
+func newTailer(t *testing.T, exec *sshpkg.FakeExecutor, store storage.Store) *LogTailer {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return &LogTailer{Store: store, Exec: exec, Logger: logger}
+}
+
+func TestPullLogsOnce_HappyPath_AdvancesCursorsAndPushes(t *testing.T) {
+	p, _, exec, store := newTestPipeline(t)
+	srv := makeServer(t, store, "prod-1", "logs-host")
+
+	// Two files, each with a fresh-cycle response (no prior cursor).
+	body1 := "err one\nerr two\n"
+	body2 := "slow query 1\n"
+	exec.SetResponse("logs-host", "SIZE:"+itoa(int64(len(body1)))+"\n"+body1, nil)
+	tailer := newTailer(t, exec, store)
+	pusher := &fakeLogPusher{}
+
+	// First call: tail the error log.
+	ok, errs, err := p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
+		[]LogTailFile{{Path: "/var/log/web.error.log", Type: "error", Bench: "b1"}})
+	require.NoError(t, err)
+	require.Equal(t, 1, ok)
+	require.Equal(t, 0, errs)
+	require.Len(t, pusher.streams, 1)
+	require.Len(t, pusher.streams[0], 1)
+	require.Equal(t, "b1", pusher.streams[0][0].Labels["bench"])
+	require.Equal(t, "error", pusher.streams[0][0].Labels["log_type"])
+	require.Equal(t, "prod-1", pusher.streams[0][0].Labels["server"])
+
+	// Cursor advanced to len(body1).
+	cur, err := store.GetLogCursor(context.Background(), srv.ID, "/var/log/web.error.log")
+	require.NoError(t, err)
+	require.Equal(t, int64(len(body1)), cur.ByteOffset)
+
+	// Second call: tail a slow-query log (server-wide, no bench label).
+	exec.SetResponse("logs-host", "SIZE:"+itoa(int64(len(body2)))+"\n"+body2, nil)
+	pusher.streams = nil
+	ok, errs, err = p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
+		[]LogTailFile{{Path: "/var/log/mysql/slow.log", Type: "slow_query"}})
+	require.NoError(t, err)
+	require.Equal(t, 1, ok)
+	require.Equal(t, 0, errs)
+	require.Len(t, pusher.streams[0], 1)
+	require.Equal(t, "slow_query", pusher.streams[0][0].Labels["log_type"])
+	_, hasBench := pusher.streams[0][0].Labels["bench"]
+	require.False(t, hasBench, "server-wide log must not carry a bench label")
+}
+
+func TestPullLogsOnce_NoNewBytes_NoStreamPushed(t *testing.T) {
+	p, _, exec, store := newTestPipeline(t)
+	srv := makeServer(t, store, "prod-2", "quiet-host")
+	require.NoError(t, store.UpsertLogCursor(context.Background(), storage.LogCursor{
+		ServerID: srv.ID, LogPath: "/var/log/x.log", ByteOffset: 100,
+	}))
+	exec.SetResponse("quiet-host", "SIZE:100\n", nil)
+
+	tailer := newTailer(t, exec, store)
+	pusher := &fakeLogPusher{}
+
+	ok, errs, err := p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
+		[]LogTailFile{{Path: "/var/log/x.log", Type: "error", Bench: "b1"}})
+	require.NoError(t, err)
+	require.Equal(t, 1, ok)
+	require.Equal(t, 0, errs)
+	// Push was called once with empty streams (no-op in LokiClient).
+	require.Len(t, pusher.streams, 1)
+	require.Empty(t, pusher.streams[0])
+}
+
+func TestPullLogsOnce_PushFailureKeepsCursors(t *testing.T) {
+	p, _, exec, store := newTestPipeline(t)
+	srv := makeServer(t, store, "prod-3", "loki-down-host")
+	body := "alpha\nbeta\n"
+	exec.SetResponse("loki-down-host", "SIZE:"+itoa(int64(len(body)))+"\n"+body, nil)
+
+	tailer := newTailer(t, exec, store)
+	pusher := &fakeLogPusher{pushErr: errors.New("loki is down")}
+
+	_, _, err := p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
+		[]LogTailFile{{Path: "/var/log/y.log", Type: "error", Bench: "b1"}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "loki push")
+
+	// Cursor must NOT have advanced — re-pushing on the next cycle is
+	// preferable to silently dropping the entries.
+	_, err = store.GetLogCursor(context.Background(), srv.ID, "/var/log/y.log")
+	require.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestPullLogsOnce_PerFileTailFailureSkipsButContinues(t *testing.T) {
+	// First file's TailFile fails (FakeExecutor returns no canned response
+	// for the host AT ALL — simulates a malformed response). Second file
+	// returns a valid SIZE header. The good file should still push and
+	// advance.
+
+	p, _, exec, store := newTestPipeline(t)
+	srv := makeServer(t, store, "prod-4", "mixed-host")
+
+	// Set canned response that returns malformed output (no SIZE header)
+	// — TailFile will return an error, but we want one bad file to skip
+	// and the cycle to continue.
+	exec.SetResponse("mixed-host", "garbage no header\n", nil)
+
+	tailer := newTailer(t, exec, store)
+	pusher := &fakeLogPusher{}
+
+	// Two files; both will hit the same canned response (FakeExecutor
+	// keys by host, not cmd). So both will fail. We expect errs=2, ok=0.
+	ok, errs, err := p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
+		[]LogTailFile{
+			{Path: "/var/log/a.log", Type: "error"},
+			{Path: "/var/log/b.log", Type: "error"},
+		})
+	require.NoError(t, err) // outer call succeeds; per-file errors don't fail it
+	require.Equal(t, 0, ok)
+	require.Equal(t, 2, errs)
+	// Empty Loki push happened (no streams accumulated).
+	require.Len(t, pusher.streams, 1)
+	require.Empty(t, pusher.streams[0])
 }
 
 func TestPullOnce_BodyContainsSSHTargetData(t *testing.T) {
