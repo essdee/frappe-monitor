@@ -29,6 +29,12 @@ services:
       # metric name as written, matching the master plan's labelling
       # convention (frappe_server_load_1m, not frappe_server_load_1m_value).
       - "-influxSkipSingleField"
+      # VM's instant queries default to a 30s latency offset (a buffer
+      # for late-arriving data). In dev that makes the dashboard look
+      # frozen for 30s after the collector's first push. Set to 0 here
+      # so /api/v1/query reflects fresh writes immediately. Production
+      # compose may keep the default if late samples are common.
+      - "-search.latencyOffset=0s"
     volumes:
       - vm-data:/data
     restart: unless-stopped
