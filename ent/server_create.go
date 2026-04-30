@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/server"
 	"time"
 
@@ -140,6 +141,21 @@ func (_c *ServerCreate) SetNillableUpdatedAt(v *time.Time) *ServerCreate {
 		_c.SetUpdatedAt(*v)
 	}
 	return _c
+}
+
+// AddLogCursorIDs adds the "log_cursors" edge to the LogCursor entity by IDs.
+func (_c *ServerCreate) AddLogCursorIDs(ids ...int) *ServerCreate {
+	_c.mutation.AddLogCursorIDs(ids...)
+	return _c
+}
+
+// AddLogCursors adds the "log_cursors" edges to the LogCursor entity.
+func (_c *ServerCreate) AddLogCursors(v ...*LogCursor) *ServerCreate {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddLogCursorIDs(ids...)
 }
 
 // Mutation returns the ServerMutation object of the builder.
@@ -319,6 +335,22 @@ func (_c *ServerCreate) createSpec() (*Server, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.UpdatedAt(); ok {
 		_spec.SetField(server.FieldUpdatedAt, field.TypeTime, value)
 		_node.UpdatedAt = value
+	}
+	if nodes := _c.mutation.LogCursorsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.LogCursorsTable,
+			Columns: []string{server.LogCursorsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec
 }

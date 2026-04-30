@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
 	"frappe-monitor/ent/server"
 	"sync"
@@ -24,31 +25,572 @@ const (
 	OpUpdateOne = ent.OpUpdateOne
 
 	// Node types.
-	TypeServer = "Server"
+	TypeLogCursor = "LogCursor"
+	TypeServer    = "Server"
 )
 
-// ServerMutation represents an operation that mutates the Server nodes in the graph.
-type ServerMutation struct {
+// LogCursorMutation represents an operation that mutates the LogCursor nodes in the graph.
+type LogCursorMutation struct {
 	config
 	op             Op
 	typ            string
 	id             *int
-	name           *string
-	hostname       *string
-	ssh_user       *string
-	ssh_port       *int
-	addssh_port    *int
-	ssh_key_path   *string
-	labels         *map[string]string
-	status         *server.Status
-	last_pinged_at *time.Time
-	last_error     *string
-	created_at     *time.Time
-	updated_at     *time.Time
+	log_path       *string
+	byte_offset    *int64
+	addbyte_offset *int64
+	last_seen_at   *time.Time
 	clearedFields  map[string]struct{}
+	server         *int
+	clearedserver  bool
 	done           bool
-	oldValue       func(context.Context) (*Server, error)
-	predicates     []predicate.Server
+	oldValue       func(context.Context) (*LogCursor, error)
+	predicates     []predicate.LogCursor
+}
+
+var _ ent.Mutation = (*LogCursorMutation)(nil)
+
+// logcursorOption allows management of the mutation configuration using functional options.
+type logcursorOption func(*LogCursorMutation)
+
+// newLogCursorMutation creates new mutation for the LogCursor entity.
+func newLogCursorMutation(c config, op Op, opts ...logcursorOption) *LogCursorMutation {
+	m := &LogCursorMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeLogCursor,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withLogCursorID sets the ID field of the mutation.
+func withLogCursorID(id int) logcursorOption {
+	return func(m *LogCursorMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *LogCursor
+		)
+		m.oldValue = func(ctx context.Context) (*LogCursor, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().LogCursor.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withLogCursor sets the old LogCursor of the mutation.
+func withLogCursor(node *LogCursor) logcursorOption {
+	return func(m *LogCursorMutation) {
+		m.oldValue = func(context.Context) (*LogCursor, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m LogCursorMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m LogCursorMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *LogCursorMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *LogCursorMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().LogCursor.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetLogPath sets the "log_path" field.
+func (m *LogCursorMutation) SetLogPath(s string) {
+	m.log_path = &s
+}
+
+// LogPath returns the value of the "log_path" field in the mutation.
+func (m *LogCursorMutation) LogPath() (r string, exists bool) {
+	v := m.log_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLogPath returns the old "log_path" field's value of the LogCursor entity.
+// If the LogCursor object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LogCursorMutation) OldLogPath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLogPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLogPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLogPath: %w", err)
+	}
+	return oldValue.LogPath, nil
+}
+
+// ResetLogPath resets all changes to the "log_path" field.
+func (m *LogCursorMutation) ResetLogPath() {
+	m.log_path = nil
+}
+
+// SetByteOffset sets the "byte_offset" field.
+func (m *LogCursorMutation) SetByteOffset(i int64) {
+	m.byte_offset = &i
+	m.addbyte_offset = nil
+}
+
+// ByteOffset returns the value of the "byte_offset" field in the mutation.
+func (m *LogCursorMutation) ByteOffset() (r int64, exists bool) {
+	v := m.byte_offset
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldByteOffset returns the old "byte_offset" field's value of the LogCursor entity.
+// If the LogCursor object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LogCursorMutation) OldByteOffset(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldByteOffset is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldByteOffset requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldByteOffset: %w", err)
+	}
+	return oldValue.ByteOffset, nil
+}
+
+// AddByteOffset adds i to the "byte_offset" field.
+func (m *LogCursorMutation) AddByteOffset(i int64) {
+	if m.addbyte_offset != nil {
+		*m.addbyte_offset += i
+	} else {
+		m.addbyte_offset = &i
+	}
+}
+
+// AddedByteOffset returns the value that was added to the "byte_offset" field in this mutation.
+func (m *LogCursorMutation) AddedByteOffset() (r int64, exists bool) {
+	v := m.addbyte_offset
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetByteOffset resets all changes to the "byte_offset" field.
+func (m *LogCursorMutation) ResetByteOffset() {
+	m.byte_offset = nil
+	m.addbyte_offset = nil
+}
+
+// SetLastSeenAt sets the "last_seen_at" field.
+func (m *LogCursorMutation) SetLastSeenAt(t time.Time) {
+	m.last_seen_at = &t
+}
+
+// LastSeenAt returns the value of the "last_seen_at" field in the mutation.
+func (m *LogCursorMutation) LastSeenAt() (r time.Time, exists bool) {
+	v := m.last_seen_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastSeenAt returns the old "last_seen_at" field's value of the LogCursor entity.
+// If the LogCursor object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LogCursorMutation) OldLastSeenAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastSeenAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastSeenAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastSeenAt: %w", err)
+	}
+	return oldValue.LastSeenAt, nil
+}
+
+// ResetLastSeenAt resets all changes to the "last_seen_at" field.
+func (m *LogCursorMutation) ResetLastSeenAt() {
+	m.last_seen_at = nil
+}
+
+// SetServerID sets the "server" edge to the Server entity by id.
+func (m *LogCursorMutation) SetServerID(id int) {
+	m.server = &id
+}
+
+// ClearServer clears the "server" edge to the Server entity.
+func (m *LogCursorMutation) ClearServer() {
+	m.clearedserver = true
+}
+
+// ServerCleared reports if the "server" edge to the Server entity was cleared.
+func (m *LogCursorMutation) ServerCleared() bool {
+	return m.clearedserver
+}
+
+// ServerID returns the "server" edge ID in the mutation.
+func (m *LogCursorMutation) ServerID() (id int, exists bool) {
+	if m.server != nil {
+		return *m.server, true
+	}
+	return
+}
+
+// ServerIDs returns the "server" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ServerID instead. It exists only for internal usage by the builders.
+func (m *LogCursorMutation) ServerIDs() (ids []int) {
+	if id := m.server; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetServer resets all changes to the "server" edge.
+func (m *LogCursorMutation) ResetServer() {
+	m.server = nil
+	m.clearedserver = false
+}
+
+// Where appends a list predicates to the LogCursorMutation builder.
+func (m *LogCursorMutation) Where(ps ...predicate.LogCursor) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the LogCursorMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *LogCursorMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.LogCursor, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *LogCursorMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *LogCursorMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (LogCursor).
+func (m *LogCursorMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *LogCursorMutation) Fields() []string {
+	fields := make([]string, 0, 3)
+	if m.log_path != nil {
+		fields = append(fields, logcursor.FieldLogPath)
+	}
+	if m.byte_offset != nil {
+		fields = append(fields, logcursor.FieldByteOffset)
+	}
+	if m.last_seen_at != nil {
+		fields = append(fields, logcursor.FieldLastSeenAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *LogCursorMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case logcursor.FieldLogPath:
+		return m.LogPath()
+	case logcursor.FieldByteOffset:
+		return m.ByteOffset()
+	case logcursor.FieldLastSeenAt:
+		return m.LastSeenAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *LogCursorMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case logcursor.FieldLogPath:
+		return m.OldLogPath(ctx)
+	case logcursor.FieldByteOffset:
+		return m.OldByteOffset(ctx)
+	case logcursor.FieldLastSeenAt:
+		return m.OldLastSeenAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown LogCursor field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *LogCursorMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case logcursor.FieldLogPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLogPath(v)
+		return nil
+	case logcursor.FieldByteOffset:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetByteOffset(v)
+		return nil
+	case logcursor.FieldLastSeenAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastSeenAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown LogCursor field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *LogCursorMutation) AddedFields() []string {
+	var fields []string
+	if m.addbyte_offset != nil {
+		fields = append(fields, logcursor.FieldByteOffset)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *LogCursorMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case logcursor.FieldByteOffset:
+		return m.AddedByteOffset()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *LogCursorMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case logcursor.FieldByteOffset:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddByteOffset(v)
+		return nil
+	}
+	return fmt.Errorf("unknown LogCursor numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *LogCursorMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *LogCursorMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *LogCursorMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown LogCursor nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *LogCursorMutation) ResetField(name string) error {
+	switch name {
+	case logcursor.FieldLogPath:
+		m.ResetLogPath()
+		return nil
+	case logcursor.FieldByteOffset:
+		m.ResetByteOffset()
+		return nil
+	case logcursor.FieldLastSeenAt:
+		m.ResetLastSeenAt()
+		return nil
+	}
+	return fmt.Errorf("unknown LogCursor field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *LogCursorMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.server != nil {
+		edges = append(edges, logcursor.EdgeServer)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *LogCursorMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case logcursor.EdgeServer:
+		if id := m.server; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *LogCursorMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *LogCursorMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *LogCursorMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedserver {
+		edges = append(edges, logcursor.EdgeServer)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *LogCursorMutation) EdgeCleared(name string) bool {
+	switch name {
+	case logcursor.EdgeServer:
+		return m.clearedserver
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *LogCursorMutation) ClearEdge(name string) error {
+	switch name {
+	case logcursor.EdgeServer:
+		m.ClearServer()
+		return nil
+	}
+	return fmt.Errorf("unknown LogCursor unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *LogCursorMutation) ResetEdge(name string) error {
+	switch name {
+	case logcursor.EdgeServer:
+		m.ResetServer()
+		return nil
+	}
+	return fmt.Errorf("unknown LogCursor edge %s", name)
+}
+
+// ServerMutation represents an operation that mutates the Server nodes in the graph.
+type ServerMutation struct {
+	config
+	op                 Op
+	typ                string
+	id                 *int
+	name               *string
+	hostname           *string
+	ssh_user           *string
+	ssh_port           *int
+	addssh_port        *int
+	ssh_key_path       *string
+	labels             *map[string]string
+	status             *server.Status
+	last_pinged_at     *time.Time
+	last_error         *string
+	created_at         *time.Time
+	updated_at         *time.Time
+	clearedFields      map[string]struct{}
+	log_cursors        map[int]struct{}
+	removedlog_cursors map[int]struct{}
+	clearedlog_cursors bool
+	done               bool
+	oldValue           func(context.Context) (*Server, error)
+	predicates         []predicate.Server
 }
 
 var _ ent.Mutation = (*ServerMutation)(nil)
@@ -604,6 +1146,60 @@ func (m *ServerMutation) ResetUpdatedAt() {
 	m.updated_at = nil
 }
 
+// AddLogCursorIDs adds the "log_cursors" edge to the LogCursor entity by ids.
+func (m *ServerMutation) AddLogCursorIDs(ids ...int) {
+	if m.log_cursors == nil {
+		m.log_cursors = make(map[int]struct{})
+	}
+	for i := range ids {
+		m.log_cursors[ids[i]] = struct{}{}
+	}
+}
+
+// ClearLogCursors clears the "log_cursors" edge to the LogCursor entity.
+func (m *ServerMutation) ClearLogCursors() {
+	m.clearedlog_cursors = true
+}
+
+// LogCursorsCleared reports if the "log_cursors" edge to the LogCursor entity was cleared.
+func (m *ServerMutation) LogCursorsCleared() bool {
+	return m.clearedlog_cursors
+}
+
+// RemoveLogCursorIDs removes the "log_cursors" edge to the LogCursor entity by IDs.
+func (m *ServerMutation) RemoveLogCursorIDs(ids ...int) {
+	if m.removedlog_cursors == nil {
+		m.removedlog_cursors = make(map[int]struct{})
+	}
+	for i := range ids {
+		delete(m.log_cursors, ids[i])
+		m.removedlog_cursors[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedLogCursors returns the removed IDs of the "log_cursors" edge to the LogCursor entity.
+func (m *ServerMutation) RemovedLogCursorsIDs() (ids []int) {
+	for id := range m.removedlog_cursors {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// LogCursorsIDs returns the "log_cursors" edge IDs in the mutation.
+func (m *ServerMutation) LogCursorsIDs() (ids []int) {
+	for id := range m.log_cursors {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetLogCursors resets all changes to the "log_cursors" edge.
+func (m *ServerMutation) ResetLogCursors() {
+	m.log_cursors = nil
+	m.clearedlog_cursors = false
+	m.removedlog_cursors = nil
+}
+
 // Where appends a list predicates to the ServerMutation builder.
 func (m *ServerMutation) Where(ps ...predicate.Server) {
 	m.predicates = append(m.predicates, ps...)
@@ -943,48 +1539,84 @@ func (m *ServerMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ServerMutation) AddedEdges() []string {
-	edges := make([]string, 0, 0)
+	edges := make([]string, 0, 1)
+	if m.log_cursors != nil {
+		edges = append(edges, server.EdgeLogCursors)
+	}
 	return edges
 }
 
 // AddedIDs returns all IDs (to other nodes) that were added for the given edge
 // name in this mutation.
 func (m *ServerMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case server.EdgeLogCursors:
+		ids := make([]ent.Value, 0, len(m.log_cursors))
+		for id := range m.log_cursors {
+			ids = append(ids, id)
+		}
+		return ids
+	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ServerMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 0)
+	edges := make([]string, 0, 1)
+	if m.removedlog_cursors != nil {
+		edges = append(edges, server.EdgeLogCursors)
+	}
 	return edges
 }
 
 // RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
 // the given name in this mutation.
 func (m *ServerMutation) RemovedIDs(name string) []ent.Value {
+	switch name {
+	case server.EdgeLogCursors:
+		ids := make([]ent.Value, 0, len(m.removedlog_cursors))
+		for id := range m.removedlog_cursors {
+			ids = append(ids, id)
+		}
+		return ids
+	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ServerMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 0)
+	edges := make([]string, 0, 1)
+	if m.clearedlog_cursors {
+		edges = append(edges, server.EdgeLogCursors)
+	}
 	return edges
 }
 
 // EdgeCleared returns a boolean which indicates if the edge with the given name
 // was cleared in this mutation.
 func (m *ServerMutation) EdgeCleared(name string) bool {
+	switch name {
+	case server.EdgeLogCursors:
+		return m.clearedlog_cursors
+	}
 	return false
 }
 
 // ClearEdge clears the value of the edge with the given name. It returns an error
 // if that edge is not defined in the schema.
 func (m *ServerMutation) ClearEdge(name string) error {
+	switch name {
+	}
 	return fmt.Errorf("unknown Server unique edge %s", name)
 }
 
 // ResetEdge resets all changes to the edge with the given name in this mutation.
 // It returns an error if the edge is not defined in the schema.
 func (m *ServerMutation) ResetEdge(name string) error {
+	switch name {
+	case server.EdgeLogCursors:
+		m.ResetLogCursors()
+		return nil
+	}
 	return fmt.Errorf("unknown Server edge %s", name)
 }

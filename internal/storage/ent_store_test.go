@@ -88,6 +88,76 @@ func TestGetServer_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestLogCursor_GetReturnsNotFoundForMissing(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	srv, err := s.CreateServer(ctx, NewServer{
+		Name: "lc-host", Hostname: "lc-host.example.com", SSHUser: "monitor",
+		SSHPort: 22, SSHKeyPath: "/tmp/k",
+	})
+	require.NoError(t, err)
+
+	_, err = s.GetLogCursor(ctx, srv.ID, "/var/log/frappe.log")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestLogCursor_UpsertAndGet(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	srv, err := s.CreateServer(ctx, NewServer{
+		Name: "lc-host-2", Hostname: "lc-host-2.example.com", SSHUser: "monitor",
+		SSHPort: 22, SSHKeyPath: "/tmp/k",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, s.UpsertLogCursor(ctx, LogCursor{
+		ServerID:   srv.ID,
+		LogPath:    "/var/log/frappe/web.error.log",
+		ByteOffset: 1024,
+	}))
+
+	got, err := s.GetLogCursor(ctx, srv.ID, "/var/log/frappe/web.error.log")
+	require.NoError(t, err)
+	require.Equal(t, srv.ID, got.ServerID)
+	require.Equal(t, "/var/log/frappe/web.error.log", got.LogPath)
+	require.Equal(t, int64(1024), got.ByteOffset)
+	require.False(t, got.LastSeenAt.IsZero())
+
+	// Upsert update — same key, new offset.
+	require.NoError(t, s.UpsertLogCursor(ctx, LogCursor{
+		ServerID:   srv.ID,
+		LogPath:    "/var/log/frappe/web.error.log",
+		ByteOffset: 2048,
+	}))
+	got2, err := s.GetLogCursor(ctx, srv.ID, "/var/log/frappe/web.error.log")
+	require.NoError(t, err)
+	require.Equal(t, int64(2048), got2.ByteOffset)
+}
+
+func TestLogCursor_PerServerSeparation(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	a, err := s.CreateServer(ctx, NewServer{
+		Name: "a", Hostname: "a.example.com", SSHUser: "monitor", SSHPort: 22, SSHKeyPath: "/tmp/k",
+	})
+	require.NoError(t, err)
+	b, err := s.CreateServer(ctx, NewServer{
+		Name: "b", Hostname: "b.example.com", SSHUser: "monitor", SSHPort: 22, SSHKeyPath: "/tmp/k",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, s.UpsertLogCursor(ctx, LogCursor{ServerID: a.ID, LogPath: "/log", ByteOffset: 1}))
+	require.NoError(t, s.UpsertLogCursor(ctx, LogCursor{ServerID: b.ID, LogPath: "/log", ByteOffset: 2}))
+
+	gotA, err := s.GetLogCursor(ctx, a.ID, "/log")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), gotA.ByteOffset)
+
+	gotB, err := s.GetLogCursor(ctx, b.ID, "/log")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), gotB.ByteOffset)
+}
+
 func TestSetServerStatus(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

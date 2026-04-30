@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/schema"
 	"frappe-monitor/ent/server"
 	"time"
@@ -12,6 +13,24 @@ import (
 // (default values, validators, hooks and policies) and stitches it
 // to their package variables.
 func init() {
+	logcursorFields := schema.LogCursor{}.Fields()
+	_ = logcursorFields
+	// logcursorDescLogPath is the schema descriptor for log_path field.
+	logcursorDescLogPath := logcursorFields[0].Descriptor()
+	// logcursor.LogPathValidator is a validator for the "log_path" field. It is called by the builders before save.
+	logcursor.LogPathValidator = logcursorDescLogPath.Validators[0].(func(string) error)
+	// logcursorDescByteOffset is the schema descriptor for byte_offset field.
+	logcursorDescByteOffset := logcursorFields[1].Descriptor()
+	// logcursor.DefaultByteOffset holds the default value on creation for the byte_offset field.
+	logcursor.DefaultByteOffset = logcursorDescByteOffset.Default.(int64)
+	// logcursor.ByteOffsetValidator is a validator for the "byte_offset" field. It is called by the builders before save.
+	logcursor.ByteOffsetValidator = logcursorDescByteOffset.Validators[0].(func(int64) error)
+	// logcursorDescLastSeenAt is the schema descriptor for last_seen_at field.
+	logcursorDescLastSeenAt := logcursorFields[2].Descriptor()
+	// logcursor.DefaultLastSeenAt holds the default value on creation for the last_seen_at field.
+	logcursor.DefaultLastSeenAt = logcursorDescLastSeenAt.Default.(func() time.Time)
+	// logcursor.UpdateDefaultLastSeenAt holds the default value on update for the last_seen_at field.
+	logcursor.UpdateDefaultLastSeenAt = logcursorDescLastSeenAt.UpdateDefault.(func() time.Time)
 	serverFields := schema.Server{}.Fields()
 	_ = serverFields
 	// serverDescName is the schema descriptor for name field.

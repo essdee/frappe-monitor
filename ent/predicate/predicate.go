@@ -6,5 +6,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 )
 
+// LogCursor is the predicate function for logcursor builders.
+type LogCursor func(*sql.Selector)
+
 // Server is the predicate function for server builders.
 type Server func(*sql.Selector)

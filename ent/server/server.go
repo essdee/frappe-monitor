@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"entgo.io/ent/dialect/sql"
+	"entgo.io/ent/dialect/sql/sqlgraph"
 )
 
 const (
@@ -36,8 +37,17 @@ const (
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
 	FieldUpdatedAt = "updated_at"
+	// EdgeLogCursors holds the string denoting the log_cursors edge name in mutations.
+	EdgeLogCursors = "log_cursors"
 	// Table holds the table name of the server in the database.
 	Table = "servers"
+	// LogCursorsTable is the table that holds the log_cursors relation/edge.
+	LogCursorsTable = "log_cursors"
+	// LogCursorsInverseTable is the table name for the LogCursor entity.
+	// It exists in this package in order to avoid circular dependency with the "logcursor" package.
+	LogCursorsInverseTable = "log_cursors"
+	// LogCursorsColumn is the table column denoting the log_cursors relation/edge.
+	LogCursorsColumn = "server_log_cursors"
 )
 
 // Columns holds all SQL columns for server fields.
@@ -170,4 +180,25 @@ func ByCreatedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByUpdatedAt orders the results by the updated_at field.
 func ByUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUpdatedAt, opts...).ToFunc()
+}
+
+// ByLogCursorsCount orders the results by log_cursors count.
+func ByLogCursorsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newLogCursorsStep(), opts...)
+	}
+}
+
+// ByLogCursors orders the results by log_cursors terms.
+func ByLogCursors(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newLogCursorsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+func newLogCursorsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(LogCursorsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, LogCursorsTable, LogCursorsColumn),
+	)
 }

@@ -39,8 +39,29 @@ type Server struct {
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
-	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	// Edges holds the relations/edges for other nodes in the graph.
+	// The values are being populated by the ServerQuery when eager-loading is set.
+	Edges        ServerEdges `json:"edges"`
 	selectValues sql.SelectValues
+}
+
+// ServerEdges holds the relations/edges for other nodes in the graph.
+type ServerEdges struct {
+	// LogCursors holds the value of the log_cursors edge.
+	LogCursors []*LogCursor `json:"log_cursors,omitempty"`
+	// loadedTypes holds the information for reporting if a
+	// type was loaded (or requested) in eager-loading or not.
+	loadedTypes [1]bool
+}
+
+// LogCursorsOrErr returns the LogCursors value or an error if the edge
+// was not loaded in eager-loading.
+func (e ServerEdges) LogCursorsOrErr() ([]*LogCursor, error) {
+	if e.loadedTypes[0] {
+		return e.LogCursors, nil
+	}
+	return nil, &NotLoadedError{edge: "log_cursors"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -157,6 +178,11 @@ func (_m *Server) assignValues(columns []string, values []any) error {
 // This includes values selected through modifiers, order, etc.
 func (_m *Server) Value(name string) (ent.Value, error) {
 	return _m.selectValues.Get(name)
+}
+
+// QueryLogCursors queries the "log_cursors" edge of the Server entity.
+func (_m *Server) QueryLogCursors() *LogCursorQuery {
+	return NewServerClient(_m.config).QueryLogCursors(_m)
 }
 
 // Update returns a builder for updating this Server.
