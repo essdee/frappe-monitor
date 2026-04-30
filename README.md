@@ -10,6 +10,7 @@ The complete operator guide lives in **[`docs/guide/`](docs/guide/)**:
 
 | | |
 |---|---|
+| Try it on a Mac/Linux laptop in 5 min | [`docs/guide/local-test.md`](docs/guide/local-test.md) |
 | Deploy on a fresh server | [`docs/guide/deployment.md`](docs/guide/deployment.md) |
 | Use the dashboard, add servers | [`docs/guide/usage.md`](docs/guide/usage.md) |
 | Day-2 ops (start/stop/upgrade/logs) | [`docs/guide/operations.md`](docs/guide/operations.md) |
@@ -39,7 +40,15 @@ sudo journalctl -u frappe-monitor -f              # tail logs
 
 Add your first bench server: [`docs/guide/usage.md`](docs/guide/usage.md).
 
-## Quick start (local dev)
+## Quick start (laptop demo, one command)
+
+```bash
+make local-test
+```
+
+Builds the binary, brings up VM + Loki, seeds demo metrics + log lines, and serves the dashboard at `http://localhost:8080`. Ctrl+C tears everything down. No sudo, no systemd, no real bench server required. Full walkthrough in [`docs/guide/local-test.md`](docs/guide/local-test.md).
+
+## Quick start (manual local dev)
 
 ```bash
 make vm-up               # docker compose: VM + Loki on 127.0.0.1
