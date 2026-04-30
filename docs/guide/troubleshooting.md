@@ -150,6 +150,55 @@ ls -la ~/frappe-bench/logs/
 
 Loki streams are bench-scoped; site-scoped logs land in Phase 7.
 
+## "Browser keeps prompting for credentials"
+
+`auth.password` is set and the password you're typing doesn't match. Username is ignored — only the password matters. Reset by editing `/etc/frappe-monitor/monitor.yaml` and `sudo systemctl restart frappe-monitor`.
+
+If you want to disable auth temporarily, set `auth.password: ""` and restart.
+
+If the prompt re-appears mid-session, the realm changed — Chrome rebinds credentials per `(origin, realm)`. Set a stable `auth.realm` in config and don't change it.
+
+## "Telegram alerts aren't firing"
+
+In order:
+
+```bash
+# 1. Is the service even enabled?
+grep -A 8 '^alerts:' /etc/frappe-monitor/monitor.yaml
+
+# 2. Did it start?
+sudo journalctl -u frappe-monitor | grep "alerts service started"
+
+# 3. Are evaluations running?
+sudo journalctl -u frappe-monitor -f | grep "alerts:"
+```
+
+If you see `alerts: rule evaluation failed` lines, the PromQL is rejected by VM. Test it manually:
+
+```bash
+curl 'http://127.0.0.1:8428/api/v1/query?query=<URL-encoded-promql>'
+```
+
+If you see `alerts: notify failed`, your Telegram bot token or chat ID is wrong:
+
+```bash
+# Verify the bot token directly:
+curl "https://api.telegram.org/bot<TOKEN>/getMe"
+# {"ok":true,"result":{"id":...}}
+
+# Send a test message manually:
+curl -X POST "https://api.telegram.org/bot<TOKEN>/sendMessage" \
+  -d "chat_id=<CHATID>" -d "text=test"
+```
+
+If `getUpdates` returns nothing, send `/start` to your bot first — Telegram suppresses the chat from `getUpdates` until the user has interacted with the bot.
+
+## "Telegram alerts firing constantly"
+
+`notify_repeat_seconds` is too low for your noise level. Default 3600 (1h). Bump to 4h or 1d for noisy production environments. Setting it to `0` makes the monitor notify only once per fire and once per resolution — quietest setting.
+
+If a *single* alert is constantly firing+resolving, the underlying condition is flapping. Check the metric directly in the dashboard or VM. Common cause: `disk_almost_full` at exactly 90% and disk usage oscillating ±0.1%. Raise the threshold in your custom rule.
+
 ## "frappe-monitor.service won't start"
 
 ```bash

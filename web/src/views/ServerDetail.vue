@@ -1,14 +1,29 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { fetchServer, type Server } from '../api'
+import { useRouter } from 'vue-router'
+import {
+  fetchServer,
+  testServerConnection,
+  deployCollector,
+  deleteServer,
+  type Server,
+  type TestConnectionResult,
+} from '../api'
 import { useTimeRange } from '../composables/useTimeRange'
 import { useMetricsRange } from '../composables/useMetricsRange'
 import MetricChart from '../components/MetricChart.vue'
 
 const props = defineProps<{ id: number }>()
+const router = useRouter()
 
 const server = ref<Server | null>(null)
 const serverError = ref<string | null>(null)
+
+const probeResult = ref<TestConnectionResult | null>(null)
+const probeRunning = ref(false)
+const deployMsg = ref<string | null>(null)
+const deployRunning = ref(false)
+const deleteRunning = ref(false)
 
 const { range, refreshSec } = useTimeRange()
 
@@ -18,6 +33,54 @@ async function loadServer() {
     server.value = await fetchServer(props.id)
   } catch (e) {
     serverError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+async function runProbe() {
+  probeRunning.value = true
+  probeResult.value = null
+  try {
+    probeResult.value = await testServerConnection(props.id)
+  } catch (e) {
+    probeResult.value = {
+      reachable: false,
+      latency_ms: 0,
+      error: e instanceof Error ? e.message : String(e),
+      error_kind: 'unknown',
+    }
+  } finally {
+    probeRunning.value = false
+  }
+}
+
+async function runDeploy() {
+  deployRunning.value = true
+  deployMsg.value = null
+  try {
+    const r = await deployCollector(props.id)
+    deployMsg.value = `Collector v${r.version} deployed.`
+  } catch (e) {
+    deployMsg.value = `Deploy failed: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    deployRunning.value = false
+  }
+}
+
+async function runDelete() {
+  if (!server.value) return
+  if (!window.confirm(
+    `Delete server "${server.value.name}" (${server.value.hostname})?\n\n` +
+    `This stops collecting metrics + logs from it. Existing data in VictoriaMetrics ` +
+    `and Loki will age out on the configured retention.`
+  )) return
+  deleteRunning.value = true
+  try {
+    await deleteServer(props.id)
+    router.push('/servers')
+  } catch (e) {
+    serverError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    deleteRunning.value = false
   }
 }
 
@@ -90,6 +153,32 @@ const loadLabel = (m: Record<string, string>) => {
         <span class="status-text">{{ server.status }}</span>
       </div>
     </header>
+
+    <div v-if="server" class="actions">
+      <button :disabled="probeRunning" @click="runProbe">
+        {{ probeRunning ? 'Testing…' : 'Test SSH' }}
+      </button>
+      <button :disabled="deployRunning" @click="runDeploy">
+        {{ deployRunning ? 'Deploying…' : 'Deploy collector' }}
+      </button>
+      <button class="danger" :disabled="deleteRunning" @click="runDelete">
+        {{ deleteRunning ? 'Deleting…' : 'Delete' }}
+      </button>
+    </div>
+
+    <p
+      v-if="probeResult"
+      class="probe-result"
+      :class="probeResult.reachable ? 'ok' : 'fail'"
+    >
+      <template v-if="probeResult.reachable">
+        SSH reachable (latency {{ probeResult.latency_ms }} ms).
+      </template>
+      <template v-else>
+        SSH failed ({{ probeResult.error_kind ?? 'unknown' }}): {{ probeResult.error }}
+      </template>
+    </p>
+    <p v-if="deployMsg" class="probe-result ok">{{ deployMsg }}</p>
 
     <p v-if="serverError" class="error">Failed to load server: {{ serverError }}</p>
 
@@ -168,5 +257,42 @@ const loadLabel = (m: Record<string, string>) => {
   background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
   color: var(--status-unreachable);
   border-radius: 4px;
+}
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.actions button {
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  padding: 0.35rem 0.85rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+.actions button:hover:not(:disabled) { border-color: var(--accent); }
+.actions button:disabled { opacity: 0.6; cursor: not-allowed; }
+.actions button.danger {
+  border-color: var(--status-unreachable);
+  color: var(--status-unreachable);
+}
+.actions button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
+}
+.probe-result {
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  margin-bottom: 0.75rem;
+}
+.probe-result.ok {
+  background: color-mix(in srgb, var(--status-reachable) 12%, transparent);
+  color: var(--status-reachable);
+}
+.probe-result.fail {
+  background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
+  color: var(--status-unreachable);
 }
 </style>

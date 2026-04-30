@@ -25,6 +25,13 @@ type Deps struct {
 	LogsBaseURL         string
 	MetricsQueryTimeout time.Duration
 	LogsQueryTimeout    time.Duration
+
+	// Phase 7 auth. Empty means no auth (dev / behind-internal-network
+	// deploys). Non-empty applies HTTP basic auth to every /api/v1/*
+	// route and the SPA — browsers handle the credential prompt
+	// natively. /healthz stays unauthenticated so external probes work.
+	AuthPassword string
+	AuthRealm    string
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -41,7 +48,10 @@ func NewRouter(d Deps) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	auth := basicAuth(d.AuthPassword, d.AuthRealm)
+
 	r.Route("/api/v1", func(api chi.Router) {
+		api.Use(auth)
 		h := &serverHandlers{store: d.Store, exec: d.Executor, logger: d.Logger}
 		h.mount(api)
 
@@ -68,11 +78,13 @@ func NewRouter(d Deps) http.Handler {
 	})
 
 	// SPA mount: every non-/api, non-/healthz path is delegated to the
-	// embedded dashboard. The web handler serves real assets when the
-	// path matches and falls back to index.html for client-side routes.
-	// Registered last so /api/v1/* and /healthz take precedence (chi
-	// resolves more specific routes first).
-	r.Handle("/*", webpkg.Handler())
+	// embedded dashboard. Auth wraps the SPA too so the dashboard
+	// itself isn't accessible without credentials. The web handler
+	// serves real assets when the path matches and falls back to
+	// index.html for client-side routes. Registered last so /api/v1/*
+	// and /healthz take precedence (chi resolves more specific routes
+	// first).
+	r.Handle("/*", auth(webpkg.Handler()))
 
 	return r
 }

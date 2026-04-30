@@ -8,6 +8,31 @@ import (
 )
 
 var (
+	// AlertStatesColumns holds the columns for the "alert_states" table.
+	AlertStatesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "rule_name", Type: field.TypeString},
+		{Name: "fingerprint", Type: field.TypeString},
+		{Name: "labels", Type: field.TypeJSON, Nullable: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"firing", "resolved"}, Default: "firing"},
+		{Name: "value", Type: field.TypeFloat64, Default: 0},
+		{Name: "first_fired_at", Type: field.TypeTime},
+		{Name: "last_notified_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// AlertStatesTable holds the schema information for the "alert_states" table.
+	AlertStatesTable = &schema.Table{
+		Name:       "alert_states",
+		Columns:    AlertStatesColumns,
+		PrimaryKey: []*schema.Column{AlertStatesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "alertstate_rule_name_fingerprint",
+				Unique:  true,
+				Columns: []*schema.Column{AlertStatesColumns[1], AlertStatesColumns[2]},
+			},
+		},
+	}
 	// LogCursorsColumns holds the columns for the "log_cursors" table.
 	LogCursorsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -60,6 +85,7 @@ var (
 	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
+		AlertStatesTable,
 		LogCursorsTable,
 		ServersTable,
 	}

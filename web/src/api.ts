@@ -57,6 +57,74 @@ export function fetchServer(id: number): Promise<Server> {
   return jsonGET<Server>(`/api/v1/servers/${id}`)
 }
 
+export interface NewServerInput {
+  name: string
+  hostname: string
+  ssh_user: string
+  ssh_port: number
+  ssh_key_path: string
+  labels?: Record<string, string>
+}
+
+export async function createServer(input: NewServerInput): Promise<Server> {
+  const resp = await fetch('/api/v1/servers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!resp.ok) {
+    const body = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+  }
+  return (await resp.json()) as Server
+}
+
+export async function patchServer(id: number, patch: Partial<NewServerInput>): Promise<Server> {
+  const resp = await fetch(`/api/v1/servers/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  if (!resp.ok) {
+    const body = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+  }
+  return (await resp.json()) as Server
+}
+
+export async function deleteServer(id: number): Promise<void> {
+  const resp = await fetch(`/api/v1/servers/${id}`, { method: 'DELETE' })
+  if (!resp.ok && resp.status !== 204) {
+    const body = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+  }
+}
+
+export interface TestConnectionResult {
+  reachable: boolean
+  latency_ms: number
+  error?: string
+  error_kind?: 'auth' | 'dial' | 'timeout' | 'unknown'
+}
+
+export async function testServerConnection(id: number): Promise<TestConnectionResult> {
+  const resp = await fetch(`/api/v1/servers/${id}/test-connection`, { method: 'POST' })
+  if (!resp.ok) {
+    const body = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+  }
+  return (await resp.json()) as TestConnectionResult
+}
+
+export async function deployCollector(id: number): Promise<{ deployed: boolean; version: string }> {
+  const resp = await fetch(`/api/v1/servers/${id}/deploy-collector`, { method: 'POST' })
+  if (!resp.ok) {
+    const body = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+  }
+  return (await resp.json()) as { deployed: boolean; version: string }
+}
+
 export function queryMetrics(query: string, range: TimeRange): Promise<MetricsQueryResponse> {
   const params = new URLSearchParams({
     query,

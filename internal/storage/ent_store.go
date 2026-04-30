@@ -13,6 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"frappe-monitor/ent"
+	entalertstate "frappe-monitor/ent/alertstate"
 	entlogcursor "frappe-monitor/ent/logcursor"
 	entserver "frappe-monitor/ent/server"
 )
@@ -98,6 +99,57 @@ func (s *EntStore) ListServers(ctx context.Context) ([]*Server, error) {
 	return out, nil
 }
 
+// UpdateServer applies partial changes. Pointer fields that are nil are
+// left untouched on the row. Returns ErrNotFound if id does not exist;
+// ErrDuplicateHostname if a hostname rename would collide.
+func (s *EntStore) UpdateServer(ctx context.Context, id int, in UpdateServer) (*Server, error) {
+	upd := s.client.Server.UpdateOneID(id)
+	if in.Name != nil {
+		upd = upd.SetName(*in.Name)
+	}
+	if in.Hostname != nil {
+		upd = upd.SetHostname(*in.Hostname)
+	}
+	if in.SSHUser != nil {
+		upd = upd.SetSSHUser(*in.SSHUser)
+	}
+	if in.SSHPort != nil {
+		upd = upd.SetSSHPort(*in.SSHPort)
+	}
+	if in.SSHKeyPath != nil {
+		upd = upd.SetSSHKeyPath(*in.SSHKeyPath)
+	}
+	if in.Labels != nil {
+		upd = upd.SetLabels(*in.Labels)
+	}
+	row, err := upd.Save(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		if isUniqueHostnameViolation(err) {
+			return nil, ErrDuplicateHostname
+		}
+		return nil, err
+	}
+	return entToServer(row), nil
+}
+
+// DeleteServer removes the server. The schema's edge cascade removes
+// associated log cursors. Alert states (Phase 6) are not edge-tied;
+// they age out on the next reconciliation cycle when their series
+// disappears from the rule's result.
+func (s *EntStore) DeleteServer(ctx context.Context, id int) error {
+	err := s.client.Server.DeleteOneID(id).Exec(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *EntStore) SetServerStatus(ctx context.Context, id int, status, lastErr string) error {
 	now := time.Now().UTC()
 	_, err := s.client.Server.UpdateOneID(id).
@@ -160,6 +212,110 @@ func (s *EntStore) UpsertLogCursor(ctx context.Context, c LogCursor) error {
 		SetLastSeenAt(time.Now().UTC()).
 		Save(ctx)
 	return err
+}
+
+// --- Alert state (Phase 6) -----------------------------------------------
+
+// ListAlertStatesByRule returns every state row currently associated
+// with a given rule name. The reconciler uses this to compute which
+// (rule, fingerprint) pairs were firing last cycle and are no longer
+// firing — those become "resolved" notifications and get deleted.
+func (s *EntStore) ListAlertStatesByRule(ctx context.Context, ruleName string) ([]*AlertState, error) {
+	rows, err := s.client.AlertState.Query().
+		Where(entalertstate.RuleName(ruleName)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*AlertState, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, entToAlertState(r))
+	}
+	return out, nil
+}
+
+// UpsertAlertState creates a row for a (rule, fingerprint) pair if
+// none exists, or updates the existing row's value/status/notified_at
+// otherwise. Returns the upserted row so the caller can compare the
+// returned LastNotifiedAt against its own clock.
+func (s *EntStore) UpsertAlertState(ctx context.Context, in AlertState) (*AlertState, error) {
+	existing, err := s.client.AlertState.Query().
+		Where(entalertstate.RuleName(in.RuleName)).
+		Where(entalertstate.Fingerprint(in.Fingerprint)).
+		Only(ctx)
+	if err != nil && !ent.IsNotFound(err) {
+		return nil, err
+	}
+	if ent.IsNotFound(err) {
+		create := s.client.AlertState.Create().
+			SetRuleName(in.RuleName).
+			SetFingerprint(in.Fingerprint).
+			SetValue(in.Value).
+			SetStatus(entalertstate.Status(firstNonEmpty(in.Status, "firing")))
+		if in.Labels != nil {
+			create = create.SetLabels(in.Labels)
+		}
+		if !in.LastNotifiedAt.IsZero() {
+			create = create.SetLastNotifiedAt(in.LastNotifiedAt)
+		}
+		row, err := create.Save(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return entToAlertState(row), nil
+	}
+	upd := s.client.AlertState.UpdateOneID(existing.ID).
+		SetValue(in.Value)
+	if in.Status != "" {
+		upd = upd.SetStatus(entalertstate.Status(in.Status))
+	}
+	if in.Labels != nil {
+		upd = upd.SetLabels(in.Labels)
+	}
+	if !in.LastNotifiedAt.IsZero() {
+		upd = upd.SetLastNotifiedAt(in.LastNotifiedAt)
+	}
+	row, err := upd.Save(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return entToAlertState(row), nil
+}
+
+func (s *EntStore) DeleteAlertState(ctx context.Context, id int) error {
+	err := s.client.AlertState.DeleteOneID(id).Exec(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+func entToAlertState(e *ent.AlertState) *AlertState {
+	out := &AlertState{
+		ID:             e.ID,
+		RuleName:       e.RuleName,
+		Fingerprint:    e.Fingerprint,
+		Labels:         e.Labels,
+		Status:         string(e.Status),
+		Value:          e.Value,
+		FirstFiredAt:   e.FirstFiredAt,
+		LastNotifiedAt: e.LastNotifiedAt,
+		UpdatedAt:      e.UpdatedAt,
+	}
+	if out.Labels == nil {
+		out.Labels = map[string]string{}
+	}
+	return out
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 func entToServer(e *ent.Server) *Server {

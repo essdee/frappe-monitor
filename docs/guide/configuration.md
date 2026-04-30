@@ -89,6 +89,59 @@ scheduler:
   # Per-job ctx timeout. Pick well above P99(ssh + parse + push).
   # 30s is generous for healthy clusters.
   per_job_timeout_seconds: 30
+
+# --- Phase 7 auth -------------------------------------------------------
+auth:
+  # Empty disables auth (dev or behind-internal-network deploys).
+  # Non-empty applies HTTP basic auth to /api/v1/* and the SPA root —
+  # browsers handle the prompt natively. /healthz stays open.
+  # Username is ignored; only the password must match.
+  password: ""
+
+  # Realm shown in the browser credential prompt. Use a stable value;
+  # browsers cache credentials per (origin, realm).
+  realm: "frappe-monitor"
+
+# --- Phase 6 alerts -----------------------------------------------------
+# Telegram alerting. enabled=false (default) means no goroutine, no
+# telegram traffic, no extra rows in SQLite. Operators must opt in.
+alerts:
+  enabled: false
+
+  # Cron tick. Floor 15s; default 60s is comfortable.
+  evaluation_interval_seconds: 60
+
+  # Cooldown before re-paging the same firing alert. 0 means notify
+  # only on first fire and on resolution.
+  notify_repeat_seconds: 3600
+
+  # Per-rule VM query timeout.
+  vm_query_timeout_seconds: 10
+
+  telegram:
+    # @BotFather token. Treat as a secret — keep this file 0640
+    # owned by root:frappe-monitor.
+    bot_token: ""
+    # Admin chat IDs to fan out to. From the Telegram getUpdates API
+    # after sending /start to your bot.
+    chat_ids: []
+    send_timeout_seconds: 5
+
+  # Skip the bundled DefaultRules() if true. Use when an operator
+  # wants total control. Most deployments leave this false.
+  disable_defaults: false
+
+  # Custom rules merged with the defaults (unless disable_defaults).
+  rules:
+    # - name: cpu_saturated
+    #   expr: 100 * (1 - rate(frappe_server_cpu_idle[5m]) /
+    #                    rate(frappe_server_cpu_user[5m] +
+    #                         frappe_server_cpu_system[5m] +
+    #                         frappe_server_cpu_idle[5m] +
+    #                         frappe_server_cpu_iowait[5m])) > 95
+    #   severity: warning
+    #   fingerprint_labels: [server]
+    #   message: "CPU on {{.Labels.server}} is {{printf \"%.1f\" .Value}}% used."
 ```
 
 ## Validated invariants
@@ -105,6 +158,9 @@ The binary refuses to start if any of these are wrong:
 | `metrics.vm_url` non-empty | Phase 2+ requires it. |
 | `logs.loki_url` non-empty | Phase 3+ requires it. |
 | `scheduler.*` ≥ 1 | Same reasoning. |
+| `alerts.evaluation_interval_seconds` ≥ 15 (when enabled) | Anything lower is a tight loop on VM. |
+| `alerts.telegram.bot_token` non-empty (when enabled) | Without it, no notification can land. |
+| `alerts.telegram.chat_ids` non-empty (when enabled) | Same — fan-out target required. |
 
 The error message names the offending key, e.g. `metrics.push_timeout_seconds must be >= 1, got 0`.
 

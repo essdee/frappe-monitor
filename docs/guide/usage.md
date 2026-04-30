@@ -35,10 +35,10 @@ If that prints `hello`, you're good.
 
 ## 2. Register a server
 
-There's no in-dashboard "Add server" form yet (Phase 7 will add it). Use curl:
+The fast path is the dashboard: open `http://<host>:8080/servers`, click **+ Add server**, fill the form, hit Add. Same flow available via API:
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/servers \
+curl -u "admin:<password>" -X POST http://127.0.0.1:8080/api/v1/servers \
   -H 'Content-Type: application/json' \
   -d '{
     "name":         "prod1",
@@ -48,6 +48,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/servers \
     "ssh_key_path": "/var/lib/frappe-monitor/.ssh/id_ed25519"
   }'
 ```
+
+Drop the `-u` flag in dev where `auth.password` is empty.
 
 Response:
 
@@ -153,18 +155,21 @@ Flat searchable table of every site reporting metrics. Substring filter across s
 
 Six presets: `15m`, `1h`, `6h`, `24h`, `7d`, `30d`. Picking one rewrites the URL with `?from=&to=&step=` query params. Every chart on every page reads from the same range. Refresh interval is selectable too (default 30s, `0` to disable polling).
 
-## Removing a server
+## Renaming or removing a server
 
-The current API has Create / List / Get / test-connection / deploy-collector. Delete is a Phase 7 deliverable; for now, you'd manipulate SQLite directly:
+In the dashboard, open the server's detail page. The header has three buttons:
+
+- **Test SSH** — runs the same probe as `POST /api/v1/servers/{id}/test-connection`.
+- **Deploy collector** — re-pushes the embedded `frappe-monitor-collect.sh` to the host.
+- **Delete** — removes the server (with a confirm prompt). Cascades log cursors; alert states age out next cycle. Existing data in VictoriaMetrics + Loki ages out on retention.
+
+Renames + SSH credential changes go via the API:
 
 ```bash
-sudo systemctl stop frappe-monitor
-sudo -u frappe-monitor sqlite3 /var/lib/frappe-monitor/monitor.db \
-    "DELETE FROM servers WHERE id = 1;"
-sudo systemctl start frappe-monitor
+curl -u "admin:<password>" -X PATCH http://127.0.0.1:8080/api/v1/servers/1 \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "renamed", "ssh_user": "newuser"}'
 ```
-
-The metrics already in VictoriaMetrics will fall off the dashboard once they age past the retention window.
 
 ## What metrics are emitted
 
@@ -185,3 +190,52 @@ curl 'http://127.0.0.1:8428/api/v1/query?query=frappe_server_load_1m'
 # Or through the monitor's proxy (so timeline filter works):
 curl 'http://127.0.0.1:8080/api/v1/metrics/query?query=frappe_server_load_1m&start=1714468800&end=1714472400&step=15'
 ```
+
+## Setting up Telegram alerting
+
+1. Create a bot. DM `@BotFather` on Telegram, send `/newbot`, follow the prompts. You get back a token like `1234567890:AAH...`.
+
+2. Get your chat ID. DM your new bot, send `/start`, then visit:
+
+   ```
+   https://api.telegram.org/bot<TOKEN>/getUpdates
+   ```
+
+   Look for `"chat":{"id": 123456789, ...}` — that integer is your chat ID. For group chats, add the bot, send a message, and look for the negative ID.
+
+3. Edit `/etc/frappe-monitor/monitor.yaml`:
+
+   ```yaml
+   alerts:
+     enabled: true
+     telegram:
+       bot_token: "1234567890:AAH..."
+       chat_ids: ["123456789", "987654321"]
+   ```
+
+4. Restart: `sudo systemctl restart frappe-monitor`.
+
+The default rule set fires on:
+
+| Rule | Trigger | Severity |
+|---|---|---|
+| `server_unreachable` | A server's last `frappe_server_load_1m` sample is more than 5 min old. | critical |
+| `disk_almost_full` | `disk_used / disk_total > 90%` on any monitored mount. | warning |
+| `site_unhealthy` | `frappe_site_is_healthy == 0` for any site. | critical |
+| `redis_queue_high` | Any Redis queue depth above 1000 jobs. | warning |
+
+Each unique target (server / mount / site / queue) gets one notification on first fire, then re-pages every `notify_repeat_seconds` (default 1h) while still firing, then a single recovery message when the condition clears.
+
+To add custom rules, append to `alerts.rules`:
+
+```yaml
+alerts:
+  rules:
+    - name: long_running_pull
+      expr: time() - timestamp(frappe_server_load_1m) > 60
+      severity: warning
+      fingerprint_labels: [server]
+      message: "Server {{.Labels.server}} hasn't reported in 1 minute (last value {{.Value}}s ago)."
+```
+
+The expression is any PromQL that returns a non-empty result vector when the alert should fire. `fingerprint_labels` chooses which series labels distinguish unique alerts; if omitted, every label is used (which is sometimes too noisy).

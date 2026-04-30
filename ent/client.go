@@ -11,6 +11,7 @@ import (
 
 	"frappe-monitor/ent/migrate"
 
+	"frappe-monitor/ent/alertstate"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/server"
 
@@ -25,6 +26,8 @@ type Client struct {
 	config
 	// Schema is the client for creating, migrating and dropping schema.
 	Schema *migrate.Schema
+	// AlertState is the client for interacting with the AlertState builders.
+	AlertState *AlertStateClient
 	// LogCursor is the client for interacting with the LogCursor builders.
 	LogCursor *LogCursorClient
 	// Server is the client for interacting with the Server builders.
@@ -40,6 +43,7 @@ func NewClient(opts ...Option) *Client {
 
 func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
+	c.AlertState = NewAlertStateClient(c.config)
 	c.LogCursor = NewLogCursorClient(c.config)
 	c.Server = NewServerClient(c.config)
 }
@@ -132,10 +136,11 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:       ctx,
-		config:    cfg,
-		LogCursor: NewLogCursorClient(cfg),
-		Server:    NewServerClient(cfg),
+		ctx:        ctx,
+		config:     cfg,
+		AlertState: NewAlertStateClient(cfg),
+		LogCursor:  NewLogCursorClient(cfg),
+		Server:     NewServerClient(cfg),
 	}, nil
 }
 
@@ -153,17 +158,18 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:       ctx,
-		config:    cfg,
-		LogCursor: NewLogCursorClient(cfg),
-		Server:    NewServerClient(cfg),
+		ctx:        ctx,
+		config:     cfg,
+		AlertState: NewAlertStateClient(cfg),
+		LogCursor:  NewLogCursorClient(cfg),
+		Server:     NewServerClient(cfg),
 	}, nil
 }
 
 // Debug returns a new debug-client. It's used to get verbose logging on specific operations.
 //
 //	client.Debug().
-//		LogCursor.
+//		AlertState.
 //		Query().
 //		Count(ctx)
 func (c *Client) Debug() *Client {
@@ -185,6 +191,7 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
+	c.AlertState.Use(hooks...)
 	c.LogCursor.Use(hooks...)
 	c.Server.Use(hooks...)
 }
@@ -192,6 +199,7 @@ func (c *Client) Use(hooks ...Hook) {
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
+	c.AlertState.Intercept(interceptors...)
 	c.LogCursor.Intercept(interceptors...)
 	c.Server.Intercept(interceptors...)
 }
@@ -199,12 +207,147 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 // Mutate implements the ent.Mutator interface.
 func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 	switch m := m.(type) {
+	case *AlertStateMutation:
+		return c.AlertState.mutate(ctx, m)
 	case *LogCursorMutation:
 		return c.LogCursor.mutate(ctx, m)
 	case *ServerMutation:
 		return c.Server.mutate(ctx, m)
 	default:
 		return nil, fmt.Errorf("ent: unknown mutation type %T", m)
+	}
+}
+
+// AlertStateClient is a client for the AlertState schema.
+type AlertStateClient struct {
+	config
+}
+
+// NewAlertStateClient returns a client for the AlertState from the given config.
+func NewAlertStateClient(c config) *AlertStateClient {
+	return &AlertStateClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `alertstate.Hooks(f(g(h())))`.
+func (c *AlertStateClient) Use(hooks ...Hook) {
+	c.hooks.AlertState = append(c.hooks.AlertState, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `alertstate.Intercept(f(g(h())))`.
+func (c *AlertStateClient) Intercept(interceptors ...Interceptor) {
+	c.inters.AlertState = append(c.inters.AlertState, interceptors...)
+}
+
+// Create returns a builder for creating a AlertState entity.
+func (c *AlertStateClient) Create() *AlertStateCreate {
+	mutation := newAlertStateMutation(c.config, OpCreate)
+	return &AlertStateCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of AlertState entities.
+func (c *AlertStateClient) CreateBulk(builders ...*AlertStateCreate) *AlertStateCreateBulk {
+	return &AlertStateCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *AlertStateClient) MapCreateBulk(slice any, setFunc func(*AlertStateCreate, int)) *AlertStateCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &AlertStateCreateBulk{err: fmt.Errorf("calling to AlertStateClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*AlertStateCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &AlertStateCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for AlertState.
+func (c *AlertStateClient) Update() *AlertStateUpdate {
+	mutation := newAlertStateMutation(c.config, OpUpdate)
+	return &AlertStateUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *AlertStateClient) UpdateOne(_m *AlertState) *AlertStateUpdateOne {
+	mutation := newAlertStateMutation(c.config, OpUpdateOne, withAlertState(_m))
+	return &AlertStateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *AlertStateClient) UpdateOneID(id int) *AlertStateUpdateOne {
+	mutation := newAlertStateMutation(c.config, OpUpdateOne, withAlertStateID(id))
+	return &AlertStateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for AlertState.
+func (c *AlertStateClient) Delete() *AlertStateDelete {
+	mutation := newAlertStateMutation(c.config, OpDelete)
+	return &AlertStateDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *AlertStateClient) DeleteOne(_m *AlertState) *AlertStateDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *AlertStateClient) DeleteOneID(id int) *AlertStateDeleteOne {
+	builder := c.Delete().Where(alertstate.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &AlertStateDeleteOne{builder}
+}
+
+// Query returns a query builder for AlertState.
+func (c *AlertStateClient) Query() *AlertStateQuery {
+	return &AlertStateQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeAlertState},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a AlertState entity by its id.
+func (c *AlertStateClient) Get(ctx context.Context, id int) (*AlertState, error) {
+	return c.Query().Where(alertstate.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *AlertStateClient) GetX(ctx context.Context, id int) *AlertState {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *AlertStateClient) Hooks() []Hook {
+	return c.hooks.AlertState
+}
+
+// Interceptors returns the client interceptors.
+func (c *AlertStateClient) Interceptors() []Interceptor {
+	return c.inters.AlertState
+}
+
+func (c *AlertStateClient) mutate(ctx context.Context, m *AlertStateMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&AlertStateCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&AlertStateUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&AlertStateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&AlertStateDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown AlertState mutation op: %q", m.Op())
 	}
 }
 
@@ -509,9 +652,9 @@ func (c *ServerClient) mutate(ctx context.Context, m *ServerMutation) (Value, er
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		LogCursor, Server []ent.Hook
+		AlertState, LogCursor, Server []ent.Hook
 	}
 	inters struct {
-		LogCursor, Server []ent.Interceptor
+		AlertState, LogCursor, Server []ent.Interceptor
 	}
 )

@@ -6,6 +6,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 )
 
+// AlertState is the predicate function for alertstate builders.
+type AlertState func(*sql.Selector)
+
 // LogCursor is the predicate function for logcursor builders.
 type LogCursor func(*sql.Selector)
 
