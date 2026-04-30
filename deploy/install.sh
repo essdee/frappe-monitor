@@ -145,10 +145,15 @@ ok "go $GO_VERSION, node $(node --version), docker $(docker --version | awk '{pr
 # ---------------------------------------------------------------------------
 echo "==> building binary (npm install + vite build + go build)"
 cd "$REPO_ROOT"
-# Build as the invoking user, not root, so node_modules ownership stays sane.
+# Build as the invoking user (not root) so node_modules ownership
+# stays sane. -H resets HOME to the target user's home dir — without
+# it, HOME stays /root from the parent sudo and Go's build cache
+# (~/.cache/go-build) plus npm's cache try to write under /root,
+# which fails. Pass PATH explicitly so /usr/local/go/bin and the
+# user's per-shell PATH augmentation from above are visible.
 SUDO_USER_NAME="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
 if [ "$SUDO_USER_NAME" != "root" ] && id -u "$SUDO_USER_NAME" >/dev/null 2>&1; then
-    sudo -u "$SUDO_USER_NAME" -E env "PATH=$PATH" make build >/dev/null
+    sudo -u "$SUDO_USER_NAME" -H env "PATH=$PATH" make build >/dev/null
 else
     make build >/dev/null
 fi
