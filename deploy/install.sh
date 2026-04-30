@@ -9,9 +9,26 @@
 #   - restarts frappe-monitor.service so the new binary takes effect
 #
 # Usage:
-#   sudo ./deploy/install.sh                # full install or upgrade
+#   sudo ./deploy/install.sh                # full install or upgrade (prompts for
+#                                           # dashboard password + alerts on first run)
 #   sudo ./deploy/install.sh --no-stack     # skip VM+Loki bring-up (split-tier deploys)
-#   sudo ./deploy/install.sh --uninstall    # stop, disable, and remove (keeps data)
+#   sudo ./deploy/install.sh --uninstall    # stop, disable, remove binary + units
+#                                           # (keeps /etc/frappe-monitor + data)
+#   sudo ./deploy/install.sh --purge        # --uninstall + nuke /etc/frappe-monitor,
+#                                           # /var/lib/frappe-monitor, docker volumes,
+#                                           # and the frappe-monitor user. Goes back
+#                                           # to a clean slate; next install re-prompts.
+#
+# Non-interactive override (skip prompts) — pass via env or args:
+#   sudo MONITOR_PASSWORD=hunter2 ./deploy/install.sh
+#   sudo ./deploy/install.sh --password=hunter2
+#   sudo ./deploy/install.sh --password=hunter2 --enable-alerts \
+#         --bot-token=<TOKEN> --chat-ids=12345,67890
+#
+# If --password isn't provided and stdin isn't a TTY, the script auto-
+# generates a random password and prints it. Existing /etc/frappe-monitor/
+# monitor.yaml is preserved on re-runs (delete it or use --purge to
+# re-prompt).
 #
 # Layout produced:
 #   /usr/local/bin/frappe-monitor              binary (CGO=0, embedded SPA)
@@ -34,10 +51,24 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 SKIP_STACK=0
 UNINSTALL=0
+PURGE=0
+# Config knobs — env wins over arg when both supplied. All blank-default
+# so the prompt-on-first-install flow stays the dominant UX.
+MONITOR_PASSWORD="${MONITOR_PASSWORD:-}"
+MONITOR_ALERTS_ENABLED="${MONITOR_ALERTS_ENABLED:-}"        # "true" | "false"
+MONITOR_TELEGRAM_BOT_TOKEN="${MONITOR_TELEGRAM_BOT_TOKEN:-}"
+MONITOR_TELEGRAM_CHAT_IDS="${MONITOR_TELEGRAM_CHAT_IDS:-}"  # comma-separated
+
 for arg in "$@"; do
     case "$arg" in
         --no-stack) SKIP_STACK=1 ;;
         --uninstall) UNINSTALL=1 ;;
+        --purge) UNINSTALL=1; PURGE=1 ;;
+        --password=*) MONITOR_PASSWORD="${arg#--password=}" ;;
+        --enable-alerts) MONITOR_ALERTS_ENABLED=true ;;
+        --no-alerts) MONITOR_ALERTS_ENABLED=false ;;
+        --bot-token=*) MONITOR_TELEGRAM_BOT_TOKEN="${arg#--bot-token=}" ;;
+        --chat-ids=*) MONITOR_TELEGRAM_CHAT_IDS="${arg#--chat-ids=}" ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
             exit 0
@@ -88,18 +119,42 @@ export PATH
 # Uninstall path
 # ---------------------------------------------------------------------------
 if [ "$UNINSTALL" = "1" ]; then
-    echo "==> uninstalling frappe-monitor (data preserved)"
-    systemctl stop frappe-monitor.service 2>/dev/null || true
-    systemctl disable frappe-monitor.service 2>/dev/null || true
+    if [ "$PURGE" = "1" ]; then
+        echo "==> purging frappe-monitor (everything goes — config, data, volumes, user)"
+    else
+        echo "==> uninstalling frappe-monitor (config + data preserved)"
+    fi
+
+    # Stop + disable systemd units first so docker volumes and dirs
+    # aren't busy when we try to delete them.
+    systemctl stop frappe-monitor.service       2>/dev/null || true
+    systemctl disable frappe-monitor.service    2>/dev/null || true
     systemctl stop frappe-monitor-stack.service 2>/dev/null || true
     systemctl disable frappe-monitor-stack.service 2>/dev/null || true
     rm -f "$SYSTEMD_DIR/frappe-monitor.service" "$SYSTEMD_DIR/frappe-monitor-stack.service"
     systemctl daemon-reload
     rm -f "$BIN_DST"
     ok "stopped, disabled, removed binary + units"
-    note "config preserved at $ETC_DIR — remove manually if desired"
-    note "data preserved at $STATE_DIR — remove manually if desired"
-    note "VM + Loki volumes preserved — 'docker volume rm frappe-monitor-vm-data frappe-monitor-loki-data' wipes them"
+
+    if [ "$PURGE" = "1" ]; then
+        rm -rf "$ETC_DIR" "$STATE_DIR" "$OPT_DIR"
+        ok "removed $ETC_DIR, $STATE_DIR, $OPT_DIR"
+        if id -u "$INSTALL_USER" >/dev/null 2>&1; then
+            userdel  "$INSTALL_USER"  2>/dev/null || true
+            groupdel "$INSTALL_GROUP" 2>/dev/null || true
+            ok "removed system user $INSTALL_USER"
+        fi
+        docker volume rm frappe-monitor-vm-data   2>/dev/null \
+            && ok "removed docker volume frappe-monitor-vm-data"   || true
+        docker volume rm frappe-monitor-loki-data 2>/dev/null \
+            && ok "removed docker volume frappe-monitor-loki-data" || true
+        echo
+        echo "==> purge complete. Re-run 'sudo ./deploy/install.sh' for a clean install."
+    else
+        note "config preserved at $ETC_DIR (delete manually or use --purge)"
+        note "data preserved at $STATE_DIR (delete manually or use --purge)"
+        note "VM + Loki volumes preserved (use --purge to wipe everything)"
+    fi
     exit 0
 fi
 
@@ -139,6 +194,63 @@ GO_VERSION=$(go env GOVERSION 2>/dev/null | sed 's/^go//')
 MAJOR_MINOR=$(echo "$GO_VERSION" | awk -F. '{print $1"."$2}')
 awk -v v="$MAJOR_MINOR" 'BEGIN { exit !(v+0 >= 1.25) }' || fail "Go $GO_VERSION too old — need ≥ 1.25"
 ok "go $GO_VERSION, node $(node --version), docker $(docker --version | awk '{print $3}' | tr -d ,)"
+
+# ---------------------------------------------------------------------------
+# Step 1.5: collect credentials BEFORE the long build, so the operator
+# types in their answers up-front and can walk away.
+#
+# Skipped entirely if /etc/frappe-monitor/monitor.yaml already exists
+# (re-runs preserve the operator's edits — use --purge to start fresh).
+# ---------------------------------------------------------------------------
+if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
+    echo "==> configuring monitor.yaml"
+
+    if [ -z "$MONITOR_PASSWORD" ]; then
+        if [ -t 0 ] && [ -t 1 ]; then
+            echo
+            echo "  Dashboard requires a password. Anyone with the password +"
+            echo "  network access to this host can see all monitored servers."
+            echo "  Press Enter alone to auto-generate a 32-char random password."
+            echo
+            read -r -p "  Dashboard password: " MONITOR_PASSWORD
+            echo
+        fi
+        if [ -z "$MONITOR_PASSWORD" ]; then
+            MONITOR_PASSWORD=$(openssl rand -base64 24 | tr -d '\n')
+            echo "  Auto-generated password:"
+            echo "      $MONITOR_PASSWORD"
+            echo "  ^^ WRITE THIS DOWN ^^   (you'll need it to log into the dashboard)"
+            echo
+        fi
+    fi
+
+    if [ -z "$MONITOR_ALERTS_ENABLED" ]; then
+        if [ -t 0 ] && [ -t 1 ]; then
+            read -r -p "  Enable Telegram alerts? [y/N]: " _ans
+            case "${_ans:-n}" in
+                [Yy]*) MONITOR_ALERTS_ENABLED=true ;;
+                *)     MONITOR_ALERTS_ENABLED=false ;;
+            esac
+        else
+            MONITOR_ALERTS_ENABLED=false
+        fi
+    fi
+
+    if [ "$MONITOR_ALERTS_ENABLED" = "true" ]; then
+        if [ -z "$MONITOR_TELEGRAM_BOT_TOKEN" ] && [ -t 0 ] && [ -t 1 ]; then
+            read -r -p "  Telegram bot token (from @BotFather): " MONITOR_TELEGRAM_BOT_TOKEN
+        fi
+        if [ -z "$MONITOR_TELEGRAM_CHAT_IDS" ] && [ -t 0 ] && [ -t 1 ]; then
+            read -r -p "  Telegram chat IDs (comma-separated): " MONITOR_TELEGRAM_CHAT_IDS
+        fi
+        if [ -z "$MONITOR_TELEGRAM_BOT_TOKEN" ] || [ -z "$MONITOR_TELEGRAM_CHAT_IDS" ]; then
+            note "alerts requested but bot_token or chat_ids missing — leaving disabled."
+            note "   set them later by editing $ETC_DIR/monitor.yaml; restart frappe-monitor."
+            MONITOR_ALERTS_ENABLED=false
+        fi
+    fi
+    ok "credentials collected"
+fi
 
 # ---------------------------------------------------------------------------
 # Step 2: build
@@ -189,13 +301,92 @@ mv -f "$BIN_DST.new" "$BIN_DST"
 ok "installed $BIN_DST"
 
 if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
-    install -m 0640 -o root -g "$INSTALL_GROUP" \
-        "$REPO_ROOT/deploy/config/monitor.yaml.example" \
-        "$ETC_DIR/monitor.yaml"
-    # Production state path is /var/lib/...; the example points at ./data/.
-    sed -i 's|path: "./data/monitor.db"|path: "/var/lib/frappe-monitor/monitor.db"|' \
-        "$ETC_DIR/monitor.yaml"
-    ok "wrote default config to $ETC_DIR/monitor.yaml (state path → $STATE_DIR/monitor.db)"
+    # Escape values for embedding in a double-quoted YAML string:
+    # backslash and double-quote become \\ and \" respectively.
+    yaml_dq() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+    PW_YAML=$(yaml_dq "$MONITOR_PASSWORD")
+    BOT_YAML=$(yaml_dq "$MONITOR_TELEGRAM_BOT_TOKEN")
+
+    # Build the chat_ids YAML array from the comma-separated input.
+    CHAT_IDS_YAML="[]"
+    if [ -n "$MONITOR_TELEGRAM_CHAT_IDS" ]; then
+        CHAT_IDS_YAML="["
+        _first=1
+        IFS=',' read -ra _ids <<< "$MONITOR_TELEGRAM_CHAT_IDS"
+        for _id in "${_ids[@]}"; do
+            _id="${_id## }"; _id="${_id%% }"  # trim leading + trailing space
+            [ -z "$_id" ] && continue
+            if [ "$_first" = 1 ]; then _first=0; else CHAT_IDS_YAML+=", "; fi
+            CHAT_IDS_YAML+="\"$(yaml_dq "$_id")\""
+        done
+        CHAT_IDS_YAML+="]"
+    fi
+
+    # Write the config from a heredoc — no sed, no escaping landmines.
+    # Permissions: 0640 root:frappe-monitor so the service can read it
+    # but other users on the host can't grep out the password.
+    umask 027
+    cat > "$ETC_DIR/monitor.yaml" <<EOF
+# frappe-monitor configuration.
+# Generated by deploy/install.sh on $(date -Iseconds).
+# Edit this file directly, then run:
+#     sudo systemctl restart frappe-monitor
+# to apply. Full reference: docs/guide/configuration.md.
+
+server:
+  listen_addr: ":8080"
+  read_timeout_seconds: 15
+  write_timeout_seconds: 15
+
+database:
+  path: "$STATE_DIR/monitor.db"
+
+ssh:
+  dial_timeout_seconds: 10
+  command_timeout_seconds: 30
+  max_connections_per_host: 2
+
+log:
+  level: "info"
+  format: "json"
+
+metrics:
+  vm_url: "http://127.0.0.1:8428"
+  push_timeout_seconds: 5
+  query_timeout_seconds: 15
+
+logs:
+  loki_url: "http://127.0.0.1:3100"
+  push_timeout_seconds: 5
+  query_timeout_seconds: 15
+
+scheduler:
+  default_interval_seconds: 900
+  max_parallel: 10
+  per_job_timeout_seconds: 30
+
+# Set during install (sudo ./deploy/install.sh prompts for these).
+# Re-prompt by deleting this file or running 'sudo ./deploy/install.sh --purge'.
+auth:
+  password: "$PW_YAML"
+  realm: "frappe-monitor"
+
+alerts:
+  enabled: $MONITOR_ALERTS_ENABLED
+  evaluation_interval_seconds: 60
+  notify_repeat_seconds: 3600
+  vm_query_timeout_seconds: 10
+  telegram:
+    bot_token: "$BOT_YAML"
+    chat_ids: $CHAT_IDS_YAML
+    send_timeout_seconds: 5
+  disable_defaults: false
+  rules: []
+EOF
+    chmod 0640 "$ETC_DIR/monitor.yaml"
+    chown root:"$INSTALL_GROUP" "$ETC_DIR/monitor.yaml"
+    ok "wrote $ETC_DIR/monitor.yaml (auth + alerts populated from your answers)"
 else
     ok "preserving existing $ETC_DIR/monitor.yaml"
 fi
