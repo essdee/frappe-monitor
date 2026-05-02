@@ -28,6 +28,8 @@ type Server struct {
 	SSHPort int `json:"ssh_port,omitempty"`
 	// SSHKeyPath holds the value of the "ssh_key_path" field.
 	SSHKeyPath string `json:"ssh_key_path,omitempty"`
+	// BenchPaths holds the value of the "bench_paths" field.
+	BenchPaths []string `json:"bench_paths,omitempty"`
 	// Labels holds the value of the "labels" field.
 	Labels map[string]string `json:"labels,omitempty"`
 	// Status holds the value of the "status" field.
@@ -69,7 +71,7 @@ func (*Server) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case server.FieldLabels:
+		case server.FieldBenchPaths, server.FieldLabels:
 			values[i] = new([]byte)
 		case server.FieldID, server.FieldSSHPort:
 			values[i] = new(sql.NullInt64)
@@ -127,6 +129,14 @@ func (_m *Server) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field ssh_key_path", values[i])
 			} else if value.Valid {
 				_m.SSHKeyPath = value.String
+			}
+		case server.FieldBenchPaths:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field bench_paths", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.BenchPaths); err != nil {
+					return fmt.Errorf("unmarshal field bench_paths: %w", err)
+				}
 			}
 		case server.FieldLabels:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -222,6 +232,9 @@ func (_m *Server) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("ssh_key_path=")
 	builder.WriteString(_m.SSHKeyPath)
+	builder.WriteString(", ")
+	builder.WriteString("bench_paths=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BenchPaths))
 	builder.WriteString(", ")
 	builder.WriteString("labels=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Labels))

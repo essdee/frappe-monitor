@@ -28,6 +28,7 @@ type Server struct {
 	SSHUser      string
 	SSHPort      int
 	SSHKeyPath   string
+	BenchPaths   []string
 	Labels       map[string]string
 	Status       string // "unknown" | "reachable" | "unreachable"
 	LastPingedAt *time.Time
@@ -42,6 +43,7 @@ type NewServer struct {
 	SSHUser    string
 	SSHPort    int
 	SSHKeyPath string
+	BenchPaths []string
 	Labels     map[string]string
 }
 
@@ -54,6 +56,7 @@ type UpdateServer struct {
 	SSHUser    *string
 	SSHPort    *int
 	SSHKeyPath *string
+	BenchPaths *[]string
 	Labels     *map[string]string
 }
 

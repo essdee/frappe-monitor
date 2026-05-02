@@ -85,11 +85,11 @@ func init() {
 	// server.SSHKeyPathValidator is a validator for the "ssh_key_path" field. It is called by the builders before save.
 	server.SSHKeyPathValidator = serverDescSSHKeyPath.Validators[0].(func(string) error)
 	// serverDescCreatedAt is the schema descriptor for created_at field.
-	serverDescCreatedAt := serverFields[9].Descriptor()
+	serverDescCreatedAt := serverFields[10].Descriptor()
 	// server.DefaultCreatedAt holds the default value on creation for the created_at field.
 	server.DefaultCreatedAt = serverDescCreatedAt.Default.(func() time.Time)
 	// serverDescUpdatedAt is the schema descriptor for updated_at field.
-	serverDescUpdatedAt := serverFields[10].Descriptor()
+	serverDescUpdatedAt := serverFields[11].Descriptor()
 	// server.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	server.DefaultUpdatedAt = serverDescUpdatedAt.Default.(func() time.Time)
 	// server.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

@@ -47,6 +47,25 @@ type Pipeline struct {
 // remote user before the collector is invoked.
 const CollectorPath = "$HOME/.frappe-monitor/frappe-monitor-collect.sh"
 
+// buildCollectCmd returns the shell command to run the collector,
+// optionally with BENCH_PATHS preset so the bash side skips its
+// auto-discovery and uses the operator-supplied paths instead. When
+// benchPaths is empty, the bash side falls back to scanning standard
+// locations.
+//
+// Paths are joined with ':' (matching the bash collector's parser)
+// and shell-escaped via single-quote wrapping so paths with spaces
+// or quotes don't break the command line.
+func buildCollectCmd(benchPaths []string) string {
+	if len(benchPaths) == 0 {
+		return CollectorPath
+	}
+	joined := strings.Join(benchPaths, ":")
+	// Single-quote escape: ' → '\'' (close, escape, reopen).
+	escaped := "'" + strings.ReplaceAll(joined, "'", `'\''`) + "'"
+	return "BENCH_PATHS=" + escaped + " " + CollectorPath
+}
+
 // PullOnce runs one full cycle for the server with the given id:
 //
 //	store.GetServer  → ssh.Run(CollectorPath)
@@ -73,7 +92,7 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 	target := sshpkg.Target{
 		Host: srv.Hostname, Port: srv.SSHPort, User: srv.SSHUser, KeyPath: srv.SSHKeyPath,
 	}
-	stdout, runErr := p.Exec.Run(ctx, target, CollectorPath)
+	stdout, runErr := p.Exec.Run(ctx, target, buildCollectCmd(srv.BenchPaths))
 	if runErr != nil {
 		wrapped := fmt.Errorf("ssh: %w", runErr)
 		_ = p.markUnreachable(ctx, serverID, wrapped)

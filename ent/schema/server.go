@@ -19,6 +19,13 @@ func (Server) Fields() []ent.Field {
 		field.String("ssh_user").Default("monitor"),
 		field.Int("ssh_port").Default(22).Positive(),
 		field.String("ssh_key_path").NotEmpty(),
+		// Optional list of explicit bench paths on this server. When
+		// empty, the bench-side collector falls back to scanning
+		// /home/*/frappe-bench, /home/*/bench-* and /opt/bench/* —
+		// fine for one-bench hosts, but per-bench-customized hosts
+		// (and multi-bench hosts) can supply absolute paths here to
+		// short-circuit discovery and ensure every bench is included.
+		field.JSON("bench_paths", []string{}).Optional(),
 		field.JSON("labels", map[string]string{}).Optional(),
 		field.Enum("status").
 			Values("unknown", "reachable", "unreachable").

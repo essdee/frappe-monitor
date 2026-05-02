@@ -9,6 +9,8 @@ export interface Server {
   ssh_user: string
   ssh_port: number
   ssh_key_path: string
+  /** Optional explicit bench paths. Empty = auto-discover. */
+  bench_paths: string[]
   status: 'unknown' | 'reachable' | 'unreachable'
   last_pinged_at: string | null
   last_error?: string
@@ -63,6 +65,8 @@ export interface NewServerInput {
   ssh_user: string
   ssh_port: number
   ssh_key_path: string
+  /** Optional. Empty = let the bench-side script auto-discover. */
+  bench_paths?: string[]
   labels?: Record<string, string>
 }
 

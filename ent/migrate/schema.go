@@ -70,6 +70,7 @@ var (
 		{Name: "ssh_user", Type: field.TypeString, Default: "monitor"},
 		{Name: "ssh_port", Type: field.TypeInt, Default: 22},
 		{Name: "ssh_key_path", Type: field.TypeString},
+		{Name: "bench_paths", Type: field.TypeJSON, Nullable: true},
 		{Name: "labels", Type: field.TypeJSON, Nullable: true},
 		{Name: "status", Type: field.TypeEnum, Enums: []string{"unknown", "reachable", "unreachable"}, Default: "unknown"},
 		{Name: "last_pinged_at", Type: field.TypeTime, Nullable: true},

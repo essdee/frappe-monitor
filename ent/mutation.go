@@ -1342,6 +1342,8 @@ type ServerMutation struct {
 	ssh_port           *int
 	addssh_port        *int
 	ssh_key_path       *string
+	bench_paths        *[]string
+	appendbench_paths  []string
 	labels             *map[string]string
 	status             *server.Status
 	last_pinged_at     *time.Time
@@ -1653,6 +1655,71 @@ func (m *ServerMutation) OldSSHKeyPath(ctx context.Context) (v string, err error
 // ResetSSHKeyPath resets all changes to the "ssh_key_path" field.
 func (m *ServerMutation) ResetSSHKeyPath() {
 	m.ssh_key_path = nil
+}
+
+// SetBenchPaths sets the "bench_paths" field.
+func (m *ServerMutation) SetBenchPaths(s []string) {
+	m.bench_paths = &s
+	m.appendbench_paths = nil
+}
+
+// BenchPaths returns the value of the "bench_paths" field in the mutation.
+func (m *ServerMutation) BenchPaths() (r []string, exists bool) {
+	v := m.bench_paths
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBenchPaths returns the old "bench_paths" field's value of the Server entity.
+// If the Server object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ServerMutation) OldBenchPaths(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBenchPaths is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBenchPaths requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBenchPaths: %w", err)
+	}
+	return oldValue.BenchPaths, nil
+}
+
+// AppendBenchPaths adds s to the "bench_paths" field.
+func (m *ServerMutation) AppendBenchPaths(s []string) {
+	m.appendbench_paths = append(m.appendbench_paths, s...)
+}
+
+// AppendedBenchPaths returns the list of values that were appended to the "bench_paths" field in this mutation.
+func (m *ServerMutation) AppendedBenchPaths() ([]string, bool) {
+	if len(m.appendbench_paths) == 0 {
+		return nil, false
+	}
+	return m.appendbench_paths, true
+}
+
+// ClearBenchPaths clears the value of the "bench_paths" field.
+func (m *ServerMutation) ClearBenchPaths() {
+	m.bench_paths = nil
+	m.appendbench_paths = nil
+	m.clearedFields[server.FieldBenchPaths] = struct{}{}
+}
+
+// BenchPathsCleared returns if the "bench_paths" field was cleared in this mutation.
+func (m *ServerMutation) BenchPathsCleared() bool {
+	_, ok := m.clearedFields[server.FieldBenchPaths]
+	return ok
+}
+
+// ResetBenchPaths resets all changes to the "bench_paths" field.
+func (m *ServerMutation) ResetBenchPaths() {
+	m.bench_paths = nil
+	m.appendbench_paths = nil
+	delete(m.clearedFields, server.FieldBenchPaths)
 }
 
 // SetLabels sets the "labels" field.
@@ -1998,7 +2065,7 @@ func (m *ServerMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ServerMutation) Fields() []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 12)
 	if m.name != nil {
 		fields = append(fields, server.FieldName)
 	}
@@ -2013,6 +2080,9 @@ func (m *ServerMutation) Fields() []string {
 	}
 	if m.ssh_key_path != nil {
 		fields = append(fields, server.FieldSSHKeyPath)
+	}
+	if m.bench_paths != nil {
+		fields = append(fields, server.FieldBenchPaths)
 	}
 	if m.labels != nil {
 		fields = append(fields, server.FieldLabels)
@@ -2050,6 +2120,8 @@ func (m *ServerMutation) Field(name string) (ent.Value, bool) {
 		return m.SSHPort()
 	case server.FieldSSHKeyPath:
 		return m.SSHKeyPath()
+	case server.FieldBenchPaths:
+		return m.BenchPaths()
 	case server.FieldLabels:
 		return m.Labels()
 	case server.FieldStatus:
@@ -2081,6 +2153,8 @@ func (m *ServerMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldSSHPort(ctx)
 	case server.FieldSSHKeyPath:
 		return m.OldSSHKeyPath(ctx)
+	case server.FieldBenchPaths:
+		return m.OldBenchPaths(ctx)
 	case server.FieldLabels:
 		return m.OldLabels(ctx)
 	case server.FieldStatus:
@@ -2136,6 +2210,13 @@ func (m *ServerMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetSSHKeyPath(v)
+		return nil
+	case server.FieldBenchPaths:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBenchPaths(v)
 		return nil
 	case server.FieldLabels:
 		v, ok := value.(map[string]string)
@@ -2224,6 +2305,9 @@ func (m *ServerMutation) AddField(name string, value ent.Value) error {
 // mutation.
 func (m *ServerMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(server.FieldBenchPaths) {
+		fields = append(fields, server.FieldBenchPaths)
+	}
 	if m.FieldCleared(server.FieldLabels) {
 		fields = append(fields, server.FieldLabels)
 	}
@@ -2247,6 +2331,9 @@ func (m *ServerMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *ServerMutation) ClearField(name string) error {
 	switch name {
+	case server.FieldBenchPaths:
+		m.ClearBenchPaths()
+		return nil
 	case server.FieldLabels:
 		m.ClearLabels()
 		return nil
@@ -2278,6 +2365,9 @@ func (m *ServerMutation) ResetField(name string) error {
 		return nil
 	case server.FieldSSHKeyPath:
 		m.ResetSSHKeyPath()
+		return nil
+	case server.FieldBenchPaths:
+		m.ResetBenchPaths()
 		return nil
 	case server.FieldLabels:
 		m.ResetLabels()

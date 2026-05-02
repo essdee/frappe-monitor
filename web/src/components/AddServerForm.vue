@@ -11,8 +11,18 @@ const form = ref<NewServerInput>({
   ssh_port: 22,
   ssh_key_path: '',
 })
+// Bench paths are entered as one path per line in a textarea —
+// most operator-friendly UX for an unbounded list.
+const benchPathsText = ref('')
 const submitting = ref(false)
 const error = ref<string | null>(null)
+
+function parseBenchPaths(s: string): string[] {
+  return s
+    .split('\n')
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+}
 
 async function submit() {
   if (!form.value.name || !form.value.hostname || !form.value.ssh_key_path) {
@@ -22,7 +32,12 @@ async function submit() {
   submitting.value = true
   error.value = null
   try {
-    await createServer(form.value)
+    const payload: NewServerInput = { ...form.value }
+    const paths = parseBenchPaths(benchPathsText.value)
+    if (paths.length > 0) {
+      payload.bench_paths = paths
+    }
+    await createServer(payload)
     emit('created')
     // Reset for next time the form opens.
     form.value = {
@@ -32,6 +47,7 @@ async function submit() {
       ssh_port: 22,
       ssh_key_path: '',
     }
+    benchPathsText.value = ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -74,6 +90,18 @@ async function submit() {
         required
         autocomplete="off"
       />
+    </label>
+
+    <label>
+      <span>
+        Bench paths
+        <em class="muted">(one per line, on the remote host. Leave blank to auto-discover under <code>/home/*/frappe-bench</code>, <code>/home/*/bench-*</code>, <code>/opt/bench/*</code>.)</em>
+      </span>
+      <textarea
+        v-model="benchPathsText"
+        rows="3"
+        placeholder="/home/anas/frappe-bench&#10;/home/anas/bench-staging"
+      ></textarea>
     </label>
 
     <p v-if="error" class="error">{{ error }}</p>
@@ -120,7 +148,8 @@ label span {
   color: var(--muted);
   margin-bottom: 0.2rem;
 }
-input {
+input,
+textarea {
   width: 100%;
   padding: 0.4rem 0.6rem;
   border: 1px solid var(--card-border);
@@ -130,9 +159,23 @@ input {
   font: inherit;
   box-sizing: border-box;
 }
-input:focus {
+textarea {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+input:focus,
+textarea:focus {
   outline: none;
   border-color: var(--accent);
+}
+.muted {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 0.78rem;
+}
+.muted code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 .row {
   display: flex;

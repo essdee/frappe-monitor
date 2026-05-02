@@ -400,6 +400,16 @@ func SSHKeyPathContainsFold(v string) predicate.Server {
 	return predicate.Server(sql.FieldContainsFold(FieldSSHKeyPath, v))
 }
 
+// BenchPathsIsNil applies the IsNil predicate on the "bench_paths" field.
+func BenchPathsIsNil() predicate.Server {
+	return predicate.Server(sql.FieldIsNull(FieldBenchPaths))
+}
+
+// BenchPathsNotNil applies the NotNil predicate on the "bench_paths" field.
+func BenchPathsNotNil() predicate.Server {
+	return predicate.Server(sql.FieldNotNull(FieldBenchPaths))
+}
+
 // LabelsIsNil applies the IsNil predicate on the "labels" field.
 func LabelsIsNil() predicate.Server {
 	return predicate.Server(sql.FieldIsNull(FieldLabels))

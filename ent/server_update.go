@@ -13,6 +13,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 )
 
@@ -103,6 +104,24 @@ func (_u *ServerUpdate) SetNillableSSHKeyPath(v *string) *ServerUpdate {
 	if v != nil {
 		_u.SetSSHKeyPath(*v)
 	}
+	return _u
+}
+
+// SetBenchPaths sets the "bench_paths" field.
+func (_u *ServerUpdate) SetBenchPaths(v []string) *ServerUpdate {
+	_u.mutation.SetBenchPaths(v)
+	return _u
+}
+
+// AppendBenchPaths appends value to the "bench_paths" field.
+func (_u *ServerUpdate) AppendBenchPaths(v []string) *ServerUpdate {
+	_u.mutation.AppendBenchPaths(v)
+	return _u
+}
+
+// ClearBenchPaths clears the value of the "bench_paths" field.
+func (_u *ServerUpdate) ClearBenchPaths() *ServerUpdate {
+	_u.mutation.ClearBenchPaths()
 	return _u
 }
 
@@ -315,6 +334,17 @@ func (_u *ServerUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.SSHKeyPath(); ok {
 		_spec.SetField(server.FieldSSHKeyPath, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.BenchPaths(); ok {
+		_spec.SetField(server.FieldBenchPaths, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBenchPaths(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, server.FieldBenchPaths, value)
+		})
+	}
+	if _u.mutation.BenchPathsCleared() {
+		_spec.ClearField(server.FieldBenchPaths, field.TypeJSON)
+	}
 	if value, ok := _u.mutation.Labels(); ok {
 		_spec.SetField(server.FieldLabels, field.TypeJSON, value)
 	}
@@ -478,6 +508,24 @@ func (_u *ServerUpdateOne) SetNillableSSHKeyPath(v *string) *ServerUpdateOne {
 	if v != nil {
 		_u.SetSSHKeyPath(*v)
 	}
+	return _u
+}
+
+// SetBenchPaths sets the "bench_paths" field.
+func (_u *ServerUpdateOne) SetBenchPaths(v []string) *ServerUpdateOne {
+	_u.mutation.SetBenchPaths(v)
+	return _u
+}
+
+// AppendBenchPaths appends value to the "bench_paths" field.
+func (_u *ServerUpdateOne) AppendBenchPaths(v []string) *ServerUpdateOne {
+	_u.mutation.AppendBenchPaths(v)
+	return _u
+}
+
+// ClearBenchPaths clears the value of the "bench_paths" field.
+func (_u *ServerUpdateOne) ClearBenchPaths() *ServerUpdateOne {
+	_u.mutation.ClearBenchPaths()
 	return _u
 }
 
@@ -719,6 +767,17 @@ func (_u *ServerUpdateOne) sqlSave(ctx context.Context) (_node *Server, err erro
 	}
 	if value, ok := _u.mutation.SSHKeyPath(); ok {
 		_spec.SetField(server.FieldSSHKeyPath, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BenchPaths(); ok {
+		_spec.SetField(server.FieldBenchPaths, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBenchPaths(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, server.FieldBenchPaths, value)
+		})
+	}
+	if _u.mutation.BenchPathsCleared() {
+		_spec.ClearField(server.FieldBenchPaths, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.Labels(); ok {
 		_spec.SetField(server.FieldLabels, field.TypeJSON, value)
