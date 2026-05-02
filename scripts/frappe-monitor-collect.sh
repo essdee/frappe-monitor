@@ -17,7 +17,15 @@
 
 set -euo pipefail
 
-VERSION="2.3.0"
+VERSION="2.4.0"
+
+# Self-renice + ionice so the collector NEVER outranks the bench's own
+# workloads. CPU nice +10 deprioritizes us under load (default user
+# procs run at 0); ionice best-effort class 7 is the lowest priority
+# Linux exposes for IO. If renice/ionice aren't installed, we silently
+# fall through — being polite is best-effort, not load-bearing.
+renice +10 -p $$ >/dev/null 2>&1 || true
+command -v ionice >/dev/null 2>&1 && ionice -c 2 -n 7 -p $$ >/dev/null 2>&1 || true
 
 # Trap any error so the operator sees what actually failed, then end
 # the output cleanly with ###END so the parser doesn't bail with a

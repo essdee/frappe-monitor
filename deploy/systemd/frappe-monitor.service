@@ -46,6 +46,21 @@ MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 ReadWritePaths=/var/lib/frappe-monitor
 
+# Resource caps — the binary should never become a burden on the host.
+# Steady-state usage on a small fleet (≤25 servers, 60–900s pull
+# cadence) is ~30–60 MB resident memory and ~0.1% CPU averaged. These
+# caps leave 10× headroom for spikes (bursty SSH fan-out + parse) but
+# refuse to let a runaway take the host down.
+MemoryHigh=384M
+MemoryMax=512M
+CPUQuota=200%
+TasksMax=512
+# I/O scheduling: best-effort with a low-ish priority (level 4) so
+# the bench's own workloads always win when both compete for disk.
+IOSchedulingClass=best-effort
+IOSchedulingPriority=4
+Nice=5
+
 # stdout/stderr go to journald (slog JSON). Tail with:
 #   journalctl -u frappe-monitor -f
 StandardOutput=journal

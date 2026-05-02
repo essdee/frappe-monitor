@@ -14,7 +14,11 @@
 
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
+
+# Self-renice + ionice so we never outrank the bench's real workloads.
+renice +10 -p $$ >/dev/null 2>&1 || true
+command -v ionice >/dev/null 2>&1 && ionice -c 2 -n 7 -p $$ >/dev/null 2>&1 || true
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo '{"error":"python3 not found on this host — install it for system snapshots"}' >&2

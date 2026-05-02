@@ -26,11 +26,18 @@ services:
       # The collector is the only writer and pushes complete cycles, so
       # late samples aren't a concern for us.
       - "-search.latencyOffset=0s"
-      # Cap memory ceiling. Tune to ~50% of the host's RAM dedicated to
-      # the metrics tier; default is unbounded which can OOM on small VPS.
+      # Tell VM not to use more than 40% of CONTAINER memory (we cap the
+      # container itself below); under that ceiling it self-throttles.
       - "-memory.allowedPercent=40"
     volumes:
       - vm-data:/data
+    # Hard caps so the metrics tier can never starve the host. Tuned
+    # for a small fleet (≤25 servers): ~50–100 MB steady, with room
+    # for the in-memory index. Bump if the dashboard "Sites" page
+    # ever times out under load.
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8428/health"]
       interval: 10s
@@ -46,6 +53,11 @@ services:
     command: -config.file=/etc/loki/local-config.yaml
     volumes:
       - loki-data:/loki
+    # Loki is the lighter of the two; its working set is mostly
+    # write-side. 256 MB is generous for our log volume.
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.5
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:3100/ready"]
       interval: 10s
