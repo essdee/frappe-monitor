@@ -63,6 +63,9 @@ import TimelineFilter from './components/TimelineFilter.vue'
   border-right: 1px solid var(--card-border);
   display: flex;
   flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
 .brand {
   display: flex;
@@ -128,5 +131,59 @@ nav {
 .content {
   padding: 1.75rem 2rem;
   flex: 1;
+}
+
+/* ----- Tablet (≤ 1024px) ------------------------------------------ */
+@media (max-width: 1024px) {
+  .app-shell { grid-template-columns: 200px 1fr; }
+  .content   { padding: 1.25rem 1.25rem; }
+  .header    { padding: 0.75rem 1.25rem; }
+}
+
+/* ----- Mobile (≤ 720px): sidebar collapses to a sticky top bar ----- */
+@media (max-width: 720px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr;
+  }
+  .sidebar {
+    position: sticky;
+    top: 0;
+    height: auto;
+    z-index: 20;
+    border-right: none;
+    border-bottom: 1px solid var(--card-border);
+    padding: 0.75rem 1rem;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .brand {
+    border-bottom: none;
+    padding: 0;
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+  .brand-text h1 { font-size: 0.92rem; }
+  .brand-sub { display: none; }
+  nav {
+    flex-direction: row;
+    gap: 0.25rem;
+    flex: 1;
+    justify-content: flex-end;
+  }
+  .nav-link {
+    padding: 0.4rem 0.55rem;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+  .nav-link span { display: none; }   /* icons only on mobile */
+  .nav-link.router-link-active {
+    background: var(--accent-soft);
+  }
+  .header { padding: 0.5rem 1rem; position: static; }
+  .content { padding: 1rem; }
 }
 </style>

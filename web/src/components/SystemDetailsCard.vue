@@ -451,4 +451,29 @@ th {
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: 0.85rem;
 }
+
+/* ----- mobile ----- */
+@media (max-width: 720px) {
+  .card {
+    padding: 0.75rem 0.85rem 1rem;
+  }
+  .head { flex-wrap: wrap; gap: 0.5rem; }
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+  /* DL columns get tighter; values truncate gracefully. */
+  dl {
+    grid-template-columns: 4.5rem 1fr;
+    font-size: 0.82rem;
+  }
+  dd { word-break: break-word; }
+  .cmd { max-width: 16ch; }
+  /* Process tables horizontal-scroll on phone (inherits from style.css);
+     the inline disk usage bar shrinks. */
+  .bar.inline { width: 50px; }
+  table { font-size: 0.8rem; }
+  th, td { padding: 0.4rem 0.55rem; }
+  .proc-grid { grid-template-columns: 1fr; }
+}
 </style>

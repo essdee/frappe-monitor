@@ -129,3 +129,27 @@ code {
   vertical-align: -0.15em;
   flex-shrink: 0;
 }
+
+/* ----- Mobile responsive baseline ---------------------------------- */
+/* Every <table> in a card scrolls horizontally on small screens by
+   default — no per-component CSS needed. */
+@media (max-width: 720px) {
+  html { font-size: 14px; }
+  table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Page headers: stack title and actions vertically. */
+  section > header,
+  .page-header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .content,
+  main { padding: 0.75rem !important; }
+}
