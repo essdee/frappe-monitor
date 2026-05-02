@@ -88,6 +88,7 @@ type Store interface {
 
 	// Alert state — Phase 6.
 	ListAlertStatesByRule(ctx context.Context, ruleName string) ([]*AlertState, error)
+	ListAlertStates(ctx context.Context) ([]*AlertState, error)
 	UpsertAlertState(ctx context.Context, in AlertState) (*AlertState, error)
 	DeleteAlertState(ctx context.Context, id int) error
 

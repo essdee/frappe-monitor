@@ -173,6 +173,18 @@ func run(cfgPath string) error {
 		// Hot register/deregister scheduler entries on server CRUD.
 		OnServerCreated: onServerCreated,
 		OnServerDeleted: onServerDeleted,
+
+		// Phase 6: surface configured rules + enabled flag to the
+		// dashboard's Alerts page. alertsSvc may be nil when alerts
+		// are disabled; in that case Rules() is unavailable, so
+		// fall back to whatever the operator declared (likely empty).
+		AlertsRules: func() []alerts.Rule {
+			if alertsSvc != nil {
+				return alertsSvc.Rules()
+			}
+			return alertsCfg.Rules
+		}(),
+		AlertsEnabled: cfg.Alerts.Enabled,
 	})
 
 	srv := &http.Server{

@@ -169,3 +169,11 @@ func (s *Service) Stop() {
 	close(s.stop)
 	s.wg.Wait()
 }
+
+// Rules returns a copy of the rules the evaluator runs. Used by the
+// API to render the "configured rules" list on the Alerts page.
+func (s *Service) Rules() []Rule {
+	out := make([]Rule, len(s.evaluator.Rules))
+	copy(out, s.evaluator.Rules)
+	return out
+}

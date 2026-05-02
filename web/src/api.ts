@@ -209,6 +209,37 @@ export interface LogsQueryResponse {
   error?: string
 }
 
+// --- Phase 6 alerts ----------------------------------------------------
+
+export interface AlertRule {
+  name: string
+  expr: string
+  severity: string
+  message?: string
+  fingerprint_labels?: string[]
+}
+
+export interface FiringAlert {
+  id: number
+  rule_name: string
+  fingerprint: string
+  status: 'firing' | 'resolved'
+  value: number
+  labels: Record<string, string>
+  first_fired_at: string
+  last_notified_at: string
+}
+
+export interface AlertsResponse {
+  enabled: boolean
+  rules: AlertRule[]
+  firing: FiringAlert[]
+}
+
+export function fetchAlerts(): Promise<AlertsResponse> {
+  return jsonGET<AlertsResponse>('/api/v1/alerts')
+}
+
 export function queryLogs(
   query: string,
   range: TimeRange,

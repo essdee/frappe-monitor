@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { Plus, RefreshCw, Server as ServerIcon } from 'lucide-vue-next'
 import { useTimeRange } from '../composables/useTimeRange'
 import { useServers } from '../composables/useServers'
 import ServerCard from '../components/ServerCard.vue'
@@ -28,11 +29,18 @@ const sorted = computed(() => {
 <template>
   <section>
     <header class="page-header">
-      <h2>Servers</h2>
+      <div class="title">
+        <ServerIcon :size="22" :stroke-width="2.25" class="title-icon" />
+        <h2>Servers</h2>
+        <span class="count">{{ servers.length }}</span>
+      </div>
       <div class="header-actions">
-        <button v-if="!showAdd" class="primary" @click="showAdd = true">+ Add server</button>
+        <button v-if="!showAdd" class="primary" @click="showAdd = true">
+          <Plus :size="16" :stroke-width="2.5" /> Add server
+        </button>
         <button class="refresh-btn" :disabled="loading" @click="refresh">
-          {{ loading ? 'Refreshing…' : 'Refresh' }}
+          <RefreshCw :size="14" :stroke-width="2" :class="{ spin: loading }" />
+          {{ loading ? 'Refreshing' : 'Refresh' }}
         </button>
       </div>
     </header>
@@ -59,8 +67,36 @@ const sorted = computed(() => {
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 1rem;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  gap: 1rem;
+}
+.title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.title-icon {
+  color: var(--accent);
+}
+.title h2 {
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+.count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.4rem;
+  padding: 0 0.4rem;
+  background: var(--bg-hover);
+  color: var(--muted);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 .header-actions {
   display: flex;
@@ -68,20 +104,44 @@ const sorted = computed(() => {
 }
 .refresh-btn,
 .primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   background: var(--card-bg);
   color: var(--fg);
   border: 1px solid var(--card-border);
-  padding: 0.35rem 0.85rem;
-  border-radius: 4px;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
   cursor: pointer;
   font: inherit;
+  font-size: 0.88rem;
+  font-weight: 500;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.refresh-btn:hover:not(:disabled),
+.primary:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+.refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 .primary {
   background: var(--accent);
-  color: white;
+  color: var(--fg-strong);
   border-color: var(--accent);
 }
-.primary:hover { opacity: 0.9; }
+.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 .refresh-btn:hover:not(:disabled) {
   border-color: var(--accent);
 }

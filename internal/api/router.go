@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"frappe-monitor/internal/alerts"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 	webpkg "frappe-monitor/internal/web"
@@ -40,6 +41,13 @@ type Deps struct {
 	// restart. Nil hooks are a silent no-op (tests don't need them).
 	OnServerCreated func(serverID int)
 	OnServerDeleted func(serverID int)
+
+	// Phase 6 alerts: passed when alerts.Service is enabled so the
+	// Alerts page in the dashboard can render configured rules and
+	// firing state. AlertsRules nil/empty is fine (the page just
+	// shows "no rules configured").
+	AlertsRules   []alerts.Rule
+	AlertsEnabled bool
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -89,6 +97,17 @@ func NewRouter(d Deps) http.Handler {
 			hh := newHierarchyHandlers(d.MetricsBaseURL, d.MetricsQueryTimeout, d.Logger)
 			hh.mount(api)
 		}
+
+		// Phase 6 alerts read endpoint. Always mounted — when alerts
+		// are disabled it returns enabled=false with whatever rules
+		// were configured (typically none).
+		ah := &alertHandlers{
+			store:   d.Store,
+			rules:   d.AlertsRules,
+			enabled: d.AlertsEnabled,
+			logger:  d.Logger,
+		}
+		api.Get("/alerts", ah.list)
 	})
 
 	// SPA mount: every non-/api, non-/healthz path is delegated to the

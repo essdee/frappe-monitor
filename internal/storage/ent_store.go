@@ -240,6 +240,21 @@ func (s *EntStore) ListAlertStatesByRule(ctx context.Context, ruleName string) (
 	return out, nil
 }
 
+// ListAlertStates returns every state row in the database. Used by
+// the dashboard's GET /api/v1/alerts endpoint to render a single
+// "what is firing right now" view across all rules.
+func (s *EntStore) ListAlertStates(ctx context.Context) ([]*AlertState, error) {
+	rows, err := s.client.AlertState.Query().All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*AlertState, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, entToAlertState(r))
+	}
+	return out, nil
+}
+
 // UpsertAlertState creates a row for a (rule, fingerprint) pair if
 // none exists, or updates the existing row's value/status/notified_at
 // otherwise. Returns the upserted row so the caller can compare the

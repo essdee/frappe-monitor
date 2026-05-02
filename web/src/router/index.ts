@@ -44,6 +44,10 @@ export const router = createRouter({
         site: String(route.params.site),
       }),
     },
-    // Phase 6+ adds /alerts, /settings.
+    {
+      path: '/alerts',
+      name: 'alerts',
+      component: () => import('../views/Alerts.vue'),
+    },
   ],
 })
