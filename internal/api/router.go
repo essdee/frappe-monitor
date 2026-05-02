@@ -64,10 +64,19 @@ func NewRouter(d Deps) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	auth := basicAuth(d.AuthPassword, d.AuthRealm)
+	auth := authGate(d.AuthPassword)
+
+	// Login + logout live OUTSIDE the auth middleware so the SPA can
+	// reach them when unauthenticated. Both are no-ops when no password
+	// is configured (the SPA detects this via /api/v1/whoami's response).
+	if d.AuthPassword != "" {
+		r.Post("/api/v1/login", newLoginHandler(d.AuthPassword))
+	}
+	r.Post("/api/v1/logout", logoutHandler)
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(auth)
+		api.Get("/whoami", whoamiHandler)
 		h := &serverHandlers{
 			store:           d.Store,
 			exec:            d.Executor,
@@ -111,13 +120,13 @@ func NewRouter(d Deps) http.Handler {
 	})
 
 	// SPA mount: every non-/api, non-/healthz path is delegated to the
-	// embedded dashboard. Auth wraps the SPA too so the dashboard
-	// itself isn't accessible without credentials. The web handler
-	// serves real assets when the path matches and falls back to
-	// index.html for client-side routes. Registered last so /api/v1/*
-	// and /healthz take precedence (chi resolves more specific routes
-	// first).
-	r.Handle("/*", auth(webpkg.Handler()))
+	// embedded dashboard. NOT auth-wrapped — the SPA itself decides
+	// when to show the login page based on whether /api/v1/whoami
+	// returns 200 or 401. (Wrapping the SPA in auth would trigger
+	// the browser's native credential prompt before the SPA even
+	// loads, defeating the in-view-login UX.)
+	// Registered last so /api/v1/* and /healthz take precedence.
+	r.Handle("/*", webpkg.Handler())
 
 	return r
 }

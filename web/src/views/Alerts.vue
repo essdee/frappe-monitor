@@ -364,4 +364,57 @@ function formatLabels(labels: Record<string, string>): string {
   color: var(--status-unreachable);
   border-radius: 6px;
 }
+
+/* ----- Mobile ----- */
+@media (max-width: 720px) {
+  .page-header { flex-wrap: wrap; gap: 0.5rem; }
+  .banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.75rem;
+  }
+  .banner-text {
+    font-size: 0.85rem;
+    word-break: break-word;
+  }
+  .banner-text code {
+    word-break: break-all;
+  }
+  .firing-card {
+    padding: 0.7rem 0.85rem;
+  }
+  .firing-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.2rem;
+  }
+  .fp {
+    word-break: break-word;
+    white-space: normal;
+  }
+  .firing-meta {
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  /* Tables get the global overflow-x rule from style.css. Tighten
+     padding so they're usable on small screens. */
+  .rules-table th,
+  .rules-table td {
+    padding: 0.5rem 0.6rem;
+    font-size: 0.82rem;
+  }
+  .rules-table th {
+    font-size: 0.7rem;
+  }
+  .expr code {
+    font-size: 0.75rem;
+    word-break: break-all;
+    white-space: normal;
+  }
+  .badge {
+    font-size: 0.68rem;
+    padding: 0.1rem 0.45rem;
+  }
+}
 </style>

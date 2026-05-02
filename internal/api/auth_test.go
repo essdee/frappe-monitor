@@ -30,7 +30,13 @@ func TestBasicAuth_RejectsMissingCredentials(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
-	require.Contains(t, rec.Header().Get("WWW-Authenticate"), `realm="frappe-monitor"`)
+	// In Phase 7 v1.5 we deliberately stopped sending WWW-Authenticate
+	// so browsers don't pop the native credential dialog. The SPA
+	// catches 401 and routes to /login. JSON body still tells curl
+	// users what happened.
+	require.Empty(t, rec.Header().Get("WWW-Authenticate"))
+	require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+	require.Contains(t, rec.Body.String(), "unauthorized")
 }
 
 func TestBasicAuth_RejectsWrongPassword(t *testing.T) {

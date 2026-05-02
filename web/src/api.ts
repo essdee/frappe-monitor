@@ -42,13 +42,60 @@ export interface TimeRange {
   step: number
 }
 
+// Single chokepoint for unauthenticated responses: when the API says
+// 401, redirect the browser to /login. Subscribers (the auth guard)
+// don't have to wire this themselves — every fetch in the app goes
+// through one of these wrappers.
+function handle401(resp: Response): Response {
+  if (resp.status === 401 && !window.location.pathname.startsWith('/login')) {
+    const next = encodeURIComponent(
+      window.location.pathname + window.location.search,
+    )
+    window.location.assign(`/login?next=${next}`)
+  }
+  return resp
+}
+
 async function jsonGET<T>(url: string): Promise<T> {
-  const resp = await fetch(url, { headers: { Accept: 'application/json' } })
+  const resp = handle401(
+    await fetch(url, {
+      headers: { Accept: 'application/json' },
+      credentials: 'same-origin',
+    }),
+  )
   if (!resp.ok) {
     const body = await resp.text()
     throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
   }
   return resp.json() as Promise<T>
+}
+
+// --- Auth ---------------------------------------------------------------
+
+export async function login(password: string): Promise<void> {
+  const resp = await fetch('/api/v1/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ password }),
+  })
+  if (resp.status === 204) return
+  if (resp.status === 401) throw new Error('Wrong password')
+  if (resp.status === 429) throw new Error('Too many attempts — wait a minute')
+  const body = await resp.text()
+  throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+}
+
+export async function logout(): Promise<void> {
+  await fetch('/api/v1/logout', {
+    method: 'POST',
+    credentials: 'same-origin',
+  })
+}
+
+export async function whoami(): Promise<boolean> {
+  const resp = await fetch('/api/v1/whoami', { credentials: 'same-origin' })
+  return resp.ok
 }
 
 export function fetchServers(): Promise<Server[]> {

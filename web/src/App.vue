@@ -1,17 +1,29 @@
 <script setup lang="ts">
-import { RouterView, RouterLink } from 'vue-router'
+import { computed } from 'vue'
+import { RouterView, RouterLink, useRoute } from 'vue-router'
 import {
   Server,
   Boxes,
   Globe,
   Bell,
   Activity,
+  LogOut,
 } from 'lucide-vue-next'
 import TimelineFilter from './components/TimelineFilter.vue'
+import { logout } from './api'
+
+const route = useRoute()
+const bare = computed(() => route.meta.layout === 'bare')
+
+async function handleLogout() {
+  await logout()
+  window.location.assign('/login')
+}
 </script>
 
 <template>
-  <div class="app-shell">
+  <RouterView v-if="bare" />
+  <div v-else class="app-shell">
     <aside class="sidebar">
       <div class="brand">
         <Activity :size="22" :stroke-width="2.25" class="brand-icon" />
@@ -38,6 +50,10 @@ import TimelineFilter from './components/TimelineFilter.vue'
           <span>Alerts</span>
         </RouterLink>
       </nav>
+      <button class="nav-link logout" type="button" @click="handleLogout">
+        <LogOut :size="18" :stroke-width="2" />
+        <span>Sign out</span>
+      </button>
     </aside>
     <div class="main">
       <header class="header">
@@ -114,6 +130,18 @@ nav {
 .nav-link.router-link-active {
   background: var(--sidebar-active);
   color: var(--accent-strong);
+}
+.logout {
+  margin-top: auto;        /* shove to the bottom of the sidebar */
+  background: transparent;
+  border: 1px solid var(--card-border);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+.logout:hover {
+  border-color: var(--accent);
+  color: var(--fg);
 }
 .main {
   display: flex;
