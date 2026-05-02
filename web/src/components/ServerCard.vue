@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
+import { CheckCircle2, AlertTriangle, HelpCircle, Clock } from 'lucide-vue-next'
 import type { Server } from '../api'
 
 defineProps<{ server: Server }>()
@@ -31,13 +32,35 @@ function relativeTime(iso: string | null): string {
 <template>
   <RouterLink :to="`/servers/${server.id}`" class="card">
     <div class="header">
-      <span class="dot" :style="{ background: statusColor(server.status) }" />
+      <CheckCircle2
+        v-if="server.status === 'reachable'"
+        :size="18"
+        :stroke-width="2.25"
+        :style="{ color: statusColor(server.status) }"
+      />
+      <AlertTriangle
+        v-else-if="server.status === 'unreachable'"
+        :size="18"
+        :stroke-width="2.25"
+        :style="{ color: statusColor(server.status) }"
+      />
+      <HelpCircle
+        v-else
+        :size="18"
+        :stroke-width="2.25"
+        :style="{ color: statusColor(server.status) }"
+      />
       <span class="name">{{ server.name }}</span>
     </div>
     <div class="hostname">{{ server.hostname }}</div>
     <div class="meta">
-      <span class="status-text">{{ server.status }}</span>
-      <span class="last-seen">{{ relativeTime(server.last_pinged_at) }}</span>
+      <span class="status-text" :style="{ color: statusColor(server.status) }">
+        {{ server.status }}
+      </span>
+      <span class="last-seen">
+        <Clock :size="12" :stroke-width="2" />
+        {{ relativeTime(server.last_pinged_at) }}
+      </span>
     </div>
     <div v-if="server.last_error" class="error" :title="server.last_error">
       {{ server.last_error }}
@@ -48,52 +71,57 @@ function relativeTime(iso: string | null): string {
 <style scoped>
 .card {
   display: block;
-  padding: 1rem;
+  padding: 1rem 1.1rem;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 6px;
+  border-radius: 8px;
   text-decoration: none;
   color: inherit;
-  transition: border-color 120ms;
+  transition: border-color 120ms ease, transform 120ms ease;
+  box-shadow: var(--card-shadow);
 }
 .card:hover {
   border-color: var(--accent);
+  transform: translateY(-1px);
 }
 .header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   font-weight: 600;
-  margin-bottom: 0.25rem;
-}
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
+  margin-bottom: 0.35rem;
 }
 .name {
   font-size: 1rem;
+  letter-spacing: -0.01em;
 }
 .hostname {
   color: var(--muted);
-  font-size: 0.85rem;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  margin-bottom: 0.5rem;
+  font-size: 0.82rem;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  margin-bottom: 0.75rem;
 }
 .meta {
   display: flex;
   justify-content: space-between;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   color: var(--muted);
 }
 .status-text {
   text-transform: capitalize;
+  font-weight: 500;
+}
+.last-seen {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
 }
 .error {
-  margin-top: 0.5rem;
+  margin-top: 0.65rem;
   padding: 0.4rem 0.6rem;
-  background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
+  background: color-mix(in srgb, var(--status-unreachable) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-unreachable) 35%, transparent);
   color: var(--status-unreachable);
   border-radius: 4px;
   font-size: 0.75rem;

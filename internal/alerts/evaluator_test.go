@@ -92,6 +92,19 @@ func (m *memStore) DeleteAlertState(_ context.Context, id int) error {
 	return storage.ErrNotFound
 }
 
+// ListAlertStates is a thin pass-through used by the dashboard's
+// /api/v1/alerts endpoint. The evaluator itself doesn't call it but
+// the storage.Store interface requires it.
+func (m *memStore) ListAlertStates(_ context.Context) ([]*storage.AlertState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*storage.AlertState, 0, len(m.rows))
+	for _, r := range m.rows {
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 // Stub the unused store methods so memStore satisfies storage.Store.
 func (m *memStore) CreateServer(context.Context, storage.NewServer) (*storage.Server, error) {
 	panic("unused")

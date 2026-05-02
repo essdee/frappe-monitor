@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
+import { Boxes, Server, RefreshCw, ChevronRight } from 'lucide-vue-next'
 import { fetchBenches, type BenchPair } from '../api'
 import { useTimeRange } from '../composables/useTimeRange'
 
@@ -52,9 +53,14 @@ const grouped = computed<{ server: string; benches: string[] }[]>(() => {
 <template>
   <section>
     <header class="page-header">
-      <h2>Benches</h2>
+      <div class="title">
+        <Boxes :size="22" :stroke-width="2.25" class="title-icon" />
+        <h2>Benches</h2>
+        <span class="count">{{ benches.length }}</span>
+      </div>
       <button class="refresh-btn" :disabled="loading" @click="refresh">
-        {{ loading ? 'Refreshing…' : 'Refresh' }}
+        <RefreshCw :size="14" :stroke-width="2" :class="{ spin: loading }" />
+        {{ loading ? 'Refreshing' : 'Refresh' }}
       </button>
     </header>
 
@@ -66,7 +72,10 @@ const grouped = computed<{ server: string; benches: string[] }[]>(() => {
     </p>
 
     <div v-for="group in grouped" :key="group.server" class="server-group">
-      <h3 class="server-name">{{ group.server }}</h3>
+      <h3 class="server-name">
+        <Server :size="14" :stroke-width="2" />
+        {{ group.server }}
+      </h3>
       <div class="grid">
         <RouterLink
           v-for="bench in group.benches"
@@ -74,7 +83,11 @@ const grouped = computed<{ server: string; benches: string[] }[]>(() => {
           :to="`/benches/${encodeURIComponent(group.server)}/${encodeURIComponent(bench)}`"
           class="card"
         >
-          <div class="bench-name">{{ bench }}</div>
+          <div class="card-head">
+            <Boxes :size="16" :stroke-width="2" class="card-icon" />
+            <span class="bench-name">{{ bench }}</span>
+            <ChevronRight :size="14" :stroke-width="2" class="chev" />
+          </div>
           <div class="bench-sub">on {{ group.server }}</div>
         </RouterLink>
       </div>
@@ -86,59 +99,110 @@ const grouped = computed<{ server: string; benches: string[] }[]>(() => {
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 1rem;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+.title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.title-icon { color: var(--accent); }
+.title h2 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.4rem;
+  padding: 0 0.4rem;
+  background: var(--bg-hover);
+  color: var(--muted);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 .refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   background: var(--card-bg);
   color: var(--fg);
   border: 1px solid var(--card-border);
-  padding: 0.35rem 0.85rem;
-  border-radius: 4px;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
   cursor: pointer;
   font: inherit;
+  font-size: 0.88rem;
+  font-weight: 500;
+  transition: border-color 120ms, background 120ms;
 }
 .refresh-btn:hover:not(:disabled) {
   border-color: var(--accent);
+  background: var(--bg-hover);
 }
-.refresh-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
+.refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .server-group {
   margin-bottom: 1.5rem;
 }
 .server-name {
-  font-size: 0.95rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
   color: var(--muted);
-  margin: 0 0 0.5rem 0;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin: 0 0 0.6rem 0;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-weight: 500;
+  text-transform: lowercase;
+  letter-spacing: 0.01em;
 }
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.85rem;
 }
 .card {
   display: block;
-  padding: 0.75rem 1rem;
+  padding: 0.85rem 1rem;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 6px;
+  border-radius: 8px;
   text-decoration: none;
   color: inherit;
-  transition: border-color 120ms;
+  transition: border-color 120ms, transform 120ms;
+  box-shadow: var(--card-shadow);
 }
 .card:hover {
   border-color: var(--accent);
+  transform: translateY(-1px);
 }
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.card-icon { color: var(--muted); }
 .bench-name {
+  flex: 1;
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
+.chev { color: var(--muted-2); }
+.card:hover .chev,
+.card:hover .card-icon { color: var(--accent); }
 .bench-sub {
   color: var(--muted);
-  font-size: 0.8rem;
-  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  margin-top: 0.35rem;
+  margin-left: 1.5rem;
 }
 .error {
   padding: 0.5rem 0.75rem;

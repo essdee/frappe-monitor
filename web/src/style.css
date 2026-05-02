@@ -1,52 +1,53 @@
-/* Theme variables. Light by default; dark via OS preference. The dark
-   palette is hand-tuned for high contrast (≥ WCAG AA) so labels,
-   muted text, and chart tooltips all stay readable on dark cards. */
+/* Forced-dark theme — single accent, classy, high contrast.
+   Two-color philosophy: a neutral charcoal scale + one indigo accent.
+   Status colors (reachable / unreachable) stay functional but
+   desaturated so they don't shout. */
 
 :root {
-  --bg: #f7f8fa;
-  --fg: #1f2328;
-  --muted: #4b5563;
-  --card-bg: #ffffff;
-  --card-border: #d1d5db;
-  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --accent: #0969da;
-  --accent-hover: #0858c2;
-  --sidebar-bg: #1a1d23;
-  --sidebar-fg: #e8eaed;
-  --sidebar-active: #2d313a;
-  --status-reachable: #16a34a;
-  --status-unreachable: #dc2626;
-  --status-unknown: #9ca3af;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  color-scheme: light dark;
+  color-scheme: dark;
+
+  /* Neutrals (cool charcoal) */
+  --bg:           #0b0c0f;
+  --bg-elevated:  #14161b;
+  --bg-hover:     #1c1f26;
+  --card-bg:      #14161b;
+  --card-border:  #262a33;
+  --card-shadow:  0 1px 2px rgba(0, 0, 0, 0.5),
+                  0 4px 12px rgba(0, 0, 0, 0.35);
+
+  /* Foreground */
+  --fg:        #ecedef;
+  --fg-strong: #ffffff;
+  --muted:     #9aa0aa;
+  --muted-2:   #6b7280;
+
+  /* The accent. Used for links, primary buttons, focus rings, the
+     active sidebar route. Indigo reads well on the dark bg without
+     being neon. */
+  --accent:        #818cf8;
+  --accent-strong: #a5afff;
+  --accent-soft:   rgba(129, 140, 248, 0.12);
+
+  /* Status — desaturated so they don't dominate. */
+  --status-reachable:    #4ade80;
+  --status-unreachable:  #f87171;
+  --status-unknown:      #6b7280;
+  --status-warning:      #fbbf24;
+
+  /* Sidebar (kept just slightly different from page bg). */
+  --sidebar-bg:     #0b0c0f;
+  --sidebar-fg:     #ecedef;
+  --sidebar-active: var(--accent-soft);
+
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Roboto, "Helvetica Neue", system-ui, sans-serif;
+  font-feature-settings: "ss01", "ss02", "cv01", "cv02";
+
+  /* Override OS preference. The user explicitly asked for dark only. */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Page bg slightly darker than cards so the layout reads. */
-    --bg: #0a0d12;
-    /* Foreground: nearly white, no blue tint — crisp on dark cards. */
-    --fg: #f3f6f9;
-    /* Muted bumped from #8b949e to a much brighter neutral so labels
-       like "Apps", "Healthy", "mount /" stop disappearing. */
-    --muted: #b8c2cc;
-    /* Card bg sits between page bg and a subtle elevation tint. */
-    --card-bg: #161b22;
-    /* Border bright enough to actually outline the card. */
-    --card-border: #4b5563;
-    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-    /* Accent: GitHub primer "blue 3" — readable on dark, bright. */
-    --accent: #6cb6ff;
-    --accent-hover: #91cbff;
-    --sidebar-bg: #11151b;
-    --sidebar-fg: #f0f3f6;
-    --sidebar-active: #232a33;
-    /* Status colors: pick brighter shades so red/green/grey are
-       unmistakable against dark cards. */
-    --status-reachable: #4ade80;
-    --status-unreachable: #ff6b6b;
-    --status-unknown: #cbd5e1;
-  }
+@media (prefers-color-scheme: light) {
+  /* Intentionally do nothing — we override the OS pref. */
 }
 
 * {
@@ -54,8 +55,6 @@
 }
 
 html {
-  /* Slightly larger base font — the dashboard has a lot of small
-     metadata text. 15px reads noticeably better than 14px on dark. */
   font-size: 15px;
 }
 
@@ -71,69 +70,62 @@ html, body {
 a {
   color: var(--accent);
   text-decoration: none;
+  transition: color 120ms ease;
 }
-
 a:hover {
-  color: var(--accent-hover);
-  text-decoration: underline;
+  color: var(--accent-strong);
 }
 
-/* Universal styles for any element using card-bg + card-border get
-   a subtle shadow in dark mode so cards visibly separate from the
-   page bg. Components keep their per-component spacing/layout. */
-@media (prefers-color-scheme: dark) {
-  /* Headings stay nearly white — the components don't currently set
-     specific colors for h2/h3, so OS-default is fine. */
-}
-
-/* Selection colors visible on both themes. */
 ::selection {
   background: var(--accent);
-  color: #fff;
+  color: var(--fg-strong);
 }
 
-/* Make form controls inherit the theme without per-component css. */
-input,
-textarea,
-select,
-button {
+input, textarea, select, button {
   color: var(--fg);
+  font-family: inherit;
 }
-
 input::placeholder,
 textarea::placeholder {
-  color: var(--muted);
-  opacity: 0.7;
+  color: var(--muted-2);
 }
 
-/* Native scrollbars in dark mode shouldn't be glaring white. */
-@media (prefers-color-scheme: dark) {
-  ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-  ::-webkit-scrollbar-track {
-    background: var(--bg);
-  }
-  ::-webkit-scrollbar-thumb {
-    background: #2a323d;
-    border-radius: 5px;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: #3a4452;
-  }
-}
-
-/* Tables shared style — components use this through inherited styles. */
-table {
-  color: var(--fg);
-}
-
-/* Code-style spans (e.g. bench paths, queue names) need a subtle
-   bg tint so they stand out from prose. */
+/* Code spans get a subtle tint so paths/identifiers pop. */
 code {
-  background: color-mix(in srgb, var(--card-border) 30%, transparent);
-  padding: 0.05em 0.35em;
-  border-radius: 3px;
-  font-size: 0.9em;
+  background: var(--bg-hover);
+  border: 1px solid var(--card-border);
+  padding: 0.05em 0.4em;
+  border-radius: 4px;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.85em;
+}
+
+/* Custom scrollbar, dark-friendly. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--card-border);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-2);
+}
+
+/* Focus ring for keyboard nav. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Lucide icons render as inline-block SVGs; align them with text. */
+.lucide {
+  display: inline-block;
+  vertical-align: -0.15em;
+  flex-shrink: 0;
 }
