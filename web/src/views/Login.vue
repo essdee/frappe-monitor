@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Activity, Lock, AlertCircle } from 'lucide-vue-next'
+import { Activity, Lock, AlertCircle, CheckCircle2 } from 'lucide-vue-next'
 import { login, whoami } from '../api'
 
 const router = useRouter()
@@ -9,6 +9,7 @@ const route = useRoute()
 const password = ref('')
 const submitting = ref(false)
 const error = ref<string | null>(null)
+const justSignedOut = computed(() => route.query.signed_out === '1')
 
 // If we're already authed (e.g. someone bookmarked /login), bounce
 // straight to the next page instead of showing the form.
@@ -54,6 +55,11 @@ async function submit() {
           <span class="brand-sub">production dashboard</span>
         </div>
       </div>
+
+      <p v-if="justSignedOut" class="signed-out">
+        <CheckCircle2 :size="14" :stroke-width="2.25" />
+        You've been signed out.
+      </p>
 
       <form @submit.prevent="submit">
         <label>
@@ -189,6 +195,21 @@ input:focus {
   background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--status-unreachable) 35%, transparent);
   color: var(--status-unreachable);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.signed-out {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 1rem 0;
+  padding: 0.55rem 0.75rem;
+  background: color-mix(in srgb, var(--status-reachable) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-reachable) 35%, transparent);
+  color: var(--status-reachable);
   border-radius: 6px;
   font-size: 0.85rem;
   width: 100%;

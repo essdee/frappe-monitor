@@ -17,7 +17,10 @@ const bare = computed(() => route.meta.layout === 'bare')
 
 async function handleLogout() {
   await logout()
-  window.location.assign('/login')
+  // Pass a flag so Login.vue can show a "Signed out" confirmation —
+  // otherwise the user just sees the login form and wonders if the
+  // click did anything.
+  window.location.assign('/login?signed_out=1')
 }
 </script>
 
