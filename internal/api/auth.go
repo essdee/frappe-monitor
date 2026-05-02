@@ -3,39 +3,49 @@ package api
 import (
 	"crypto/subtle"
 	"net/http"
-	"strings"
 )
 
-// basicAuth returns a middleware that requires HTTP basic auth with the
-// configured password. Username is ignored — this is a single-tenant
-// shared-password setup; phase 7+ may add multi-user.
+// authGate accepts EITHER a valid session cookie OR HTTP basic auth.
+// Returns 401 (no WWW-Authenticate header) so browsers don't pop the
+// native credential prompt — the SPA catches 401 and routes to /login.
+// curl/CI users keep working via -u user:password (basic auth).
 //
 // Empty password means "auth disabled" and the middleware is a no-op
 // (the caller is expected to gate the use site so this is unreachable
 // when the feature is off).
-//
-// Browsers handle the credential prompt natively when they see a 401
-// with WWW-Authenticate, so the SPA needs no login page. The realm
-// is included in WWW-Authenticate to give browsers a stable cache
-// key per deployment.
-func basicAuth(password, realm string) func(http.Handler) http.Handler {
+func authGate(password string) func(http.Handler) http.Handler {
 	if password == "" {
 		return func(next http.Handler) http.Handler { return next }
 	}
-	if realm == "" {
-		realm = "frappe-monitor"
-	}
 	pwBytes := []byte(password)
-	challenge := `Basic realm="` + strings.ReplaceAll(realm, `"`, `\"`) + `", charset="UTF-8"`
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, gotPw, ok := r.BasicAuth()
-			if !ok || subtle.ConstantTimeCompare([]byte(gotPw), pwBytes) != 1 {
-				w.Header().Set("WWW-Authenticate", challenge)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
+			// 1. Cookie session (preferred — set by /login).
+			if c, err := r.Cookie(sessionCookieName); err == nil {
+				if validateSession(c.Value, password) {
+					next.ServeHTTP(w, r)
+					return
+				}
 			}
-			next.ServeHTTP(w, r)
+			// 2. HTTP basic auth (for curl + automation).
+			if _, got, ok := r.BasicAuth(); ok {
+				if subtle.ConstantTimeCompare([]byte(got), pwBytes) == 1 {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			// 3. Reject — JSON response, NO WWW-Authenticate so the
+			//    browser does not pop a dialog. SPA's fetch wrapper
+			//    catches 401 and redirects to /login.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 		})
 	}
+}
+
+// basicAuth is kept for backwards compatibility with existing tests.
+// New callers should use authGate; this just delegates.
+func basicAuth(password, _ string) func(http.Handler) http.Handler {
+	return authGate(password)
 }
