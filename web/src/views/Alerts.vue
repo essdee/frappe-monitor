@@ -158,13 +158,13 @@ function formatLabels(labels: Record<string, string>): string {
       </thead>
       <tbody>
         <tr v-for="r in rules" :key="r.name">
-          <td>
+          <td data-label="Severity">
             <span class="badge" :style="{ color: severityColor(r.severity), borderColor: severityColor(r.severity) }">
               {{ r.severity || 'info' }}
             </span>
           </td>
-          <td class="rule-name-cell">{{ r.name }}</td>
-          <td class="expr"><code>{{ r.expr }}</code></td>
+          <td class="rule-name-cell" data-label="Name">{{ r.name }}</td>
+          <td class="expr" data-label="Expression"><code>{{ r.expr }}</code></td>
         </tr>
       </tbody>
     </table>
@@ -365,7 +365,7 @@ function formatLabels(labels: Record<string, string>): string {
   border-radius: 6px;
 }
 
-/* ----- Mobile ----- */
+/* ----- Mobile (≤720px) — cards instead of cramped tables ----- */
 @media (max-width: 720px) {
   .page-header { flex-wrap: wrap; gap: 0.5rem; }
   .banner {
@@ -381,9 +381,7 @@ function formatLabels(labels: Record<string, string>): string {
   .banner-text code {
     word-break: break-all;
   }
-  .firing-card {
-    padding: 0.7rem 0.85rem;
-  }
+  .firing-card { padding: 0.7rem 0.85rem; }
   .firing-head {
     flex-direction: column;
     align-items: flex-start;
@@ -397,20 +395,48 @@ function formatLabels(labels: Record<string, string>): string {
     flex-direction: column;
     gap: 0.3rem;
   }
-  /* Tables get the global overflow-x rule from style.css. Tighten
-     padding so they're usable on small screens. */
-  .rules-table th,
+
+  /* Rules table → vertical card list. Each <tr> becomes a card,
+     each <td> a labeled row. The cramped 3-column grid gives way
+     to readable full-width fields. */
+  .rules-table { display: block; border: none; background: transparent; box-shadow: none; }
+  .rules-table thead { display: none; }
+  .rules-table tbody { display: block; }
+  .rules-table tr {
+    display: block;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.6rem;
+    box-shadow: var(--card-shadow);
+  }
   .rules-table td {
-    padding: 0.5rem 0.6rem;
-    font-size: 0.82rem;
+    display: block;
+    padding: 0.2rem 0;
+    border: none;
+    font-size: 0.85rem;
   }
-  .rules-table th {
-    font-size: 0.7rem;
+  /* Synthetic labels via attr(data-label). We add data-label in the
+     template. */
+  .rules-table td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 600;
+    margin-bottom: 0.15rem;
   }
+  .rules-table .rule-name-cell { font-size: 0.95rem; }
   .expr code {
-    font-size: 0.75rem;
-    word-break: break-all;
-    white-space: normal;
+    display: block;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    word-break: break-word;
+    white-space: pre-wrap;
+    padding: 0.45rem 0.55rem;
   }
   .badge {
     font-size: 0.68rem;

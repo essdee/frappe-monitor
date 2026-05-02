@@ -189,8 +189,13 @@ func newLoginHandler(password string) http.HandlerFunc {
 	}
 }
 
-// logoutHandler clears the cookie regardless of state.
+// logoutHandler clears the cookie regardless of state. Matches the
+// Secure attribute used at login time — without that, browsers behind
+// HTTPS may keep the cookie because the deletion cookie's attributes
+// don't match the original.
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	secure := r.TLS != nil ||
+		strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
@@ -198,6 +203,7 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   secure,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
