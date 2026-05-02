@@ -343,4 +343,23 @@ const hasFilters = computed(
 .muted {
   color: var(--muted);
 }
+
+@media (max-width: 720px) {
+  .page-header { flex-wrap: wrap; }
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .search-input,
+  .select-input {
+    width: 100%;
+  }
+  .search-input input,
+  .select-input select {
+    width: 100%;
+  }
+  .clear-btn {
+    align-self: flex-end;
+  }
+}
 </style>
