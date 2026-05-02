@@ -17,7 +17,24 @@
 
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.1.0"
+
+# Trap any error so the operator sees what actually failed, then end
+# the output cleanly with ###END so the parser doesn't bail with a
+# generic "missing ###END marker" message. The dashboard will surface
+# the ###META section's "last_error" line in the server card.
+on_error() {
+  local exit_code=$?
+  local line=$1
+  echo
+  echo "###ERROR"
+  echo "exit_code=$exit_code"
+  echo "line=$line"
+  echo
+  echo "###END"
+  exit "$exit_code"
+}
+trap 'on_error $LINENO' ERR
 
 emit_meta() {
   echo "###META"
