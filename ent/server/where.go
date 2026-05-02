@@ -668,6 +668,29 @@ func HasLogCursorsWith(preds ...predicate.LogCursor) predicate.Server {
 	})
 }
 
+// HasSystemSnapshot applies the HasEdge predicate on the "system_snapshot" edge.
+func HasSystemSnapshot() predicate.Server {
+	return predicate.Server(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, false, SystemSnapshotTable, SystemSnapshotColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasSystemSnapshotWith applies the HasEdge predicate on the "system_snapshot" edge with a given conditions (other predicates).
+func HasSystemSnapshotWith(preds ...predicate.SystemSnapshot) predicate.Server {
+	return predicate.Server(func(s *sql.Selector) {
+		step := newSystemSnapshotStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.Server) predicate.Server {
 	return predicate.Server(sql.AndPredicates(predicates...))

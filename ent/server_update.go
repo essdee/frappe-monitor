@@ -9,6 +9,7 @@ import (
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
 	"frappe-monitor/ent/server"
+	"frappe-monitor/ent/systemsnapshot"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
@@ -212,6 +213,25 @@ func (_u *ServerUpdate) AddLogCursors(v ...*LogCursor) *ServerUpdate {
 	return _u.AddLogCursorIDs(ids...)
 }
 
+// SetSystemSnapshotID sets the "system_snapshot" edge to the SystemSnapshot entity by ID.
+func (_u *ServerUpdate) SetSystemSnapshotID(id int) *ServerUpdate {
+	_u.mutation.SetSystemSnapshotID(id)
+	return _u
+}
+
+// SetNillableSystemSnapshotID sets the "system_snapshot" edge to the SystemSnapshot entity by ID if the given value is not nil.
+func (_u *ServerUpdate) SetNillableSystemSnapshotID(id *int) *ServerUpdate {
+	if id != nil {
+		_u = _u.SetSystemSnapshotID(*id)
+	}
+	return _u
+}
+
+// SetSystemSnapshot sets the "system_snapshot" edge to the SystemSnapshot entity.
+func (_u *ServerUpdate) SetSystemSnapshot(v *SystemSnapshot) *ServerUpdate {
+	return _u.SetSystemSnapshotID(v.ID)
+}
+
 // Mutation returns the ServerMutation object of the builder.
 func (_u *ServerUpdate) Mutation() *ServerMutation {
 	return _u.mutation
@@ -236,6 +256,12 @@ func (_u *ServerUpdate) RemoveLogCursors(v ...*LogCursor) *ServerUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveLogCursorIDs(ids...)
+}
+
+// ClearSystemSnapshot clears the "system_snapshot" edge to the SystemSnapshot entity.
+func (_u *ServerUpdate) ClearSystemSnapshot() *ServerUpdate {
+	_u.mutation.ClearSystemSnapshot()
+	return _u
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -407,6 +433,35 @@ func (_u *ServerUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SystemSnapshotCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   server.SystemSnapshotTable,
+			Columns: []string{server.SystemSnapshotColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(systemsnapshot.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SystemSnapshotIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   server.SystemSnapshotTable,
+			Columns: []string{server.SystemSnapshotColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(systemsnapshot.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {
@@ -616,6 +671,25 @@ func (_u *ServerUpdateOne) AddLogCursors(v ...*LogCursor) *ServerUpdateOne {
 	return _u.AddLogCursorIDs(ids...)
 }
 
+// SetSystemSnapshotID sets the "system_snapshot" edge to the SystemSnapshot entity by ID.
+func (_u *ServerUpdateOne) SetSystemSnapshotID(id int) *ServerUpdateOne {
+	_u.mutation.SetSystemSnapshotID(id)
+	return _u
+}
+
+// SetNillableSystemSnapshotID sets the "system_snapshot" edge to the SystemSnapshot entity by ID if the given value is not nil.
+func (_u *ServerUpdateOne) SetNillableSystemSnapshotID(id *int) *ServerUpdateOne {
+	if id != nil {
+		_u = _u.SetSystemSnapshotID(*id)
+	}
+	return _u
+}
+
+// SetSystemSnapshot sets the "system_snapshot" edge to the SystemSnapshot entity.
+func (_u *ServerUpdateOne) SetSystemSnapshot(v *SystemSnapshot) *ServerUpdateOne {
+	return _u.SetSystemSnapshotID(v.ID)
+}
+
 // Mutation returns the ServerMutation object of the builder.
 func (_u *ServerUpdateOne) Mutation() *ServerMutation {
 	return _u.mutation
@@ -640,6 +714,12 @@ func (_u *ServerUpdateOne) RemoveLogCursors(v ...*LogCursor) *ServerUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveLogCursorIDs(ids...)
+}
+
+// ClearSystemSnapshot clears the "system_snapshot" edge to the SystemSnapshot entity.
+func (_u *ServerUpdateOne) ClearSystemSnapshot() *ServerUpdateOne {
+	_u.mutation.ClearSystemSnapshot()
+	return _u
 }
 
 // Where appends a list predicates to the ServerUpdate builder.
@@ -841,6 +921,35 @@ func (_u *ServerUpdateOne) sqlSave(ctx context.Context) (_node *Server, err erro
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SystemSnapshotCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   server.SystemSnapshotTable,
+			Columns: []string{server.SystemSnapshotColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(systemsnapshot.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SystemSnapshotIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   server.SystemSnapshotTable,
+			Columns: []string{server.SystemSnapshotColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(systemsnapshot.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

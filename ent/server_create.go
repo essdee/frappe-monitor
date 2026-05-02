@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/server"
+	"frappe-monitor/ent/systemsnapshot"
 	"time"
 
 	"entgo.io/ent/dialect/sql/sqlgraph"
@@ -162,6 +163,25 @@ func (_c *ServerCreate) AddLogCursors(v ...*LogCursor) *ServerCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddLogCursorIDs(ids...)
+}
+
+// SetSystemSnapshotID sets the "system_snapshot" edge to the SystemSnapshot entity by ID.
+func (_c *ServerCreate) SetSystemSnapshotID(id int) *ServerCreate {
+	_c.mutation.SetSystemSnapshotID(id)
+	return _c
+}
+
+// SetNillableSystemSnapshotID sets the "system_snapshot" edge to the SystemSnapshot entity by ID if the given value is not nil.
+func (_c *ServerCreate) SetNillableSystemSnapshotID(id *int) *ServerCreate {
+	if id != nil {
+		_c = _c.SetSystemSnapshotID(*id)
+	}
+	return _c
+}
+
+// SetSystemSnapshot sets the "system_snapshot" edge to the SystemSnapshot entity.
+func (_c *ServerCreate) SetSystemSnapshot(v *SystemSnapshot) *ServerCreate {
+	return _c.SetSystemSnapshotID(v.ID)
 }
 
 // Mutation returns the ServerMutation object of the builder.
@@ -355,6 +375,22 @@ func (_c *ServerCreate) createSpec() (*Server, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(logcursor.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.SystemSnapshotIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   server.SystemSnapshotTable,
+			Columns: []string{server.SystemSnapshotColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(systemsnapshot.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

@@ -9,6 +9,7 @@ import (
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
 	"frappe-monitor/ent/server"
+	"frappe-monitor/ent/systemsnapshot"
 	"math"
 
 	"entgo.io/ent"
@@ -20,11 +21,12 @@ import (
 // ServerQuery is the builder for querying Server entities.
 type ServerQuery struct {
 	config
-	ctx            *QueryContext
-	order          []server.OrderOption
-	inters         []Interceptor
-	predicates     []predicate.Server
-	withLogCursors *LogCursorQuery
+	ctx                *QueryContext
+	order              []server.OrderOption
+	inters             []Interceptor
+	predicates         []predicate.Server
+	withLogCursors     *LogCursorQuery
+	withSystemSnapshot *SystemSnapshotQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -76,6 +78,28 @@ func (_q *ServerQuery) QueryLogCursors() *LogCursorQuery {
 			sqlgraph.From(server.Table, server.FieldID, selector),
 			sqlgraph.To(logcursor.Table, logcursor.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, server.LogCursorsTable, server.LogCursorsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QuerySystemSnapshot chains the current query on the "system_snapshot" edge.
+func (_q *ServerQuery) QuerySystemSnapshot() *SystemSnapshotQuery {
+	query := (&SystemSnapshotClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(server.Table, server.FieldID, selector),
+			sqlgraph.To(systemsnapshot.Table, systemsnapshot.FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, false, server.SystemSnapshotTable, server.SystemSnapshotColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -270,12 +294,13 @@ func (_q *ServerQuery) Clone() *ServerQuery {
 		return nil
 	}
 	return &ServerQuery{
-		config:         _q.config,
-		ctx:            _q.ctx.Clone(),
-		order:          append([]server.OrderOption{}, _q.order...),
-		inters:         append([]Interceptor{}, _q.inters...),
-		predicates:     append([]predicate.Server{}, _q.predicates...),
-		withLogCursors: _q.withLogCursors.Clone(),
+		config:             _q.config,
+		ctx:                _q.ctx.Clone(),
+		order:              append([]server.OrderOption{}, _q.order...),
+		inters:             append([]Interceptor{}, _q.inters...),
+		predicates:         append([]predicate.Server{}, _q.predicates...),
+		withLogCursors:     _q.withLogCursors.Clone(),
+		withSystemSnapshot: _q.withSystemSnapshot.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -290,6 +315,17 @@ func (_q *ServerQuery) WithLogCursors(opts ...func(*LogCursorQuery)) *ServerQuer
 		opt(query)
 	}
 	_q.withLogCursors = query
+	return _q
+}
+
+// WithSystemSnapshot tells the query-builder to eager-load the nodes that are connected to
+// the "system_snapshot" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *ServerQuery) WithSystemSnapshot(opts ...func(*SystemSnapshotQuery)) *ServerQuery {
+	query := (&SystemSnapshotClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withSystemSnapshot = query
 	return _q
 }
 
@@ -371,8 +407,9 @@ func (_q *ServerQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Serve
 	var (
 		nodes       = []*Server{}
 		_spec       = _q.querySpec()
-		loadedTypes = [1]bool{
+		loadedTypes = [2]bool{
 			_q.withLogCursors != nil,
+			_q.withSystemSnapshot != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -397,6 +434,12 @@ func (_q *ServerQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Serve
 		if err := _q.loadLogCursors(ctx, query, nodes,
 			func(n *Server) { n.Edges.LogCursors = []*LogCursor{} },
 			func(n *Server, e *LogCursor) { n.Edges.LogCursors = append(n.Edges.LogCursors, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withSystemSnapshot; query != nil {
+		if err := _q.loadSystemSnapshot(ctx, query, nodes, nil,
+			func(n *Server, e *SystemSnapshot) { n.Edges.SystemSnapshot = e }); err != nil {
 			return nil, err
 		}
 	}
@@ -429,6 +472,34 @@ func (_q *ServerQuery) loadLogCursors(ctx context.Context, query *LogCursorQuery
 		node, ok := nodeids[*fk]
 		if !ok {
 			return fmt.Errorf(`unexpected referenced foreign-key "server_log_cursors" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *ServerQuery) loadSystemSnapshot(ctx context.Context, query *SystemSnapshotQuery, nodes []*Server, init func(*Server), assign func(*Server, *SystemSnapshot)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int]*Server)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+	}
+	query.withFKs = true
+	query.Where(predicate.SystemSnapshot(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(server.SystemSnapshotColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.server_system_snapshot
+		if fk == nil {
+			return fmt.Errorf(`foreign-key "server_system_snapshot" is nil for node %v`, n.ID)
+		}
+		node, ok := nodeids[*fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "server_system_snapshot" returned %v for node %v`, *fk, n.ID)
 		}
 		assign(node, n)
 	}

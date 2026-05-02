@@ -18,6 +18,8 @@ type Tx struct {
 	LogCursor *LogCursorClient
 	// Server is the client for interacting with the Server builders.
 	Server *ServerClient
+	// SystemSnapshot is the client for interacting with the SystemSnapshot builders.
+	SystemSnapshot *SystemSnapshotClient
 
 	// lazily loaded.
 	client     *Client
@@ -152,6 +154,7 @@ func (tx *Tx) init() {
 	tx.AlertState = NewAlertStateClient(tx.config)
 	tx.LogCursor = NewLogCursorClient(tx.config)
 	tx.Server = NewServerClient(tx.config)
+	tx.SystemSnapshot = NewSystemSnapshotClient(tx.config)
 }
 
 // txDriver wraps the given dialect.Tx with a nop dialect.Driver implementation.

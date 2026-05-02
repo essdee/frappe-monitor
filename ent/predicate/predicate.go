@@ -14,3 +14,6 @@ type LogCursor func(*sql.Selector)
 
 // Server is the predicate function for server builders.
 type Server func(*sql.Selector)
+
+// SystemSnapshot is the predicate function for systemsnapshot builders.
+type SystemSnapshot func(*sql.Selector)

@@ -84,14 +84,38 @@ var (
 		Columns:    ServersColumns,
 		PrimaryKey: []*schema.Column{ServersColumns[0]},
 	}
+	// SystemSnapshotsColumns holds the columns for the "system_snapshots" table.
+	SystemSnapshotsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "captured_at", Type: field.TypeTime},
+		{Name: "payload", Type: field.TypeBytes},
+		{Name: "last_error", Type: field.TypeString, Nullable: true},
+		{Name: "server_system_snapshot", Type: field.TypeInt, Unique: true},
+	}
+	// SystemSnapshotsTable holds the schema information for the "system_snapshots" table.
+	SystemSnapshotsTable = &schema.Table{
+		Name:       "system_snapshots",
+		Columns:    SystemSnapshotsColumns,
+		PrimaryKey: []*schema.Column{SystemSnapshotsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "system_snapshots_servers_system_snapshot",
+				Columns:    []*schema.Column{SystemSnapshotsColumns[4]},
+				RefColumns: []*schema.Column{ServersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		AlertStatesTable,
 		LogCursorsTable,
 		ServersTable,
+		SystemSnapshotsTable,
 	}
 )
 
 func init() {
 	LogCursorsTable.ForeignKeys[0].RefTable = ServersTable
+	SystemSnapshotsTable.ForeignKeys[0].RefTable = ServersTable
 }

@@ -14,6 +14,7 @@ import (
 	"frappe-monitor/ent/alertstate"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/server"
+	"frappe-monitor/ent/systemsnapshot"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect"
@@ -32,6 +33,8 @@ type Client struct {
 	LogCursor *LogCursorClient
 	// Server is the client for interacting with the Server builders.
 	Server *ServerClient
+	// SystemSnapshot is the client for interacting with the SystemSnapshot builders.
+	SystemSnapshot *SystemSnapshotClient
 }
 
 // NewClient creates a new client configured with the given options.
@@ -46,6 +49,7 @@ func (c *Client) init() {
 	c.AlertState = NewAlertStateClient(c.config)
 	c.LogCursor = NewLogCursorClient(c.config)
 	c.Server = NewServerClient(c.config)
+	c.SystemSnapshot = NewSystemSnapshotClient(c.config)
 }
 
 type (
@@ -136,11 +140,12 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:        ctx,
-		config:     cfg,
-		AlertState: NewAlertStateClient(cfg),
-		LogCursor:  NewLogCursorClient(cfg),
-		Server:     NewServerClient(cfg),
+		ctx:            ctx,
+		config:         cfg,
+		AlertState:     NewAlertStateClient(cfg),
+		LogCursor:      NewLogCursorClient(cfg),
+		Server:         NewServerClient(cfg),
+		SystemSnapshot: NewSystemSnapshotClient(cfg),
 	}, nil
 }
 
@@ -158,11 +163,12 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:        ctx,
-		config:     cfg,
-		AlertState: NewAlertStateClient(cfg),
-		LogCursor:  NewLogCursorClient(cfg),
-		Server:     NewServerClient(cfg),
+		ctx:            ctx,
+		config:         cfg,
+		AlertState:     NewAlertStateClient(cfg),
+		LogCursor:      NewLogCursorClient(cfg),
+		Server:         NewServerClient(cfg),
+		SystemSnapshot: NewSystemSnapshotClient(cfg),
 	}, nil
 }
 
@@ -194,6 +200,7 @@ func (c *Client) Use(hooks ...Hook) {
 	c.AlertState.Use(hooks...)
 	c.LogCursor.Use(hooks...)
 	c.Server.Use(hooks...)
+	c.SystemSnapshot.Use(hooks...)
 }
 
 // Intercept adds the query interceptors to all the entity clients.
@@ -202,6 +209,7 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 	c.AlertState.Intercept(interceptors...)
 	c.LogCursor.Intercept(interceptors...)
 	c.Server.Intercept(interceptors...)
+	c.SystemSnapshot.Intercept(interceptors...)
 }
 
 // Mutate implements the ent.Mutator interface.
@@ -213,6 +221,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.LogCursor.mutate(ctx, m)
 	case *ServerMutation:
 		return c.Server.mutate(ctx, m)
+	case *SystemSnapshotMutation:
+		return c.SystemSnapshot.mutate(ctx, m)
 	default:
 		return nil, fmt.Errorf("ent: unknown mutation type %T", m)
 	}
@@ -624,6 +634,22 @@ func (c *ServerClient) QueryLogCursors(_m *Server) *LogCursorQuery {
 	return query
 }
 
+// QuerySystemSnapshot queries the system_snapshot edge of a Server.
+func (c *ServerClient) QuerySystemSnapshot(_m *Server) *SystemSnapshotQuery {
+	query := (&SystemSnapshotClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(server.Table, server.FieldID, id),
+			sqlgraph.To(systemsnapshot.Table, systemsnapshot.FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, false, server.SystemSnapshotTable, server.SystemSnapshotColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *ServerClient) Hooks() []Hook {
 	return c.hooks.Server
@@ -649,12 +675,161 @@ func (c *ServerClient) mutate(ctx context.Context, m *ServerMutation) (Value, er
 	}
 }
 
+// SystemSnapshotClient is a client for the SystemSnapshot schema.
+type SystemSnapshotClient struct {
+	config
+}
+
+// NewSystemSnapshotClient returns a client for the SystemSnapshot from the given config.
+func NewSystemSnapshotClient(c config) *SystemSnapshotClient {
+	return &SystemSnapshotClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `systemsnapshot.Hooks(f(g(h())))`.
+func (c *SystemSnapshotClient) Use(hooks ...Hook) {
+	c.hooks.SystemSnapshot = append(c.hooks.SystemSnapshot, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `systemsnapshot.Intercept(f(g(h())))`.
+func (c *SystemSnapshotClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SystemSnapshot = append(c.inters.SystemSnapshot, interceptors...)
+}
+
+// Create returns a builder for creating a SystemSnapshot entity.
+func (c *SystemSnapshotClient) Create() *SystemSnapshotCreate {
+	mutation := newSystemSnapshotMutation(c.config, OpCreate)
+	return &SystemSnapshotCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SystemSnapshot entities.
+func (c *SystemSnapshotClient) CreateBulk(builders ...*SystemSnapshotCreate) *SystemSnapshotCreateBulk {
+	return &SystemSnapshotCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SystemSnapshotClient) MapCreateBulk(slice any, setFunc func(*SystemSnapshotCreate, int)) *SystemSnapshotCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SystemSnapshotCreateBulk{err: fmt.Errorf("calling to SystemSnapshotClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SystemSnapshotCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SystemSnapshotCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SystemSnapshot.
+func (c *SystemSnapshotClient) Update() *SystemSnapshotUpdate {
+	mutation := newSystemSnapshotMutation(c.config, OpUpdate)
+	return &SystemSnapshotUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SystemSnapshotClient) UpdateOne(_m *SystemSnapshot) *SystemSnapshotUpdateOne {
+	mutation := newSystemSnapshotMutation(c.config, OpUpdateOne, withSystemSnapshot(_m))
+	return &SystemSnapshotUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SystemSnapshotClient) UpdateOneID(id int) *SystemSnapshotUpdateOne {
+	mutation := newSystemSnapshotMutation(c.config, OpUpdateOne, withSystemSnapshotID(id))
+	return &SystemSnapshotUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SystemSnapshot.
+func (c *SystemSnapshotClient) Delete() *SystemSnapshotDelete {
+	mutation := newSystemSnapshotMutation(c.config, OpDelete)
+	return &SystemSnapshotDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SystemSnapshotClient) DeleteOne(_m *SystemSnapshot) *SystemSnapshotDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SystemSnapshotClient) DeleteOneID(id int) *SystemSnapshotDeleteOne {
+	builder := c.Delete().Where(systemsnapshot.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SystemSnapshotDeleteOne{builder}
+}
+
+// Query returns a query builder for SystemSnapshot.
+func (c *SystemSnapshotClient) Query() *SystemSnapshotQuery {
+	return &SystemSnapshotQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSystemSnapshot},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SystemSnapshot entity by its id.
+func (c *SystemSnapshotClient) Get(ctx context.Context, id int) (*SystemSnapshot, error) {
+	return c.Query().Where(systemsnapshot.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SystemSnapshotClient) GetX(ctx context.Context, id int) *SystemSnapshot {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryServer queries the server edge of a SystemSnapshot.
+func (c *SystemSnapshotClient) QueryServer(_m *SystemSnapshot) *ServerQuery {
+	query := (&ServerClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(systemsnapshot.Table, systemsnapshot.FieldID, id),
+			sqlgraph.To(server.Table, server.FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, true, systemsnapshot.ServerTable, systemsnapshot.ServerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *SystemSnapshotClient) Hooks() []Hook {
+	return c.hooks.SystemSnapshot
+}
+
+// Interceptors returns the client interceptors.
+func (c *SystemSnapshotClient) Interceptors() []Interceptor {
+	return c.inters.SystemSnapshot
+}
+
+func (c *SystemSnapshotClient) mutate(ctx context.Context, m *SystemSnapshotMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SystemSnapshotCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SystemSnapshotUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SystemSnapshotUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SystemSnapshotDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SystemSnapshot mutation op: %q", m.Op())
+	}
+}
+
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AlertState, LogCursor, Server []ent.Hook
+		AlertState, LogCursor, Server, SystemSnapshot []ent.Hook
 	}
 	inters struct {
-		AlertState, LogCursor, Server []ent.Interceptor
+		AlertState, LogCursor, Server, SystemSnapshot []ent.Interceptor
 	}
 )

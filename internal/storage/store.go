@@ -60,6 +60,16 @@ type UpdateServer struct {
 	Labels     *map[string]string
 }
 
+// SystemSnapshot is the operator-friendly inventory of a server
+// (OS, CPU, memory, disks, top processes). One row per server,
+// upserted on capture.
+type SystemSnapshot struct {
+	ServerID   int
+	CapturedAt time.Time
+	Payload    []byte // JSON, schema-on-read; the SPA renders it.
+	LastError  string
+}
+
 // AlertState mirrors ent/schema/alertstate.go. The alerts package's
 // reconciler reads/writes these via the Store interface.
 type AlertState struct {
@@ -91,6 +101,10 @@ type Store interface {
 	ListAlertStates(ctx context.Context) ([]*AlertState, error)
 	UpsertAlertState(ctx context.Context, in AlertState) (*AlertState, error)
 	DeleteAlertState(ctx context.Context, id int) error
+
+	// System snapshot — operator-friendly inventory per server.
+	GetSystemSnapshot(ctx context.Context, serverID int) (*SystemSnapshot, error)
+	UpsertSystemSnapshot(ctx context.Context, in SystemSnapshot) error
 
 	Close() error
 }

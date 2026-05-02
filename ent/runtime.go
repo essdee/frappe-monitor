@@ -7,6 +7,7 @@ import (
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/schema"
 	"frappe-monitor/ent/server"
+	"frappe-monitor/ent/systemsnapshot"
 	"time"
 )
 
@@ -94,4 +95,12 @@ func init() {
 	server.DefaultUpdatedAt = serverDescUpdatedAt.Default.(func() time.Time)
 	// server.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	server.UpdateDefaultUpdatedAt = serverDescUpdatedAt.UpdateDefault.(func() time.Time)
+	systemsnapshotFields := schema.SystemSnapshot{}.Fields()
+	_ = systemsnapshotFields
+	// systemsnapshotDescCapturedAt is the schema descriptor for captured_at field.
+	systemsnapshotDescCapturedAt := systemsnapshotFields[0].Descriptor()
+	// systemsnapshot.DefaultCapturedAt holds the default value on creation for the captured_at field.
+	systemsnapshot.DefaultCapturedAt = systemsnapshotDescCapturedAt.Default.(func() time.Time)
+	// systemsnapshot.UpdateDefaultCapturedAt holds the default value on update for the captured_at field.
+	systemsnapshot.UpdateDefaultCapturedAt = systemsnapshotDescCapturedAt.UpdateDefault.(func() time.Time)
 }

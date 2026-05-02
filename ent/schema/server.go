@@ -42,5 +42,8 @@ func (Server) Edges() []ent.Edge {
 		// One server -> many log cursors. The reverse end lives on
 		// LogCursor (Required + Unique → cascading delete falls out).
 		edge.To("log_cursors", LogCursor.Type),
+		// One server -> one system snapshot (Unique). Cascading
+		// delete from server.
+		edge.To("system_snapshot", SystemSnapshot.Type).Unique(),
 	}
 }
