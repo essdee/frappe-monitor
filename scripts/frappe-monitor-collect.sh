@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-VERSION="2.2.0"
+VERSION="2.3.0"
 
 # Trap any error so the operator sees what actually failed, then end
 # the output cleanly with ###END so the parser doesn't bail with a
@@ -198,22 +198,20 @@ emit_bench() {
   echo
 }
 
-# Per-bench: figure out which port the bench is actually listening
-# on. Production benches sit behind nginx on 80/443; dev benches run
-# `bench start` which serves on 8000 (configurable via
-# sites/common_site_config.json's webserver_port). Probe order:
-#   1. webserver_port from common_site_config.json (if parseable)
-#   2. 8000 (bench start default)
-#   3. 80   (nginx)
-# First port that responds with a real HTTP code wins. Returns
-# "<port> <code> <time_s>" or "0 0 0" on total failure.
-detect_bench_port() {
+# Detect the bench's webserver port ONCE per bench (was per-site in
+# 2.2.0 — that scaled O(sites × candidate_ports) and timed out at 14+
+# sites under SSH's 30s budget). Caller probes each candidate against
+# the first available site so the Host header routes correctly. The
+# returned port is then reused for every site in this bench.
+#
+# Returns the port number on stdout, or "0" if nothing is listening.
+detect_bench_port_once() {
   local bench="$1"
-  local site="$2"
+  local probe_site="$2"   # any site under this bench, used as Host hdr
   local conf="$bench/sites/common_site_config.json"
   local candidates=()
 
-  # 1. Configured webserver_port, if json parses.
+  # 1. Configured webserver_port wins if parseable.
   if [ -f "$conf" ] && command -v python3 >/dev/null 2>&1; then
     local p
     p=$(python3 -c "import json,sys; d=json.load(open('$conf')); print(d.get('webserver_port',''))" 2>/dev/null || echo "")
@@ -221,42 +219,49 @@ detect_bench_port() {
       candidates+=("$p")
     fi
   fi
-  # 2. Common defaults — order matters: 8000 first since dev mode is
-  # what most laptop testers run.
+  # 2. Common defaults — 8000 (bench start) first; 80 (nginx) next.
   candidates+=(8000 80)
 
   for port in "${candidates[@]}"; do
-    local out http_code time_s
-    out=$(curl -sS -o /dev/null -m 3 \
-          -w '%{http_code} %{time_total}' \
-          -H "Host: $site" \
-          "http://127.0.0.1:${port}/api/method/ping" 2>/dev/null || echo "000 0")
-    http_code=$(echo "$out" | awk '{print $1}')
-    time_s=$(echo "$out" | awk '{print $2}')
-    # Anything other than 000 (curl couldn't connect) means *something*
-    # is listening on that port — call that the bench's port.
-    if [ -n "$http_code" ] && [ "$http_code" != "000" ]; then
-      echo "$port $http_code $time_s"
+    local code
+    # Tighter 2s timeout (was 3s × 2 candidates × 14 sites = >> 30s
+    # SSH budget). One quick connect-test per candidate is enough.
+    code=$(curl -sS -o /dev/null -m 2 \
+           -w '%{http_code}' \
+           -H "Host: $probe_site" \
+           "http://127.0.0.1:${port}/api/method/ping" 2>/dev/null || echo "000")
+    if [ -n "$code" ] && [ "$code" != "000" ]; then
+      echo "$port"
       return
     fi
   done
-  echo "0 0 0"
+  echo "0"
 }
 
-# Per-site HTTP probe + emit. Site name is the directory under sites/.
+# Per-site HTTP probe + emit using the cached port. Tighter per-probe
+# timeout (2s) so 30+ sites still fit the SSH budget.
 emit_site() {
-  local bench_path="$1"
-  local bench_name="$2"
-  local site_name="$3"
+  local bench_name="$1"
+  local site_name="$2"
+  local port="$3"
 
   echo "###SITE:$bench_name:$site_name"
 
-  local probe http_code time_s time_ms healthy port
-  probe=$(detect_bench_port "$bench_path" "$site_name")
-  port=$(echo "$probe" | awk '{print $1}')
-  http_code=$(echo "$probe" | awk '{print $2}')
-  time_s=$(echo "$probe" | awk '{print $3}')
-  time_ms=$(awk "BEGIN {printf \"%.1f\", ($time_s) * 1000}")
+  local out http_code time_s time_ms healthy
+  if [ "$port" = "0" ]; then
+    # No port detected — short-circuit to is_healthy=0; don't waste a
+    # 2s timeout per site on a connection-refused.
+    http_code=0
+    time_ms=0
+  else
+    out=$(curl -sS -o /dev/null -m 2 \
+          -w '%{http_code} %{time_total}' \
+          -H "Host: $site_name" \
+          "http://127.0.0.1:${port}/api/method/ping" 2>/dev/null || echo "000 0")
+    http_code=$(echo "$out" | awk '{print $1}')
+    time_s=$(echo "$out" | awk '{print $2}')
+    time_ms=$(awk "BEGIN {printf \"%.1f\", ($time_s) * 1000}")
+  fi
 
   echo "http_port=$port"
   echo "http_status_code=$http_code"
@@ -287,11 +292,27 @@ while IFS= read -r bench_path; do
 
   if [ -d "$bench_path/sites" ]; then
     shopt -s nullglob
+
+    # Pick any one site to use as the "Host" header during port
+    # detection, then reuse that port for every site in this bench.
+    first_site=""
+    for site_dir in "$bench_path/sites"/*/; do
+      [ -d "$site_dir" ] || continue
+      [ -f "$site_dir/site_config.json" ] || continue
+      first_site=$(basename "$site_dir")
+      break
+    done
+
+    bench_port="0"
+    if [ -n "$first_site" ]; then
+      bench_port=$(detect_bench_port_once "$bench_path" "$first_site")
+    fi
+
     for site_dir in "$bench_path/sites"/*/; do
       [ -d "$site_dir" ] || continue
       [ -f "$site_dir/site_config.json" ] || continue
       site_name=$(basename "$site_dir")
-      emit_site "$bench_path" "$bench_name" "$site_name"
+      emit_site "$bench_name" "$site_name" "$bench_port"
     done
     shopt -u nullglob
   fi
