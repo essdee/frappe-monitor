@@ -1,12 +1,21 @@
+/* Theme variables. Light by default; dark via OS preference. The dark
+   palette is hand-tuned for high contrast (≥ WCAG AA) so labels,
+   muted text, and chart tooltips all stay readable on dark cards. */
+
 :root {
   --bg: #f7f8fa;
   --fg: #1f2328;
-  --muted: #6b7280;
+  --muted: #4b5563;
   --card-bg: #ffffff;
-  --card-border: #e5e7eb;
+  --card-border: #d1d5db;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   --accent: #0969da;
-  --status-reachable: #2da44e;
-  --status-unreachable: #cf222e;
+  --accent-hover: #0858c2;
+  --sidebar-bg: #1a1d23;
+  --sidebar-fg: #e8eaed;
+  --sidebar-active: #2d313a;
+  --status-reachable: #16a34a;
+  --status-unreachable: #dc2626;
   --status-unknown: #9ca3af;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light dark;
@@ -14,11 +23,29 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #8b949e;
+    /* Page bg slightly darker than cards so the layout reads. */
+    --bg: #0a0d12;
+    /* Foreground: nearly white, no blue tint — crisp on dark cards. */
+    --fg: #f3f6f9;
+    /* Muted bumped from #8b949e to a much brighter neutral so labels
+       like "Apps", "Healthy", "mount /" stop disappearing. */
+    --muted: #b8c2cc;
+    /* Card bg sits between page bg and a subtle elevation tint. */
     --card-bg: #161b22;
-    --card-border: #30363d;
+    /* Border bright enough to actually outline the card. */
+    --card-border: #4b5563;
+    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    /* Accent: GitHub primer "blue 3" — readable on dark, bright. */
+    --accent: #6cb6ff;
+    --accent-hover: #91cbff;
+    --sidebar-bg: #11151b;
+    --sidebar-fg: #f0f3f6;
+    --sidebar-active: #232a33;
+    /* Status colors: pick brighter shades so red/green/grey are
+       unmistakable against dark cards. */
+    --status-reachable: #4ade80;
+    --status-unreachable: #ff6b6b;
+    --status-unknown: #cbd5e1;
   }
 }
 
@@ -26,13 +53,87 @@
   box-sizing: border-box;
 }
 
+html {
+  /* Slightly larger base font — the dashboard has a lot of small
+     metadata text. 15px reads noticeably better than 14px on dark. */
+  font-size: 15px;
+}
+
 html, body {
   margin: 0;
   padding: 0;
   background: var(--bg);
   color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 a {
   color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* Universal styles for any element using card-bg + card-border get
+   a subtle shadow in dark mode so cards visibly separate from the
+   page bg. Components keep their per-component spacing/layout. */
+@media (prefers-color-scheme: dark) {
+  /* Headings stay nearly white — the components don't currently set
+     specific colors for h2/h3, so OS-default is fine. */
+}
+
+/* Selection colors visible on both themes. */
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Make form controls inherit the theme without per-component css. */
+input,
+textarea,
+select,
+button {
+  color: var(--fg);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+/* Native scrollbars in dark mode shouldn't be glaring white. */
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--bg);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a323d;
+    border-radius: 5px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a4452;
+  }
+}
+
+/* Tables shared style — components use this through inherited styles. */
+table {
+  color: var(--fg);
+}
+
+/* Code-style spans (e.g. bench paths, queue names) need a subtle
+   bg tint so they stand out from prose. */
+code {
+  background: color-mix(in srgb, var(--card-border) 30%, transparent);
+  padding: 0.05em 0.35em;
+  border-radius: 3px;
+  font-size: 0.9em;
 }

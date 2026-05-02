@@ -36,7 +36,22 @@ const chart = shallowRef<echarts.ECharts | null>(null)
 
 const seriesLabel = props.seriesLabel ?? ((m) => JSON.stringify(m))
 
+// Track OS dark-mode preference so we can give ECharts an explicitly
+// theme-aware option. Pure CSS doesn't reach into the chart canvas.
+const isDark = ref(window.matchMedia('(prefers-color-scheme: dark)').matches)
+{
+  const mq = window.matchMedia('(prefers-color-scheme: dark)')
+  const onChange = (e: MediaQueryListEvent) => (isDark.value = e.matches)
+  mq.addEventListener('change', onChange)
+  onScopeDispose(() => mq.removeEventListener('change', onChange))
+}
+
 const option = computed(() => {
+  const dark = isDark.value
+  const fg = dark ? '#f3f6f9' : '#1f2328'
+  const muted = dark ? '#b8c2cc' : '#4b5563'
+  const grid = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'
+
   const series = (props.result?.data?.result ?? []).map((r: MetricsResultValue) => ({
     name: seriesLabel(r.metric),
     type: 'line' as const,
@@ -45,16 +60,42 @@ const option = computed(() => {
     data: r.values.map(([ts, v]) => [ts * 1000, Number(v)]),
   }))
   return {
-    title: { text: props.title, left: 0, textStyle: { fontSize: 14, fontWeight: 600 as const } },
-    tooltip: { trigger: 'axis' as const },
-    legend: { type: 'scroll' as const, top: 24, textStyle: { fontSize: 11 } },
+    backgroundColor: 'transparent',
+    textStyle: { color: fg },
+    title: {
+      text: props.title,
+      left: 0,
+      textStyle: { fontSize: 14, fontWeight: 600 as const, color: fg },
+    },
+    tooltip: {
+      trigger: 'axis' as const,
+      backgroundColor: dark ? '#1f2933' : '#ffffff',
+      borderColor: dark ? '#4b5563' : '#d1d5db',
+      textStyle: { color: fg, fontSize: 12 },
+    },
+    legend: {
+      type: 'scroll' as const,
+      top: 24,
+      textStyle: { fontSize: 11, color: muted },
+      pageTextStyle: { color: muted },
+      pageIconColor: muted,
+      pageIconInactiveColor: dark ? '#3a4452' : '#cbd5e1',
+    },
     grid: { left: 50, right: 16, top: 54, bottom: 24 },
-    xAxis: { type: 'time' as const },
+    xAxis: {
+      type: 'time' as const,
+      axisLabel: { color: muted },
+      axisLine: { lineStyle: { color: grid } },
+      splitLine: { lineStyle: { color: grid } },
+    },
     yAxis: {
       type: 'value' as const,
       axisLabel: {
+        color: muted,
         formatter: (v: number) => `${v.toFixed(1)}${props.yUnit ?? ''}`,
       },
+      axisLine: { lineStyle: { color: grid } },
+      splitLine: { lineStyle: { color: grid } },
     },
     series,
   }
