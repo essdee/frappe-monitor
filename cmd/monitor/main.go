@@ -23,6 +23,7 @@ import (
 	"frappe-monitor/internal/scheduler"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
+	"frappe-monitor/scripts"
 )
 
 func main() {
@@ -149,6 +150,37 @@ func run(cfgPath string) error {
 			return
 		}
 		logger.Info("scheduler: hot-added server", "server_id", serverID, "spec", scheduleSpec)
+
+		// Best-effort: capture a system snapshot in the background.
+		// Failures land in last_error on the SystemSnapshot row; the
+		// dashboard's refresh button can retry. Don't block server
+		// creation on this.
+		go func() {
+			snapCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			srv, err := store.GetServer(snapCtx, serverID)
+			if err != nil {
+				logger.Warn("snapshot: bootstrap get-server failed", "server_id", serverID, "err", err)
+				return
+			}
+			tgt := sshpkg.Target{
+				Host: srv.Hostname, Port: srv.SSHPort,
+				User: srv.SSHUser, KeyPath: srv.SSHKeyPath,
+			}
+			out, runErr := pool.RunWithInput(snapCtx, tgt, "bash -s", scripts.SystemScript)
+			snap := storage.SystemSnapshot{ServerID: serverID}
+			if runErr != nil {
+				snap.LastError = runErr.Error()
+			} else {
+				snap.Payload = []byte(out)
+			}
+			if err := store.UpsertSystemSnapshot(snapCtx, snap); err != nil {
+				logger.Warn("snapshot: bootstrap upsert failed", "server_id", serverID, "err", err)
+				return
+			}
+			logger.Info("snapshot: bootstrap captured", "server_id", serverID,
+				"ssh_failed", runErr != nil)
+		}()
 	}
 	onServerDeleted := func(serverID int) {
 		sched.RemoveKeyed(serverID)

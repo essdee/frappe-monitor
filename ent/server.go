@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"frappe-monitor/ent/server"
+	"frappe-monitor/ent/systemsnapshot"
 	"strings"
 	"time"
 
@@ -52,9 +53,11 @@ type Server struct {
 type ServerEdges struct {
 	// LogCursors holds the value of the log_cursors edge.
 	LogCursors []*LogCursor `json:"log_cursors,omitempty"`
+	// SystemSnapshot holds the value of the system_snapshot edge.
+	SystemSnapshot *SystemSnapshot `json:"system_snapshot,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [1]bool
+	loadedTypes [2]bool
 }
 
 // LogCursorsOrErr returns the LogCursors value or an error if the edge
@@ -64,6 +67,17 @@ func (e ServerEdges) LogCursorsOrErr() ([]*LogCursor, error) {
 		return e.LogCursors, nil
 	}
 	return nil, &NotLoadedError{edge: "log_cursors"}
+}
+
+// SystemSnapshotOrErr returns the SystemSnapshot value or an error if the edge
+// was not loaded in eager-loading, or loaded but was not found.
+func (e ServerEdges) SystemSnapshotOrErr() (*SystemSnapshot, error) {
+	if e.SystemSnapshot != nil {
+		return e.SystemSnapshot, nil
+	} else if e.loadedTypes[1] {
+		return nil, &NotFoundError{label: systemsnapshot.Label}
+	}
+	return nil, &NotLoadedError{edge: "system_snapshot"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -193,6 +207,11 @@ func (_m *Server) Value(name string) (ent.Value, error) {
 // QueryLogCursors queries the "log_cursors" edge of the Server entity.
 func (_m *Server) QueryLogCursors() *LogCursorQuery {
 	return NewServerClient(_m.config).QueryLogCursors(_m)
+}
+
+// QuerySystemSnapshot queries the "system_snapshot" edge of the Server entity.
+func (_m *Server) QuerySystemSnapshot() *SystemSnapshotQuery {
+	return NewServerClient(_m.config).QuerySystemSnapshot(_m)
 }
 
 // Update returns a builder for updating this Server.

@@ -10,6 +10,7 @@ import (
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
 	"frappe-monitor/ent/server"
+	"frappe-monitor/ent/systemsnapshot"
 	"sync"
 	"time"
 
@@ -26,9 +27,10 @@ const (
 	OpUpdateOne = ent.OpUpdateOne
 
 	// Node types.
-	TypeAlertState = "AlertState"
-	TypeLogCursor  = "LogCursor"
-	TypeServer     = "Server"
+	TypeAlertState     = "AlertState"
+	TypeLogCursor      = "LogCursor"
+	TypeServer         = "Server"
+	TypeSystemSnapshot = "SystemSnapshot"
 )
 
 // AlertStateMutation represents an operation that mutates the AlertState nodes in the graph.
@@ -1333,30 +1335,32 @@ func (m *LogCursorMutation) ResetEdge(name string) error {
 // ServerMutation represents an operation that mutates the Server nodes in the graph.
 type ServerMutation struct {
 	config
-	op                 Op
-	typ                string
-	id                 *int
-	name               *string
-	hostname           *string
-	ssh_user           *string
-	ssh_port           *int
-	addssh_port        *int
-	ssh_key_path       *string
-	bench_paths        *[]string
-	appendbench_paths  []string
-	labels             *map[string]string
-	status             *server.Status
-	last_pinged_at     *time.Time
-	last_error         *string
-	created_at         *time.Time
-	updated_at         *time.Time
-	clearedFields      map[string]struct{}
-	log_cursors        map[int]struct{}
-	removedlog_cursors map[int]struct{}
-	clearedlog_cursors bool
-	done               bool
-	oldValue           func(context.Context) (*Server, error)
-	predicates         []predicate.Server
+	op                     Op
+	typ                    string
+	id                     *int
+	name                   *string
+	hostname               *string
+	ssh_user               *string
+	ssh_port               *int
+	addssh_port            *int
+	ssh_key_path           *string
+	bench_paths            *[]string
+	appendbench_paths      []string
+	labels                 *map[string]string
+	status                 *server.Status
+	last_pinged_at         *time.Time
+	last_error             *string
+	created_at             *time.Time
+	updated_at             *time.Time
+	clearedFields          map[string]struct{}
+	log_cursors            map[int]struct{}
+	removedlog_cursors     map[int]struct{}
+	clearedlog_cursors     bool
+	system_snapshot        *int
+	clearedsystem_snapshot bool
+	done                   bool
+	oldValue               func(context.Context) (*Server, error)
+	predicates             []predicate.Server
 }
 
 var _ ent.Mutation = (*ServerMutation)(nil)
@@ -2031,6 +2035,45 @@ func (m *ServerMutation) ResetLogCursors() {
 	m.removedlog_cursors = nil
 }
 
+// SetSystemSnapshotID sets the "system_snapshot" edge to the SystemSnapshot entity by id.
+func (m *ServerMutation) SetSystemSnapshotID(id int) {
+	m.system_snapshot = &id
+}
+
+// ClearSystemSnapshot clears the "system_snapshot" edge to the SystemSnapshot entity.
+func (m *ServerMutation) ClearSystemSnapshot() {
+	m.clearedsystem_snapshot = true
+}
+
+// SystemSnapshotCleared reports if the "system_snapshot" edge to the SystemSnapshot entity was cleared.
+func (m *ServerMutation) SystemSnapshotCleared() bool {
+	return m.clearedsystem_snapshot
+}
+
+// SystemSnapshotID returns the "system_snapshot" edge ID in the mutation.
+func (m *ServerMutation) SystemSnapshotID() (id int, exists bool) {
+	if m.system_snapshot != nil {
+		return *m.system_snapshot, true
+	}
+	return
+}
+
+// SystemSnapshotIDs returns the "system_snapshot" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// SystemSnapshotID instead. It exists only for internal usage by the builders.
+func (m *ServerMutation) SystemSnapshotIDs() (ids []int) {
+	if id := m.system_snapshot; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetSystemSnapshot resets all changes to the "system_snapshot" edge.
+func (m *ServerMutation) ResetSystemSnapshot() {
+	m.system_snapshot = nil
+	m.clearedsystem_snapshot = false
+}
+
 // Where appends a list predicates to the ServerMutation builder.
 func (m *ServerMutation) Where(ps ...predicate.Server) {
 	m.predicates = append(m.predicates, ps...)
@@ -2393,9 +2436,12 @@ func (m *ServerMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ServerMutation) AddedEdges() []string {
-	edges := make([]string, 0, 1)
+	edges := make([]string, 0, 2)
 	if m.log_cursors != nil {
 		edges = append(edges, server.EdgeLogCursors)
+	}
+	if m.system_snapshot != nil {
+		edges = append(edges, server.EdgeSystemSnapshot)
 	}
 	return edges
 }
@@ -2410,13 +2456,17 @@ func (m *ServerMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case server.EdgeSystemSnapshot:
+		if id := m.system_snapshot; id != nil {
+			return []ent.Value{*id}
+		}
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ServerMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 1)
+	edges := make([]string, 0, 2)
 	if m.removedlog_cursors != nil {
 		edges = append(edges, server.EdgeLogCursors)
 	}
@@ -2439,9 +2489,12 @@ func (m *ServerMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ServerMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 1)
+	edges := make([]string, 0, 2)
 	if m.clearedlog_cursors {
 		edges = append(edges, server.EdgeLogCursors)
+	}
+	if m.clearedsystem_snapshot {
+		edges = append(edges, server.EdgeSystemSnapshot)
 	}
 	return edges
 }
@@ -2452,6 +2505,8 @@ func (m *ServerMutation) EdgeCleared(name string) bool {
 	switch name {
 	case server.EdgeLogCursors:
 		return m.clearedlog_cursors
+	case server.EdgeSystemSnapshot:
+		return m.clearedsystem_snapshot
 	}
 	return false
 }
@@ -2460,6 +2515,9 @@ func (m *ServerMutation) EdgeCleared(name string) bool {
 // if that edge is not defined in the schema.
 func (m *ServerMutation) ClearEdge(name string) error {
 	switch name {
+	case server.EdgeSystemSnapshot:
+		m.ClearSystemSnapshot()
+		return nil
 	}
 	return fmt.Errorf("unknown Server unique edge %s", name)
 }
@@ -2471,6 +2529,532 @@ func (m *ServerMutation) ResetEdge(name string) error {
 	case server.EdgeLogCursors:
 		m.ResetLogCursors()
 		return nil
+	case server.EdgeSystemSnapshot:
+		m.ResetSystemSnapshot()
+		return nil
 	}
 	return fmt.Errorf("unknown Server edge %s", name)
+}
+
+// SystemSnapshotMutation represents an operation that mutates the SystemSnapshot nodes in the graph.
+type SystemSnapshotMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *int
+	captured_at   *time.Time
+	payload       *[]byte
+	last_error    *string
+	clearedFields map[string]struct{}
+	server        *int
+	clearedserver bool
+	done          bool
+	oldValue      func(context.Context) (*SystemSnapshot, error)
+	predicates    []predicate.SystemSnapshot
+}
+
+var _ ent.Mutation = (*SystemSnapshotMutation)(nil)
+
+// systemsnapshotOption allows management of the mutation configuration using functional options.
+type systemsnapshotOption func(*SystemSnapshotMutation)
+
+// newSystemSnapshotMutation creates new mutation for the SystemSnapshot entity.
+func newSystemSnapshotMutation(c config, op Op, opts ...systemsnapshotOption) *SystemSnapshotMutation {
+	m := &SystemSnapshotMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeSystemSnapshot,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withSystemSnapshotID sets the ID field of the mutation.
+func withSystemSnapshotID(id int) systemsnapshotOption {
+	return func(m *SystemSnapshotMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *SystemSnapshot
+		)
+		m.oldValue = func(ctx context.Context) (*SystemSnapshot, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().SystemSnapshot.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withSystemSnapshot sets the old SystemSnapshot of the mutation.
+func withSystemSnapshot(node *SystemSnapshot) systemsnapshotOption {
+	return func(m *SystemSnapshotMutation) {
+		m.oldValue = func(context.Context) (*SystemSnapshot, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m SystemSnapshotMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m SystemSnapshotMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *SystemSnapshotMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *SystemSnapshotMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().SystemSnapshot.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCapturedAt sets the "captured_at" field.
+func (m *SystemSnapshotMutation) SetCapturedAt(t time.Time) {
+	m.captured_at = &t
+}
+
+// CapturedAt returns the value of the "captured_at" field in the mutation.
+func (m *SystemSnapshotMutation) CapturedAt() (r time.Time, exists bool) {
+	v := m.captured_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCapturedAt returns the old "captured_at" field's value of the SystemSnapshot entity.
+// If the SystemSnapshot object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SystemSnapshotMutation) OldCapturedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCapturedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCapturedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCapturedAt: %w", err)
+	}
+	return oldValue.CapturedAt, nil
+}
+
+// ResetCapturedAt resets all changes to the "captured_at" field.
+func (m *SystemSnapshotMutation) ResetCapturedAt() {
+	m.captured_at = nil
+}
+
+// SetPayload sets the "payload" field.
+func (m *SystemSnapshotMutation) SetPayload(b []byte) {
+	m.payload = &b
+}
+
+// Payload returns the value of the "payload" field in the mutation.
+func (m *SystemSnapshotMutation) Payload() (r []byte, exists bool) {
+	v := m.payload
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPayload returns the old "payload" field's value of the SystemSnapshot entity.
+// If the SystemSnapshot object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SystemSnapshotMutation) OldPayload(ctx context.Context) (v []byte, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPayload is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPayload requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPayload: %w", err)
+	}
+	return oldValue.Payload, nil
+}
+
+// ResetPayload resets all changes to the "payload" field.
+func (m *SystemSnapshotMutation) ResetPayload() {
+	m.payload = nil
+}
+
+// SetLastError sets the "last_error" field.
+func (m *SystemSnapshotMutation) SetLastError(s string) {
+	m.last_error = &s
+}
+
+// LastError returns the value of the "last_error" field in the mutation.
+func (m *SystemSnapshotMutation) LastError() (r string, exists bool) {
+	v := m.last_error
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastError returns the old "last_error" field's value of the SystemSnapshot entity.
+// If the SystemSnapshot object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SystemSnapshotMutation) OldLastError(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastError is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastError requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastError: %w", err)
+	}
+	return oldValue.LastError, nil
+}
+
+// ClearLastError clears the value of the "last_error" field.
+func (m *SystemSnapshotMutation) ClearLastError() {
+	m.last_error = nil
+	m.clearedFields[systemsnapshot.FieldLastError] = struct{}{}
+}
+
+// LastErrorCleared returns if the "last_error" field was cleared in this mutation.
+func (m *SystemSnapshotMutation) LastErrorCleared() bool {
+	_, ok := m.clearedFields[systemsnapshot.FieldLastError]
+	return ok
+}
+
+// ResetLastError resets all changes to the "last_error" field.
+func (m *SystemSnapshotMutation) ResetLastError() {
+	m.last_error = nil
+	delete(m.clearedFields, systemsnapshot.FieldLastError)
+}
+
+// SetServerID sets the "server" edge to the Server entity by id.
+func (m *SystemSnapshotMutation) SetServerID(id int) {
+	m.server = &id
+}
+
+// ClearServer clears the "server" edge to the Server entity.
+func (m *SystemSnapshotMutation) ClearServer() {
+	m.clearedserver = true
+}
+
+// ServerCleared reports if the "server" edge to the Server entity was cleared.
+func (m *SystemSnapshotMutation) ServerCleared() bool {
+	return m.clearedserver
+}
+
+// ServerID returns the "server" edge ID in the mutation.
+func (m *SystemSnapshotMutation) ServerID() (id int, exists bool) {
+	if m.server != nil {
+		return *m.server, true
+	}
+	return
+}
+
+// ServerIDs returns the "server" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ServerID instead. It exists only for internal usage by the builders.
+func (m *SystemSnapshotMutation) ServerIDs() (ids []int) {
+	if id := m.server; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetServer resets all changes to the "server" edge.
+func (m *SystemSnapshotMutation) ResetServer() {
+	m.server = nil
+	m.clearedserver = false
+}
+
+// Where appends a list predicates to the SystemSnapshotMutation builder.
+func (m *SystemSnapshotMutation) Where(ps ...predicate.SystemSnapshot) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the SystemSnapshotMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *SystemSnapshotMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.SystemSnapshot, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *SystemSnapshotMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *SystemSnapshotMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (SystemSnapshot).
+func (m *SystemSnapshotMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *SystemSnapshotMutation) Fields() []string {
+	fields := make([]string, 0, 3)
+	if m.captured_at != nil {
+		fields = append(fields, systemsnapshot.FieldCapturedAt)
+	}
+	if m.payload != nil {
+		fields = append(fields, systemsnapshot.FieldPayload)
+	}
+	if m.last_error != nil {
+		fields = append(fields, systemsnapshot.FieldLastError)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *SystemSnapshotMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case systemsnapshot.FieldCapturedAt:
+		return m.CapturedAt()
+	case systemsnapshot.FieldPayload:
+		return m.Payload()
+	case systemsnapshot.FieldLastError:
+		return m.LastError()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *SystemSnapshotMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case systemsnapshot.FieldCapturedAt:
+		return m.OldCapturedAt(ctx)
+	case systemsnapshot.FieldPayload:
+		return m.OldPayload(ctx)
+	case systemsnapshot.FieldLastError:
+		return m.OldLastError(ctx)
+	}
+	return nil, fmt.Errorf("unknown SystemSnapshot field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SystemSnapshotMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case systemsnapshot.FieldCapturedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCapturedAt(v)
+		return nil
+	case systemsnapshot.FieldPayload:
+		v, ok := value.([]byte)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPayload(v)
+		return nil
+	case systemsnapshot.FieldLastError:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastError(v)
+		return nil
+	}
+	return fmt.Errorf("unknown SystemSnapshot field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *SystemSnapshotMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *SystemSnapshotMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SystemSnapshotMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown SystemSnapshot numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *SystemSnapshotMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(systemsnapshot.FieldLastError) {
+		fields = append(fields, systemsnapshot.FieldLastError)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *SystemSnapshotMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *SystemSnapshotMutation) ClearField(name string) error {
+	switch name {
+	case systemsnapshot.FieldLastError:
+		m.ClearLastError()
+		return nil
+	}
+	return fmt.Errorf("unknown SystemSnapshot nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *SystemSnapshotMutation) ResetField(name string) error {
+	switch name {
+	case systemsnapshot.FieldCapturedAt:
+		m.ResetCapturedAt()
+		return nil
+	case systemsnapshot.FieldPayload:
+		m.ResetPayload()
+		return nil
+	case systemsnapshot.FieldLastError:
+		m.ResetLastError()
+		return nil
+	}
+	return fmt.Errorf("unknown SystemSnapshot field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *SystemSnapshotMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.server != nil {
+		edges = append(edges, systemsnapshot.EdgeServer)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *SystemSnapshotMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case systemsnapshot.EdgeServer:
+		if id := m.server; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *SystemSnapshotMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *SystemSnapshotMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *SystemSnapshotMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedserver {
+		edges = append(edges, systemsnapshot.EdgeServer)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *SystemSnapshotMutation) EdgeCleared(name string) bool {
+	switch name {
+	case systemsnapshot.EdgeServer:
+		return m.clearedserver
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *SystemSnapshotMutation) ClearEdge(name string) error {
+	switch name {
+	case systemsnapshot.EdgeServer:
+		m.ClearServer()
+		return nil
+	}
+	return fmt.Errorf("unknown SystemSnapshot unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *SystemSnapshotMutation) ResetEdge(name string) error {
+	switch name {
+	case systemsnapshot.EdgeServer:
+		m.ResetServer()
+		return nil
+	}
+	return fmt.Errorf("unknown SystemSnapshot edge %s", name)
 }

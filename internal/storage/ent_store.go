@@ -16,6 +16,7 @@ import (
 	entalertstate "frappe-monitor/ent/alertstate"
 	entlogcursor "frappe-monitor/ent/logcursor"
 	entserver "frappe-monitor/ent/server"
+	entsystemsnapshot "frappe-monitor/ent/systemsnapshot"
 )
 
 type EntStore struct {
@@ -216,6 +217,53 @@ func (s *EntStore) UpsertLogCursor(ctx context.Context, c LogCursor) error {
 	_, err = s.client.LogCursor.UpdateOneID(existing.ID).
 		SetByteOffset(c.ByteOffset).
 		SetLastSeenAt(time.Now().UTC()).
+		Save(ctx)
+	return err
+}
+
+// --- System snapshot ----------------------------------------------------
+
+// GetSystemSnapshot returns the most recent inventory for a server,
+// or ErrNotFound if none has been captured yet.
+func (s *EntStore) GetSystemSnapshot(ctx context.Context, serverID int) (*SystemSnapshot, error) {
+	row, err := s.client.SystemSnapshot.Query().
+		Where(entsystemsnapshot.HasServerWith(entserver.ID(serverID))).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &SystemSnapshot{
+		ServerID:   serverID,
+		CapturedAt: row.CapturedAt,
+		Payload:    row.Payload,
+		LastError:  row.LastError,
+	}, nil
+}
+
+// UpsertSystemSnapshot writes the latest inventory for a server,
+// creating the row if absent or replacing the payload if present.
+// Captured_at is bumped automatically by the ent UpdateDefault.
+func (s *EntStore) UpsertSystemSnapshot(ctx context.Context, in SystemSnapshot) error {
+	existing, err := s.client.SystemSnapshot.Query().
+		Where(entsystemsnapshot.HasServerWith(entserver.ID(in.ServerID))).
+		Only(ctx)
+	if err != nil && !ent.IsNotFound(err) {
+		return err
+	}
+	if ent.IsNotFound(err) {
+		_, err = s.client.SystemSnapshot.Create().
+			SetPayload(in.Payload).
+			SetLastError(in.LastError).
+			SetServerID(in.ServerID).
+			Save(ctx)
+		return err
+	}
+	_, err = s.client.SystemSnapshot.UpdateOneID(existing.ID).
+		SetPayload(in.Payload).
+		SetLastError(in.LastError).
 		Save(ctx)
 	return err
 }

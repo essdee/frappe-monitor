@@ -92,6 +92,15 @@ func (m *memStore) DeleteAlertState(_ context.Context, id int) error {
 	return storage.ErrNotFound
 }
 
+// GetSystemSnapshot / UpsertSystemSnapshot are required by the
+// storage.Store interface but irrelevant to the alerts evaluator.
+func (m *memStore) GetSystemSnapshot(context.Context, int) (*storage.SystemSnapshot, error) {
+	return nil, storage.ErrNotFound
+}
+func (m *memStore) UpsertSystemSnapshot(context.Context, storage.SystemSnapshot) error {
+	return nil
+}
+
 // ListAlertStates is a thin pass-through used by the dashboard's
 // /api/v1/alerts endpoint. The evaluator itself doesn't call it but
 // the storage.Store interface requires it.

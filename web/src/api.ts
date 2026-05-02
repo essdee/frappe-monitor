@@ -129,6 +129,61 @@ export async function deployCollector(id: number): Promise<{ deployed: boolean; 
   return (await resp.json()) as { deployed: boolean; version: string }
 }
 
+// --- System snapshot ---------------------------------------------------
+
+export interface SystemPayload {
+  schema_version: string
+  captured_at: number
+  system: { os: string; kernel: string; arch: string; hostname: string; uptime_seconds: number }
+  cpu:    { model: string; cores: number }
+  memory: {
+    total_bytes: number
+    available_bytes: number
+    free_bytes: number
+    buffers_bytes: number
+    cached_bytes: number
+    swap_total_bytes: number
+    swap_free_bytes: number
+  }
+  disks:  Array<{ device: string; mount: string; total_bytes: number; used_bytes: number; available_bytes: number; use_pct: string }>
+  load:   { '1m': number; '5m': number; '15m': number }
+  top_cpu: Array<ProcessRow>
+  top_mem: Array<ProcessRow>
+}
+export interface ProcessRow {
+  pid: number
+  user: string
+  cpu_pct: number
+  mem_pct: number
+  rss_kb: number
+  command: string
+}
+
+export interface SystemSnapshotResp {
+  captured_at: string
+  payload?: SystemPayload
+  last_error?: string
+}
+
+export async function fetchSystemSnapshot(id: number): Promise<SystemSnapshotResp | null> {
+  const resp = await fetch(`/api/v1/servers/${id}/system`)
+  if (resp.status === 404) return null
+  if (!resp.ok) {
+    const body = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+  }
+  return (await resp.json()) as SystemSnapshotResp
+}
+
+export async function refreshSystemSnapshot(id: number): Promise<SystemSnapshotResp> {
+  const resp = await fetch(`/api/v1/servers/${id}/refresh-system`, { method: 'POST' })
+  if (!resp.ok) {
+    const body = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+  }
+  return (await resp.json()) as SystemSnapshotResp
+}
+
 export function queryMetrics(query: string, range: TimeRange): Promise<MetricsQueryResponse> {
   const params = new URLSearchParams({
     query,

@@ -41,6 +41,8 @@ const (
 	FieldUpdatedAt = "updated_at"
 	// EdgeLogCursors holds the string denoting the log_cursors edge name in mutations.
 	EdgeLogCursors = "log_cursors"
+	// EdgeSystemSnapshot holds the string denoting the system_snapshot edge name in mutations.
+	EdgeSystemSnapshot = "system_snapshot"
 	// Table holds the table name of the server in the database.
 	Table = "servers"
 	// LogCursorsTable is the table that holds the log_cursors relation/edge.
@@ -50,6 +52,13 @@ const (
 	LogCursorsInverseTable = "log_cursors"
 	// LogCursorsColumn is the table column denoting the log_cursors relation/edge.
 	LogCursorsColumn = "server_log_cursors"
+	// SystemSnapshotTable is the table that holds the system_snapshot relation/edge.
+	SystemSnapshotTable = "system_snapshots"
+	// SystemSnapshotInverseTable is the table name for the SystemSnapshot entity.
+	// It exists in this package in order to avoid circular dependency with the "systemsnapshot" package.
+	SystemSnapshotInverseTable = "system_snapshots"
+	// SystemSnapshotColumn is the table column denoting the system_snapshot relation/edge.
+	SystemSnapshotColumn = "server_system_snapshot"
 )
 
 // Columns holds all SQL columns for server fields.
@@ -198,10 +207,24 @@ func ByLogCursors(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newLogCursorsStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// BySystemSnapshotField orders the results by system_snapshot field.
+func BySystemSnapshotField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newSystemSnapshotStep(), sql.OrderByField(field, opts...))
+	}
+}
 func newLogCursorsStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(LogCursorsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, LogCursorsTable, LogCursorsColumn),
+	)
+}
+func newSystemSnapshotStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(SystemSnapshotInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2O, false, SystemSnapshotTable, SystemSnapshotColumn),
 	)
 }

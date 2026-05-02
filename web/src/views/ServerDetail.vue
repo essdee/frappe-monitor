@@ -12,6 +12,7 @@ import {
 import { useTimeRange } from '../composables/useTimeRange'
 import { useMetricsRange } from '../composables/useMetricsRange'
 import MetricChart from '../components/MetricChart.vue'
+import SystemDetailsCard from '../components/SystemDetailsCard.vue'
 
 const props = defineProps<{ id: number }>()
 const router = useRouter()
@@ -181,6 +182,8 @@ const loadLabel = (m: Record<string, string>) => {
     <p v-if="deployMsg" class="probe-result ok">{{ deployMsg }}</p>
 
     <p v-if="serverError" class="error">Failed to load server: {{ serverError }}</p>
+
+    <SystemDetailsCard v-if="server" :server-id="props.id" />
 
     <div class="charts" v-if="server">
       <MetricChart

@@ -44,6 +44,18 @@ func (f ServerFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, erro
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ServerMutation", m)
 }
 
+// The SystemSnapshotFunc type is an adapter to allow the use of ordinary
+// function as SystemSnapshot mutator.
+type SystemSnapshotFunc func(context.Context, *ent.SystemSnapshotMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f SystemSnapshotFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.SystemSnapshotMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SystemSnapshotMutation", m)
+}
+
 // Condition is a hook condition function.
 type Condition func(context.Context, ent.Mutation) bool
 

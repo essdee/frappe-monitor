@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-VERSION="2.1.0"
+VERSION="2.2.0"
 
 # Trap any error so the operator sees what actually failed, then end
 # the output cleanly with ###END so the parser doesn't bail with a
@@ -198,27 +198,72 @@ emit_bench() {
   echo
 }
 
+# Per-bench: figure out which port the bench is actually listening
+# on. Production benches sit behind nginx on 80/443; dev benches run
+# `bench start` which serves on 8000 (configurable via
+# sites/common_site_config.json's webserver_port). Probe order:
+#   1. webserver_port from common_site_config.json (if parseable)
+#   2. 8000 (bench start default)
+#   3. 80   (nginx)
+# First port that responds with a real HTTP code wins. Returns
+# "<port> <code> <time_s>" or "0 0 0" on total failure.
+detect_bench_port() {
+  local bench="$1"
+  local site="$2"
+  local conf="$bench/sites/common_site_config.json"
+  local candidates=()
+
+  # 1. Configured webserver_port, if json parses.
+  if [ -f "$conf" ] && command -v python3 >/dev/null 2>&1; then
+    local p
+    p=$(python3 -c "import json,sys; d=json.load(open('$conf')); print(d.get('webserver_port',''))" 2>/dev/null || echo "")
+    if [ -n "$p" ] && [ "$p" != "None" ]; then
+      candidates+=("$p")
+    fi
+  fi
+  # 2. Common defaults — order matters: 8000 first since dev mode is
+  # what most laptop testers run.
+  candidates+=(8000 80)
+
+  for port in "${candidates[@]}"; do
+    local out http_code time_s
+    out=$(curl -sS -o /dev/null -m 3 \
+          -w '%{http_code} %{time_total}' \
+          -H "Host: $site" \
+          "http://127.0.0.1:${port}/api/method/ping" 2>/dev/null || echo "000 0")
+    http_code=$(echo "$out" | awk '{print $1}')
+    time_s=$(echo "$out" | awk '{print $2}')
+    # Anything other than 000 (curl couldn't connect) means *something*
+    # is listening on that port — call that the bench's port.
+    if [ -n "$http_code" ] && [ "$http_code" != "000" ]; then
+      echo "$port $http_code $time_s"
+      return
+    fi
+  done
+  echo "0 0 0"
+}
+
 # Per-site HTTP probe + emit. Site name is the directory under sites/.
 emit_site() {
-  local bench_name="$1"
-  local site_name="$2"
+  local bench_path="$1"
+  local bench_name="$2"
+  local site_name="$3"
 
   echo "###SITE:$bench_name:$site_name"
 
-  # HTTP ping: localhost with Host header so Frappe routes to the site.
-  # -m 5 caps each probe at 5s. -w prints "HTTP_CODE TIME_TOTAL_S".
-  local out http_code time_s time_ms healthy
-  out=$(curl -sS -o /dev/null -m 5 \
-        -w '%{http_code} %{time_total}' \
-        -H "Host: $site_name" \
-        "http://127.0.0.1/api/method/ping" 2>/dev/null || echo "0 0")
-  http_code=$(echo "$out" | awk '{print $1}')
-  time_s=$(echo "$out" | awk '{print $2}')
+  local probe http_code time_s time_ms healthy port
+  probe=$(detect_bench_port "$bench_path" "$site_name")
+  port=$(echo "$probe" | awk '{print $1}')
+  http_code=$(echo "$probe" | awk '{print $2}')
+  time_s=$(echo "$probe" | awk '{print $3}')
   time_ms=$(awk "BEGIN {printf \"%.1f\", ($time_s) * 1000}")
 
+  echo "http_port=$port"
   echo "http_status_code=$http_code"
   echo "http_response_ms=$time_ms"
-  if [ "$http_code" = "200" ]; then
+  # 2xx + 3xx are "site is responding" — count as healthy. 4xx/5xx
+  # mean the server's up but the site isn't routed correctly.
+  if [ "$http_code" -ge 200 ] 2>/dev/null && [ "$http_code" -lt 400 ] 2>/dev/null; then
     healthy=1
   else
     healthy=0
@@ -246,7 +291,7 @@ while IFS= read -r bench_path; do
       [ -d "$site_dir" ] || continue
       [ -f "$site_dir/site_config.json" ] || continue
       site_name=$(basename "$site_dir")
-      emit_site "$bench_name" "$site_name"
+      emit_site "$bench_path" "$bench_name" "$site_name"
     done
     shopt -u nullglob
   fi

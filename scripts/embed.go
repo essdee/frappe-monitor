@@ -12,6 +12,9 @@ import (
 //go:embed frappe-monitor-collect.sh
 var CollectorScript string
 
+//go:embed frappe-monitor-system.sh
+var SystemScript string
+
 // CollectorVersion returns the VERSION declared in the embedded
 // collector script. It scans for the first top-level `VERSION="..."`
 // assignment — collectors with long header comments are fine.

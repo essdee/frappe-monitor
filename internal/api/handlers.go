@@ -36,6 +36,8 @@ func (h *serverHandlers) mount(r chi.Router) {
 	r.Delete("/servers/{id}", h.delete)
 	r.Post("/servers/{id}/test-connection", h.testConnection)
 	r.Post("/servers/{id}/deploy-collector", h.deployCollector)
+	r.Post("/servers/{id}/refresh-system", h.refreshSystem)
+	r.Get("/servers/{id}/system", h.getSystem)
 }
 
 // tgtFromServer builds an SSH Target from a stored Server record.
@@ -390,4 +392,120 @@ func (h *serverHandlers) deployCollector(w http.ResponseWriter, r *http.Request)
 		Deployed: true,
 		Version:  scripts.CollectorVersion(),
 	})
+}
+
+// systemSnapshotResp is what GET /servers/{id}/system and
+// POST /servers/{id}/refresh-system return.
+type systemSnapshotResp struct {
+	CapturedAt time.Time       `json:"captured_at"`
+	Payload    json.RawMessage `json:"payload"`
+	LastError  string          `json:"last_error,omitempty"`
+}
+
+// refreshSystem SSHes into the server, pipes the embedded system
+// snapshot script over stdin (so we don't need a deploy step), reads
+// the JSON it prints to stdout, and upserts it into the SystemSnapshot
+// table. Returns the fresh snapshot in the response body.
+//
+// On SSH failure the upsert still runs with last_error set so the
+// dashboard shows "captured at X — failed: ...". Operators can retry.
+func (h *serverHandlers) refreshSystem(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	srv, err := h.store.GetServer(r.Context(), id)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Pipe the script via stdin and run it through bash. No on-disk
+	// deploy needed — the script is small (≈3KB) and doesn't change
+	// between cycles, so just re-shipping it is simpler than tracking
+	// a deployed version.
+	const cmd = "bash -s"
+	stdout, runErr := h.exec.RunWithInput(r.Context(), tgtFromServer(srv), cmd, scripts.SystemScript)
+	if runErr != nil {
+		// Persist the failure so the dashboard shows "tried, failed".
+		_ = h.store.UpsertSystemSnapshot(r.Context(), storage.SystemSnapshot{
+			ServerID:  id,
+			LastError: runErr.Error(),
+		})
+		writeErr(w, statusForSSHError(runErr), "system refresh failed: "+runErr.Error())
+		return
+	}
+
+	// Validate that stdout is parseable JSON before storing — we don't
+	// want to store garbage if the bench doesn't have python3.
+	payload := []byte(stdout)
+	if !json.Valid(payload) {
+		errMsg := "snapshot output is not valid JSON: " + truncate(stdout, 256)
+		_ = h.store.UpsertSystemSnapshot(r.Context(), storage.SystemSnapshot{
+			ServerID:  id,
+			LastError: errMsg,
+		})
+		writeErr(w, http.StatusBadGateway, errMsg)
+		return
+	}
+
+	if err := h.store.UpsertSystemSnapshot(r.Context(), storage.SystemSnapshot{
+		ServerID: id,
+		Payload:  payload,
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "store snapshot: "+err.Error())
+		return
+	}
+	snap, err := h.store.GetSystemSnapshot(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "read back snapshot: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, systemSnapshotResp{
+		CapturedAt: snap.CapturedAt,
+		Payload:    snap.Payload,
+	})
+}
+
+// getSystem returns the most recent stored snapshot, or 404 if none
+// has been captured yet (i.e. server was just registered and the
+// async-on-create capture hasn't completed). Doesn't trigger a fresh
+// SSH call — that's the refresh endpoint's job.
+func (h *serverHandlers) getSystem(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	snap, err := h.store.GetSystemSnapshot(r.Context(), id)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "no snapshot yet — POST /refresh-system")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := systemSnapshotResp{
+		CapturedAt: snap.CapturedAt,
+		LastError:  snap.LastError,
+	}
+	if json.Valid(snap.Payload) {
+		resp.Payload = snap.Payload
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// truncate returns s capped at n runes, with "…" as a marker.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
