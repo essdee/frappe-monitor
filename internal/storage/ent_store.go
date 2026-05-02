@@ -54,6 +54,9 @@ func (s *EntStore) CreateServer(ctx context.Context, in NewServer) (*Server, err
 	if in.Labels != nil {
 		b = b.SetLabels(in.Labels)
 	}
+	if in.BenchPaths != nil {
+		b = b.SetBenchPaths(in.BenchPaths)
+	}
 	created, err := b.Save(ctx)
 	if err != nil {
 		if isUniqueHostnameViolation(err) {
@@ -121,6 +124,9 @@ func (s *EntStore) UpdateServer(ctx context.Context, id int, in UpdateServer) (*
 	}
 	if in.Labels != nil {
 		upd = upd.SetLabels(*in.Labels)
+	}
+	if in.BenchPaths != nil {
+		upd = upd.SetBenchPaths(*in.BenchPaths)
 	}
 	row, err := upd.Save(ctx)
 	if err != nil {
@@ -326,16 +332,20 @@ func entToServer(e *ent.Server) *Server {
 		SSHUser:    e.SSHUser,
 		SSHPort:    e.SSHPort,
 		SSHKeyPath: e.SSHKeyPath,
+		BenchPaths: e.BenchPaths,
 		Labels:     e.Labels,
 		Status:     string(e.Status),
 		LastError:  e.LastError,
 		CreatedAt:  e.CreatedAt,
 		UpdatedAt:  e.UpdatedAt,
 	}
-	// Normalize labels to a non-nil empty map so callers never need to
-	// nil-check before reading or writing.
+	// Normalize labels and bench_paths to non-nil empty values so
+	// callers never need to nil-check before reading.
 	if out.Labels == nil {
 		out.Labels = map[string]string{}
+	}
+	if out.BenchPaths == nil {
+		out.BenchPaths = []string{}
 	}
 	if e.LastPingedAt != nil {
 		t := *e.LastPingedAt

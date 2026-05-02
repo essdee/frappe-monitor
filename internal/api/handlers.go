@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -65,6 +66,7 @@ type createServerReq struct {
 	SSHUser    string            `json:"ssh_user"`
 	SSHPort    int               `json:"ssh_port"`
 	SSHKeyPath string            `json:"ssh_key_path"`
+	BenchPaths []string          `json:"bench_paths,omitempty"`
 	Labels     map[string]string `json:"labels,omitempty"`
 }
 
@@ -75,6 +77,7 @@ type serverDTO struct {
 	SSHUser      string            `json:"ssh_user"`
 	SSHPort      int               `json:"ssh_port"`
 	SSHKeyPath   string            `json:"ssh_key_path"`
+	BenchPaths   []string          `json:"bench_paths"`
 	Labels       map[string]string `json:"labels,omitempty"`
 	Status       string            `json:"status"`
 	LastPingedAt *time.Time        `json:"last_pinged_at,omitempty"`
@@ -84,6 +87,10 @@ type serverDTO struct {
 }
 
 func toDTO(s *storage.Server) serverDTO {
+	bp := s.BenchPaths
+	if bp == nil {
+		bp = []string{}
+	}
 	return serverDTO{
 		ID:           s.ID,
 		Name:         s.Name,
@@ -91,6 +98,7 @@ func toDTO(s *storage.Server) serverDTO {
 		SSHUser:      s.SSHUser,
 		SSHPort:      s.SSHPort,
 		SSHKeyPath:   s.SSHKeyPath,
+		BenchPaths:   bp,
 		Labels:       s.Labels,
 		Status:       s.Status,
 		LastPingedAt: s.LastPingedAt,
@@ -118,7 +126,9 @@ func (h *serverHandlers) create(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := h.store.CreateServer(r.Context(), storage.NewServer{
 		Name: req.Name, Hostname: req.Hostname, SSHUser: req.SSHUser,
-		SSHPort: req.SSHPort, SSHKeyPath: req.SSHKeyPath, Labels: req.Labels,
+		SSHPort: req.SSHPort, SSHKeyPath: req.SSHKeyPath,
+		BenchPaths: cleanBenchPaths(req.BenchPaths),
+		Labels:     req.Labels,
 	})
 	if errors.Is(err, storage.ErrDuplicateHostname) {
 		writeErr(w, http.StatusConflict, "hostname already exists")
@@ -158,7 +168,25 @@ type patchServerReq struct {
 	SSHUser    *string            `json:"ssh_user,omitempty"`
 	SSHPort    *int               `json:"ssh_port,omitempty"`
 	SSHKeyPath *string            `json:"ssh_key_path,omitempty"`
+	BenchPaths *[]string          `json:"bench_paths,omitempty"`
 	Labels     *map[string]string `json:"labels,omitempty"`
+}
+
+// cleanBenchPaths trims whitespace and drops empty entries. Useful
+// when the SPA's textarea-as-list yields trailing newlines or stray
+// blank lines from operator copy-paste.
+func cleanBenchPaths(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, p := range in {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (h *serverHandlers) patch(w http.ResponseWriter, r *http.Request) {
@@ -176,12 +204,18 @@ func (h *serverHandlers) patch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "ssh_port must be positive")
 		return
 	}
+	var benchPathsClean *[]string
+	if req.BenchPaths != nil {
+		c := cleanBenchPaths(*req.BenchPaths)
+		benchPathsClean = &c
+	}
 	updated, err := h.store.UpdateServer(r.Context(), id, storage.UpdateServer{
 		Name:       req.Name,
 		Hostname:   req.Hostname,
 		SSHUser:    req.SSHUser,
 		SSHPort:    req.SSHPort,
 		SSHKeyPath: req.SSHKeyPath,
+		BenchPaths: benchPathsClean,
 		Labels:     req.Labels,
 	})
 	if errors.Is(err, storage.ErrNotFound) {

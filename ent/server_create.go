@@ -67,6 +67,12 @@ func (_c *ServerCreate) SetSSHKeyPath(v string) *ServerCreate {
 	return _c
 }
 
+// SetBenchPaths sets the "bench_paths" field.
+func (_c *ServerCreate) SetBenchPaths(v []string) *ServerCreate {
+	_c.mutation.SetBenchPaths(v)
+	return _c
+}
+
 // SetLabels sets the "labels" field.
 func (_c *ServerCreate) SetLabels(v map[string]string) *ServerCreate {
 	_c.mutation.SetLabels(v)
@@ -311,6 +317,10 @@ func (_c *ServerCreate) createSpec() (*Server, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.SSHKeyPath(); ok {
 		_spec.SetField(server.FieldSSHKeyPath, field.TypeString, value)
 		_node.SSHKeyPath = value
+	}
+	if value, ok := _c.mutation.BenchPaths(); ok {
+		_spec.SetField(server.FieldBenchPaths, field.TypeJSON, value)
+		_node.BenchPaths = value
 	}
 	if value, ok := _c.mutation.Labels(); ok {
 		_spec.SetField(server.FieldLabels, field.TypeJSON, value)

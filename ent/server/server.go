@@ -25,6 +25,8 @@ const (
 	FieldSSHPort = "ssh_port"
 	// FieldSSHKeyPath holds the string denoting the ssh_key_path field in the database.
 	FieldSSHKeyPath = "ssh_key_path"
+	// FieldBenchPaths holds the string denoting the bench_paths field in the database.
+	FieldBenchPaths = "bench_paths"
 	// FieldLabels holds the string denoting the labels field in the database.
 	FieldLabels = "labels"
 	// FieldStatus holds the string denoting the status field in the database.
@@ -58,6 +60,7 @@ var Columns = []string{
 	FieldSSHUser,
 	FieldSSHPort,
 	FieldSSHKeyPath,
+	FieldBenchPaths,
 	FieldLabels,
 	FieldStatus,
 	FieldLastPingedAt,
