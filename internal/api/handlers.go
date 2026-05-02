@@ -329,8 +329,13 @@ func (h *serverHandlers) deployCollector(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	const cmd = `cat > /usr/local/bin/frappe-monitor-collect.sh && ` +
-		`chmod +x /usr/local/bin/frappe-monitor-collect.sh`
+	// Install into the SSH user's home dir so deploy doesn't need root.
+	// mkdir -p is idempotent; chmod is run after the write completes so
+	// a partial script can't be exec'd. $HOME expands on the remote
+	// shell side as the SSH user.
+	const cmd = `mkdir -p "$HOME/.frappe-monitor" && ` +
+		`cat > "$HOME/.frappe-monitor/frappe-monitor-collect.sh" && ` +
+		`chmod +x "$HOME/.frappe-monitor/frappe-monitor-collect.sh"`
 	if _, err := h.exec.RunWithInput(r.Context(), tgtFromServer(srv), cmd, scripts.CollectorScript); err != nil {
 		writeErr(w, statusForSSHError(err), "deploy failed: "+err.Error())
 		return

@@ -41,8 +41,11 @@ type Pipeline struct {
 }
 
 // CollectorPath is the location of the deployed bash collector on each
-// bench server. Phase 2 hardcodes this; Phase 3+ may move it to config.
-const CollectorPath = "/usr/local/bin/frappe-monitor-collect.sh"
+// bench server. Lives in the SSH user's home directory so deploy +
+// invoke don't need root. The literal "$HOME" survives interpolation:
+// every shell we exec under (bash, dash, zsh) expands it for the
+// remote user before the collector is invoked.
+const CollectorPath = "$HOME/.frappe-monitor/frappe-monitor-collect.sh"
 
 // PullOnce runs one full cycle for the server with the given id:
 //

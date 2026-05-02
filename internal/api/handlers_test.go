@@ -249,7 +249,11 @@ func TestDeployCollector_HappyPath(t *testing.T) {
 	require.Contains(t, stdin, "###SERVER")
 	require.Contains(t, stdin, "###END")
 	cmd := exec.LastCmd("deploy-host")
-	require.Contains(t, cmd, "/usr/local/bin/frappe-monitor-collect.sh")
+	// Collector is installed under the SSH user's home dir so deploy
+	// doesn't need root on the bench host. The literal "$HOME"
+	// expands on the remote shell's side.
+	require.Contains(t, cmd, "$HOME/.frappe-monitor/frappe-monitor-collect.sh")
+	require.Contains(t, cmd, "mkdir -p")
 	require.Contains(t, cmd, "chmod +x")
 }
 
