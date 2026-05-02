@@ -36,6 +36,13 @@ type Scheduler struct {
 	parentCancel context.CancelFunc
 
 	wg sync.WaitGroup
+
+	// entries tracks the cron EntryID for each keyed job so the
+	// caller can remove a job (e.g. on server delete). Add() is the
+	// unkeyed legacy API; AddKeyed/RemoveKeyed are the dynamic-server
+	// path.
+	entriesMu sync.Mutex
+	entries   map[int]cron.EntryID
 }
 
 // New builds a scheduler with the supplied parallelism cap and per-job
@@ -64,6 +71,7 @@ func New(maxParallel int, perJobTimeout time.Duration, logger *slog.Logger) *Sch
 		logger:       logger,
 		parentCtx:    pctx,
 		parentCancel: pcancel,
+		entries:      map[int]cron.EntryID{},
 	}
 }
 
@@ -78,6 +86,39 @@ func (s *Scheduler) Add(spec string, j Job) error {
 		return fmt.Errorf("scheduler: add %q: %w", spec, err)
 	}
 	return nil
+}
+
+// AddKeyed is Add for jobs that should be removable later via
+// RemoveKeyed(key). Use this for the per-server pull scheduling so a
+// server that's deleted from the API can have its cron entry torn
+// down without restarting the binary. Replacing an existing key
+// removes the previous entry first.
+func (s *Scheduler) AddKeyed(key int, spec string, j Job) error {
+	s.entriesMu.Lock()
+	defer s.entriesMu.Unlock()
+	if old, ok := s.entries[key]; ok {
+		s.cron.Remove(old)
+		delete(s.entries, key)
+	}
+	id, err := s.cron.AddFunc(spec, func() {
+		s.runOnce(j)
+	})
+	if err != nil {
+		return fmt.Errorf("scheduler: add %q: %w", spec, err)
+	}
+	s.entries[key] = id
+	return nil
+}
+
+// RemoveKeyed deregisters the job previously added under the given
+// key. No-op if the key doesn't exist (idempotent for repeat deletes).
+func (s *Scheduler) RemoveKeyed(key int) {
+	s.entriesMu.Lock()
+	defer s.entriesMu.Unlock()
+	if id, ok := s.entries[key]; ok {
+		s.cron.Remove(id)
+		delete(s.entries, key)
+	}
 }
 
 // Start begins the cron loop. Caller must invoke at most once; cron/v3

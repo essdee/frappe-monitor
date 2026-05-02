@@ -133,6 +133,28 @@ func run(cfgPath string) error {
 			"rule_count_user", len(cfg.Alerts.Rules))
 	}
 
+	// Lifecycle hooks: when a server is added/removed via the API,
+	// register/deregister its scheduler entry so it picks up (or
+	// stops) on the next tick — no process restart required.
+	scheduleSpec := fmt.Sprintf("@every %ds", cfg.Scheduler.DefaultIntervalSeconds)
+	onServerCreated := func(serverID int) {
+		err := sched.AddKeyed(serverID, scheduleSpec, scheduler.Job{
+			ServerID: serverID,
+			Run: func(ctx context.Context) error {
+				return pipeline.PullOnce(ctx, serverID)
+			},
+		})
+		if err != nil {
+			logger.Warn("scheduler: hot-add failed", "server_id", serverID, "err", err)
+			return
+		}
+		logger.Info("scheduler: hot-added server", "server_id", serverID, "spec", scheduleSpec)
+	}
+	onServerDeleted := func(serverID int) {
+		sched.RemoveKeyed(serverID)
+		logger.Info("scheduler: hot-removed server", "server_id", serverID)
+	}
+
 	router := api.NewRouter(api.Deps{
 		Store:    store,
 		Executor: pool,
@@ -147,6 +169,10 @@ func run(cfgPath string) error {
 		// Phase 7: HTTP basic auth.
 		AuthPassword: cfg.Auth.Password,
 		AuthRealm:    cfg.Auth.Realm,
+
+		// Hot register/deregister scheduler entries on server CRUD.
+		OnServerCreated: onServerCreated,
+		OnServerDeleted: onServerDeleted,
 	})
 
 	srv := &http.Server{
@@ -219,7 +245,10 @@ func registerScheduledPulls(
 	spec := fmt.Sprintf("@every %ds", defaultIntervalSeconds)
 	for _, s := range servers {
 		serverID := s.ID // capture per iteration
-		err := sched.Add(spec, scheduler.Job{
+		// AddKeyed (not plain Add) so a later API delete can remove
+		// this entry without process restart. Boot-time and runtime
+		// scheduling end up sharing the same registry.
+		err := sched.AddKeyed(serverID, spec, scheduler.Job{
 			ServerID: serverID,
 			Run: func(ctx context.Context) error {
 				return pipeline.PullOnce(ctx, serverID)
