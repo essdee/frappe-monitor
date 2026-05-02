@@ -32,6 +32,14 @@ type Deps struct {
 	// natively. /healthz stays unauthenticated so external probes work.
 	AuthPassword string
 	AuthRealm    string
+
+	// OnServerCreated and OnServerDeleted are optional lifecycle hooks
+	// the API calls after a successful server CRUD operation. Used by
+	// main to register/deregister a scheduler entry so newly-added
+	// servers start collecting on the next tick without a process
+	// restart. Nil hooks are a silent no-op (tests don't need them).
+	OnServerCreated func(serverID int)
+	OnServerDeleted func(serverID int)
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -52,7 +60,13 @@ func NewRouter(d Deps) http.Handler {
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(auth)
-		h := &serverHandlers{store: d.Store, exec: d.Executor, logger: d.Logger}
+		h := &serverHandlers{
+			store:           d.Store,
+			exec:            d.Executor,
+			logger:          d.Logger,
+			onServerCreated: d.OnServerCreated,
+			onServerDeleted: d.OnServerDeleted,
+		}
 		h.mount(api)
 
 		if d.MetricsBaseURL != "" || d.LogsBaseURL != "" {

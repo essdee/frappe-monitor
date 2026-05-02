@@ -162,3 +162,70 @@ func TestScheduler_LogsJobError(t *testing.T) {
 	require.GreaterOrEqual(t, ran.Load(), int32(2),
 		"scheduler must keep firing even after a job returns an error")
 }
+
+func TestScheduler_RemoveKeyedStopsFiring(t *testing.T) {
+	s := newTestScheduler(t, 4, 5*time.Second)
+
+	var count atomic.Int32
+	require.NoError(t, s.AddKeyed(42, "@every 1s", Job{
+		ServerID: 42,
+		Run: func(_ context.Context) error {
+			count.Add(1)
+			return nil
+		},
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	time.Sleep(1500 * time.Millisecond)
+	beforeRemove := count.Load()
+	require.GreaterOrEqual(t, beforeRemove, int32(1),
+		"AddKeyed should fire on the same schedule as Add")
+
+	// RemoveKeyed should stop further firings of this entry.
+	s.RemoveKeyed(42)
+
+	time.Sleep(2500 * time.Millisecond)
+	afterRemove := count.Load()
+	require.Equal(t, beforeRemove, afterRemove,
+		"after RemoveKeyed, the entry must not fire again "+
+			"(saw %d new firings)", afterRemove-beforeRemove)
+}
+
+func TestScheduler_RemoveKeyedIdempotent(t *testing.T) {
+	s := newTestScheduler(t, 1, time.Second)
+	// No Add — the key was never registered. Remove should be a no-op
+	// (not panic, not error).
+	s.RemoveKeyed(99)
+	s.RemoveKeyed(99) // again — still a no-op
+}
+
+func TestScheduler_AddKeyedReplacesExistingEntry(t *testing.T) {
+	s := newTestScheduler(t, 4, 5*time.Second)
+
+	var firstFires, secondFires atomic.Int32
+	require.NoError(t, s.AddKeyed(7, "@every 1s", Job{
+		ServerID: 7,
+		Run: func(_ context.Context) error {
+			firstFires.Add(1)
+			return nil
+		},
+	}))
+	// Replace under the same key — the first job's fires should stop.
+	require.NoError(t, s.AddKeyed(7, "@every 1s", Job{
+		ServerID: 7,
+		Run: func(_ context.Context) error {
+			secondFires.Add(1)
+			return nil
+		},
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	time.Sleep(2500 * time.Millisecond)
+	require.GreaterOrEqual(t, secondFires.Load(), int32(1))
+	require.Equal(t, int32(0), firstFires.Load(),
+		"replaced entry must not fire — got %d firings", firstFires.Load())
+}

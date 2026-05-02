@@ -19,6 +19,12 @@ type serverHandlers struct {
 	store  storage.Store
 	exec   sshpkg.Executor
 	logger *slog.Logger
+
+	// Lifecycle hooks fire after a successful create/delete so the
+	// scheduler can pick up new servers (and stop calling deleted
+	// ones) without a process restart. Nil = no-op.
+	onServerCreated func(serverID int)
+	onServerDeleted func(serverID int)
 }
 
 func (h *serverHandlers) mount(r chi.Router) {
@@ -122,6 +128,9 @@ func (h *serverHandlers) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if h.onServerCreated != nil {
+		h.onServerCreated(s.ID)
+	}
 	writeJSON(w, http.StatusCreated, toDTO(s))
 }
 
@@ -208,6 +217,9 @@ func (h *serverHandlers) delete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.onServerDeleted != nil {
+		h.onServerDeleted(id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
