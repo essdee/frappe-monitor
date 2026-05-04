@@ -38,6 +38,15 @@ ssh:
 
   # Per-command timeout once the connection is up. The collector script
   # is fast (< 2s on healthy hosts); 30s tolerates startup spikes.
+  #
+  # The collector itself self-throttles its site-probe phase against an
+  # internal 20s budget (env: SITE_PROBE_BUDGET_S) so a bench with 30+
+  # sites doesn't overrun this timeout. Sites past the budget are
+  # emitted with is_healthy=0 / http_status_code=0 so the parser still
+  # gets a complete output instead of being killed mid-loop. If your
+  # benches consistently host more sites than fit in 20s, raise this
+  # ceiling AND export SITE_PROBE_BUDGET_S on the bench host before the
+  # next deploy-collector cycle.
   command_timeout_seconds: 30
 
   # Pool: max simultaneous SSH connections per remote host. Two is

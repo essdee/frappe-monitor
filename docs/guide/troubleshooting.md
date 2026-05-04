@@ -150,6 +150,62 @@ ls -la ~/frappe-bench/logs/
 
 Loki streams are bench-scoped; site-scoped logs land in Phase 7.
 
+## "Server detail says 'unreachable' but the host is fine"
+
+A few things to check, in order:
+
+1. **Did the last collector pull fail?** Server status is set by the
+   collector pipeline, not a live ping. Click **Test SSH** on the server
+   detail page — if it returns reachable, the badge updates immediately.
+2. **Stale "Last capture failed" banner on System Details.** As of the
+   2026-05-02 sweep, a transient SSH failure no longer wipes the prior
+   payload — you'll see the old inventory + a "Last capture failed:"
+   banner until the next successful Refresh. The banner clears the moment
+   a Refresh succeeds.
+3. **Collector script error in `last_error`.** If the field reads
+   `collector script error (exit=N line=M)`, something in
+   `frappe-monitor-collect.sh` failed at line M with exit code N — most
+   commonly missing tooling (`redis-cli`, `supervisorctl`) on the bench.
+   Run the script manually to reproduce:
+   ```bash
+   ssh frappe@<host> bash ~/.frappe-monitor/frappe-monitor-collect.sh
+   ```
+
+## "Site shows 'Healthy: no, HTTP 0'"
+
+The collector skipped this site because the per-cycle wall-clock budget
+(`SITE_PROBE_BUDGET_S`, default 20s) was already exhausted by earlier
+sites. Each site probe is up to 2s, and SSH's command timeout is 30s —
+benches with 30+ sites legitimately exceed the budget. Fixes:
+
+- Run the collector more often: lower `scheduler.tick_interval_seconds`.
+- Raise the SSH command timeout: `ssh.command_timeout_seconds: 60`.
+- Reduce the bench's site count (most user-visible value comes from a
+  small number of frequently-checked sites).
+
+The "skipped" state is intentional and visible — better than the loop
+getting killed mid-run by SSH and leaving torn output for the parser.
+
+## "Click Sign-out, but I'm right back in the dashboard"
+
+The session cookie is HttpOnly + cookie-session, so logout posts to
+`/api/v1/logout` and clears it server-side. As of 2026-05-02 the SPA
+also short-circuits the auto-redirect on `/login?signed_out=1` so even a
+stale-but-valid cached session can't bounce you back. If you still see
+the issue:
+
+```bash
+curl -i -c /tmp/cookies -X POST http://127.0.0.1:8080/api/v1/logout
+# Check the response — should include:
+#   Set-Cookie: monitor_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict
+```
+
+If `Secure` appears here but the dashboard is served over plain HTTP
+(or vice versa), the browser refuses to delete the cookie because the
+attributes don't match the original. The handler reads
+`X-Forwarded-Proto` for that decision; verify your reverse proxy sets
+it correctly.
+
 ## "Browser keeps prompting for credentials"
 
 `auth.password` is set and the password you're typing doesn't match. Username is ignored — only the password matters. Reset by editing `/etc/frappe-monitor/monitor.yaml` and `sudo systemctl restart frappe-monitor`.

@@ -101,15 +101,25 @@ const option = computed(() => {
   }
 })
 
+let observer: ResizeObserver | null = null
+
 onMounted(() => {
   if (!containerRef.value) return
   chart.value = echarts.init(containerRef.value)
   chart.value.setOption(option.value)
   window.addEventListener('resize', resize)
+  // ResizeObserver catches layout changes that don't fire window resize
+  // — e.g. the responsive grid swapping from 2-col to 1-col when the
+  // viewport crosses 900px, or the sidebar collapsing on tablet
+  // rotation. Without it, charts on phones render at the desktop
+  // width and overflow horizontally until you tap-rotate the screen.
+  observer = new ResizeObserver(resize)
+  observer.observe(containerRef.value)
 })
 
 onScopeDispose(() => {
   window.removeEventListener('resize', resize)
+  observer?.disconnect()
   chart.value?.dispose()
 })
 
@@ -147,6 +157,10 @@ watch(option, (o) => {
 .chart-canvas {
   width: 100%;
   height: 240px;
+}
+@media (max-width: 720px) {
+  .metric-chart { padding: 0.5rem 0.6rem 0.65rem; }
+  .chart-canvas { height: 200px; }
 }
 .overlay {
   position: absolute;

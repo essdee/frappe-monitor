@@ -106,6 +106,17 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		return wrapped
 	}
 
+	// If the collector's trap fired, ERROR section carries exit_code +
+	// line. Surface it loud — generic "missing META" is useless when
+	// the operator wants to know the bash script's actual failure.
+	if errSec, ok := out.Section("ERROR"); ok {
+		exitCode := errSec.KVs["exit_code"]
+		line := errSec.KVs["line"]
+		wrapped := fmt.Errorf("collector script error (exit=%s line=%s)", exitCode, line)
+		_ = p.markUnreachable(ctx, serverID, wrapped)
+		return wrapped
+	}
+
 	m, convErr := parser.ServerFromSections(out)
 	if convErr != nil {
 		wrapped := fmt.Errorf("parse: %w", convErr)
@@ -113,15 +124,24 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		return wrapped
 	}
 
-	// Defense against torn upstream output: a real Linux host always has
-	// at least `/` mounted and one non-`lo` interface. Empty here means
-	// the collector emitted a structurally valid but semantically empty
-	// section (e.g. df returned nothing). Treat as parse failure.
-	if len(m.Disks) == 0 || len(m.Net) == 0 {
-		wrapped := fmt.Errorf("parse: empty disks or net (Disks=%d Net=%d)",
-			len(m.Disks), len(m.Net))
+	// Defense against torn upstream output: a real Linux host always
+	// has at least `/` mounted and one non-`lo` interface. Treating
+	// either-empty as a fatal parse error was too aggressive — minimal
+	// containers / overlay-only mounts and hosts with all interfaces
+	// filtered (LXC profiles) trip it even when CPU + memory are
+	// perfectly populated, so the dashboard would mark a fully healthy
+	// server "unreachable". Only fail when BOTH are empty (real torn
+	// output); log a warning otherwise so operators see degraded
+	// inventory without losing reachability state.
+	if len(m.Disks) == 0 && len(m.Net) == 0 {
+		wrapped := fmt.Errorf("parse: empty disks AND net — collector output looks torn")
 		_ = p.markUnreachable(ctx, serverID, wrapped)
 		return wrapped
+	}
+	if len(m.Disks) == 0 || len(m.Net) == 0 {
+		p.Logger.Warn("collector: partial server section",
+			"server_id", serverID, "server_name", srv.Name,
+			"disks", len(m.Disks), "net", len(m.Net))
 	}
 
 	// Phase 3: build the consolidated line-protocol body across the full

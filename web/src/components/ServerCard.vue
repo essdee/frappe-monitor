@@ -100,6 +100,16 @@ function relativeTime(iso: string | null): string {
   font-size: 0.82rem;
   font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   margin-bottom: 0.75rem;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+.name {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.header {
+  min-width: 0;
 }
 .meta {
   display: flex;
@@ -128,5 +138,21 @@ function relativeTime(iso: string | null): string {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+@media (max-width: 720px) {
+  .card { padding: 0.85rem 0.95rem; }
+  .header { gap: 0.4rem; }
+  .name { font-size: 0.95rem; }
+  .meta { flex-wrap: wrap; gap: 0.35rem 0.75rem; }
+  /* On a phone the card is full-width, so the error string can wrap
+     to two lines instead of getting truncated to a few characters. */
+  .error {
+    white-space: normal;
+    word-break: break-word;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.4;
+  }
 }
 </style>

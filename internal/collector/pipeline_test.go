@@ -150,6 +150,34 @@ func TestPullOnce_ParseFailure(t *testing.T) {
 	require.Contains(t, refreshed.LastError, "parse:")
 }
 
+func TestPullOnce_ScriptErrorSectionSurfacesExitCode(t *testing.T) {
+	// When the bash collector's ERR trap fires it appends an ###ERROR
+	// section with exit_code + line, then ###END. Pipeline must surface
+	// those values in the wrapped error so operators see the actual
+	// failure instead of a downstream "missing X" message.
+	p, push, exec, store := newTestPipeline(t)
+	srv := makeServer(t, store, "prod-3b", "host-c2")
+
+	body := []string{
+		"###META", "version=1.0.0", "hostname=h", "timestamp=1", "",
+		"###ERROR", "exit_code=42", "line=137", "",
+		"###END",
+	}
+	exec.SetResponse("host-c2", strings.Join(body, "\n")+"\n", nil)
+
+	err := p.PullOnce(context.Background(), srv.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "collector script error")
+	require.Contains(t, err.Error(), "exit=42")
+	require.Contains(t, err.Error(), "line=137")
+	require.Equal(t, 0, push.Calls())
+
+	refreshed, err := store.GetServer(context.Background(), srv.ID)
+	require.NoError(t, err)
+	require.Equal(t, "unreachable", refreshed.Status)
+	require.Contains(t, refreshed.LastError, "exit=42")
+}
+
 func TestPullOnce_PushFailure_StillReachable(t *testing.T) {
 	p, push, exec, store := newTestPipeline(t)
 	srv := makeServer(t, store, "prod-4", "host-d")
@@ -176,12 +204,17 @@ func TestPullOnce_ServerNotFound(t *testing.T) {
 	require.ErrorIs(t, err, storage.ErrNotFound)
 }
 
-func TestPullOnce_EmptyDisksRejected(t *testing.T) {
+func TestPullOnce_EmptyDisksAcceptedWhenNetPresent(t *testing.T) {
+	// Was previously TestPullOnce_EmptyDisksRejected. Operators flagged
+	// the old rule as too aggressive — a fully-healthy bench (CPU, mem,
+	// load, network all populated) was marked "unreachable" because
+	// `df` returned nothing on overlay-only / minimal containers. The
+	// new rule fails ONLY when BOTH disks and net are empty (real torn
+	// output). Either-empty just logs a warning and pushes whatever's
+	// available.
 	p, push, exec, store := newTestPipeline(t)
 	srv := makeServer(t, store, "prod-5", "host-e")
 
-	// Construct collector output with no disk_* lines (simulates a torn read
-	// or a host with no real filesystems mounted — both anomalies).
 	body := []string{
 		"###META", "version=1.0.0", "hostname=h", "timestamp=1", "",
 		"###SERVER",
@@ -198,9 +231,40 @@ func TestPullOnce_EmptyDisksRejected(t *testing.T) {
 	exec.SetResponse("host-e", strings.Join(body, "\n")+"\n", nil)
 
 	err := p.PullOnce(context.Background(), srv.ID)
+	require.NoError(t, err, "empty disks alone is not torn output")
+	require.Equal(t, 1, push.Calls(), "should still push CPU + mem + net metrics")
+
+	refreshed, err := store.GetServer(context.Background(), srv.ID)
+	require.NoError(t, err)
+	require.Equal(t, "reachable", refreshed.Status)
+}
+
+func TestPullOnce_EmptyDisksAndNetRejected(t *testing.T) {
+	// BOTH disks and net empty means the SERVER section is torn — no
+	// real Linux host has zero mounts AND zero non-`lo` interfaces.
+	// This is the actual safety check; mark unreachable so the
+	// dashboard surfaces the parse failure.
+	p, push, exec, store := newTestPipeline(t)
+	srv := makeServer(t, store, "prod-6", "host-f")
+
+	body := []string{
+		"###META", "version=1.0.0", "hostname=h", "timestamp=1", "",
+		"###SERVER",
+		"cpu_user=1", "cpu_nice=1", "cpu_system=1", "cpu_idle=1",
+		"cpu_iowait=1", "cpu_irq=0", "cpu_softirq=0", "cpu_steal=0",
+		"mem_total_kb=1000", "mem_available_kb=500",
+		"mem_free_kb=500", "mem_buffers_kb=0", "mem_cached_kb=0",
+		"swap_total_kb=0", "swap_free_kb=0",
+		"load_1m=0", "load_5m=0", "load_15m=0",
+		"uptime_seconds=42",
+		"###END",
+	}
+	exec.SetResponse("host-f", strings.Join(body, "\n")+"\n", nil)
+
+	err := p.PullOnce(context.Background(), srv.ID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "parse:")
-	require.Contains(t, err.Error(), "empty disks")
+	require.Contains(t, err.Error(), "empty disks AND net")
 	require.Equal(t, 0, push.Calls())
 
 	refreshed, err := store.GetServer(context.Background(), srv.ID)
