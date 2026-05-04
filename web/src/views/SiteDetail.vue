@@ -328,4 +328,44 @@ function statusColor(d: SiteDetail): string {
 .muted {
   color: var(--muted);
 }
+
+@media (max-width: 720px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .page-header h2 {
+    font-size: 1.15rem;
+    word-break: break-word;
+  }
+  .hostname { font-size: 0.82rem; word-break: break-word; }
+  .hostname code { word-break: break-all; }
+  .status-block {
+    align-self: flex-start;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+  .summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+  .summary-item { padding: 0.6rem 0.75rem; }
+  .value { font-size: 1rem; }
+  .logs-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+  /* Time + line stack vertically — no more 160px-fixed first column
+     squishing the message into a 30%-wide ribbon on phones. */
+  .log-line {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+  }
+  .log-line time { font-size: 0.7rem; }
+  .log-msg { font-size: 0.78rem; }
+  .log-list { max-height: 280px; }
+}
 </style>

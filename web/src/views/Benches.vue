@@ -213,4 +213,14 @@ const grouped = computed<{ server: string; benches: string[] }[]>(() => {
 .muted {
   color: var(--muted);
 }
+
+@media (max-width: 720px) {
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+  .card { padding: 0.7rem 0.85rem; }
+  .bench-sub { margin-left: 1.4rem; font-size: 0.75rem; }
+  .server-name { font-size: 0.8rem; }
+}
 </style>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { Pencil } from 'lucide-vue-next'
 import {
   fetchServer,
   testServerConnection,
@@ -13,6 +14,7 @@ import { useTimeRange } from '../composables/useTimeRange'
 import { useMetricsRange } from '../composables/useMetricsRange'
 import MetricChart from '../components/MetricChart.vue'
 import SystemDetailsCard from '../components/SystemDetailsCard.vue'
+import EditServerForm from '../components/EditServerForm.vue'
 
 const props = defineProps<{ id: number }>()
 const router = useRouter()
@@ -25,6 +27,16 @@ const probeRunning = ref(false)
 const deployMsg = ref<string | null>(null)
 const deployRunning = ref(false)
 const deleteRunning = ref(false)
+const showEdit = ref(false)
+
+function onEdited(updated: Server) {
+  server.value = updated
+  showEdit.value = false
+  // Clear stale probe banners — the SSH target may have changed,
+  // and showing "SSH reachable" against the old IP would mislead.
+  probeResult.value = null
+  deployMsg.value = null
+}
 
 const { range, refreshSec } = useTimeRange()
 
@@ -52,6 +64,13 @@ async function runProbe() {
   } finally {
     probeRunning.value = false
   }
+  // Re-fetch the server row so the page-header status badge reflects
+  // the probe outcome — otherwise the UI shows "unreachable" right
+  // next to a green "SSH reachable" probe-result banner, which is the
+  // exact contradiction operators flag as "the dashboard is wrong".
+  // The probe handler already wrote the new status to the DB; we just
+  // need to surface it.
+  await loadServer()
 }
 
 async function runDeploy() {
@@ -155,17 +174,27 @@ const loadLabel = (m: Record<string, string>) => {
       </div>
     </header>
 
-    <div v-if="server" class="actions">
+    <div v-if="server && !showEdit" class="actions">
       <button :disabled="probeRunning" @click="runProbe">
         {{ probeRunning ? 'Testing…' : 'Test SSH' }}
       </button>
       <button :disabled="deployRunning" @click="runDeploy">
         {{ deployRunning ? 'Deploying…' : 'Deploy collector' }}
       </button>
+      <button class="edit" @click="showEdit = true">
+        <Pencil :size="14" :stroke-width="2" /> Edit
+      </button>
       <button class="danger" :disabled="deleteRunning" @click="runDelete">
         {{ deleteRunning ? 'Deleting…' : 'Delete' }}
       </button>
     </div>
+
+    <EditServerForm
+      v-if="server && showEdit"
+      :server="server"
+      @saved="onEdited"
+      @cancelled="showEdit = false"
+    />
 
     <p
       v-if="probeResult"
@@ -277,6 +306,16 @@ const loadLabel = (m: Record<string, string>) => {
 }
 .actions button:hover:not(:disabled) { border-color: var(--accent); }
 .actions button:disabled { opacity: 0.6; cursor: not-allowed; }
+.actions button.edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.actions button.edit:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
 .actions button.danger {
   border-color: var(--status-unreachable);
   color: var(--status-unreachable);
@@ -297,5 +336,48 @@ const loadLabel = (m: Record<string, string>) => {
 .probe-result.fail {
   background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
   color: var(--status-unreachable);
+}
+
+@media (max-width: 720px) {
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  .page-header h2 {
+    font-size: 1.15rem;
+    word-break: break-word;
+  }
+  .hostname {
+    font-size: 0.82rem;
+    word-break: break-all;
+  }
+  .hostname code {
+    word-break: break-all;
+    font-size: 0.78rem;
+  }
+  /* Status badge moves under the hostname; flex-start so it doesn't
+     hug the right edge once the column is narrow. */
+  .status-block { align-self: flex-start; }
+
+  .actions {
+    display: grid;
+    /* Two rows: [Test SSH | Deploy collector] / [Edit | Delete].
+       Grid gives equal widths, keeps Delete next to Edit (so the
+       red button isn't visually stranded), and avoids wrap-fight
+       between flex children of different label widths. */
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+  }
+  .actions button {
+    width: 100%;
+    text-align: center;
+    justify-content: center;
+    padding: 0.55rem 0.7rem;
+  }
+  .probe-result {
+    word-break: break-word;
+    font-size: 0.85rem;
+  }
 }
 </style>

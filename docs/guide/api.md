@@ -137,6 +137,24 @@ Always 200 (or 404 if id unknown). Body shape:
 
 Pipes the embedded `frappe-monitor-collect.sh` to `~/.frappe-monitor/collect.sh` on the target via SSH and `chmod +x`s it. Re-run after upgrading the monitor binary if the embedded script changed.
 
+### `GET /api/v1/servers/{id}/system` — most recent inventory snapshot
+
+```json
+{
+  "captured_at": "2026-05-02T08:11:13Z",
+  "payload": { "system": { … }, "cpu": { … }, "memory": { … }, "disks": [ … ], "top_cpu": [ … ] },
+  "last_error": ""
+}
+```
+
+`payload` and `last_error` are independent. A successful refresh sets payload + clears last_error. A *failed* refresh persists last_error but **preserves the previously-captured payload** — so a transient SSH blip never leaves the dashboard with a blank "System details" card. The card shows both: prior data + a "Last capture failed: …" banner until the next successful Refresh clears it.
+
+`404` if no snapshot has ever been captured for this server.
+
+### `POST /api/v1/servers/{id}/refresh-system` — capture inventory now
+
+Same response shape as `GET …/system` on success. SSH or JSON-parse failure returns `502` / `504` / `500` with an error body **and** persists `last_error` (without nuking the prior payload).
+
 ## Hierarchy (VM-derived)
 
 These four endpoints derive bench / site lists from VictoriaMetrics queries — no SQL tables involved. They only mount when `metrics.vm_url` is configured.

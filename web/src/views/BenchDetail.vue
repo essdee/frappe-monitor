@@ -238,4 +238,23 @@ function supervisorHealth(d: BenchDetail): { label: string; color: string } {
   color: var(--status-unreachable);
   border-radius: 4px;
 }
+
+@media (max-width: 720px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .page-header h2 {
+    font-size: 1.15rem;
+    word-break: break-word;
+  }
+  .hostname code { word-break: break-all; }
+  .summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+  .summary-item { padding: 0.6rem 0.75rem; }
+  .value { font-size: 1rem; }
+  .queue-table table { max-width: 100%; }
+}
 </style>

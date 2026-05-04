@@ -16,10 +16,20 @@ const route = useRoute()
 const bare = computed(() => route.meta.layout === 'bare')
 
 async function handleLogout() {
-  await logout()
-  // Pass a flag so Login.vue can show a "Signed out" confirmation —
-  // otherwise the user just sees the login form and wonders if the
-  // click did anything.
+  // Confirm so a misclick on a phone (where the button sits next to
+  // nav links) doesn't drop the operator out of the dashboard mid-task.
+  if (!window.confirm('Sign out of frappe-monitor?')) return
+  try {
+    await logout()
+  } catch {
+    // Server-side cookie-clear failed; we still tear down the local
+    // view and route to /login. Login.vue's ?signed_out=1 branch
+    // suppresses the auto-redirect so a stale-but-valid cookie can't
+    // bounce the user back into the dashboard.
+  }
+  // Hard navigation so SPA state (cached fetch promises, in-flight
+  // refresh timers) is dropped; routing inside the SPA would leave
+  // those alive.
   window.location.assign('/login?signed_out=1')
 }
 </script>
@@ -74,6 +84,17 @@ async function handleLogout() {
   display: grid;
   grid-template-columns: 232px 1fr;
   min-height: 100vh;
+  /* Defense against any descendant (chart canvas, long monospace
+     hostname, oversized table) bleeding past the viewport on phones.
+     `clip` is the modern variant of `hidden` that doesn't establish
+     a containing block for sticky/fixed elements, so the sticky
+     sidebar + sticky header still work. Falls back to `hidden`
+     anywhere `clip` isn't supported yet. */
+  overflow-x: hidden;
+  overflow-x: clip;
+  /* Cap the shell at the viewport width so nothing horizontally
+     escapes into "empty space to the right" territory. */
+  max-width: 100vw;
 }
 .sidebar {
   background: var(--sidebar-bg);
@@ -150,6 +171,20 @@ nav {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  /* Without min-width:0 a flex/grid child whose content (echarts canvas,
+     long monospace hostname) is wider than the column still claims its
+     intrinsic width, pushing the whole page horizontally on phones.
+     Forcing 0 lets the content scroll inside the column instead. */
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+.content {
+  /* Same shrink guard for the inner content column. Per-view tables
+     opt back into horizontal-scroll where they need it (they wrap a
+     scrollable <table>, not the whole page). */
+  min-width: 0;
+  max-width: 100%;
 }
 .header {
   padding: 0.75rem 2rem;
@@ -184,10 +219,10 @@ nav {
     z-index: 20;
     border-right: none;
     border-bottom: 1px solid var(--card-border);
-    padding: 0.75rem 1rem;
+    padding: 0.6rem 0.85rem;
     flex-direction: row;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.6rem;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -206,7 +241,12 @@ nav {
     justify-content: flex-end;
   }
   .nav-link {
-    padding: 0.4rem 0.55rem;
+    /* Comfortable thumb-size targets — anything smaller than ~40px
+       wide is finicky on a phone and people fat-finger Sign-out
+       when reaching for Servers. */
+    padding: 0.5rem 0.65rem;
+    min-width: 40px;
+    justify-content: center;
     font-size: 0.85rem;
     flex-shrink: 0;
   }
@@ -214,7 +254,73 @@ nav {
   .nav-link.router-link-active {
     background: var(--accent-soft);
   }
+  /* Sign-out on mobile: same size as the other nav icons. The
+     desktop styles set width:100% + text-align:left for the
+     bottom-of-sidebar pinned button — both have to be unset here
+     or the button claims the whole horizontal flex row and looks
+     comically huge next to the other icons. */
+  .logout {
+    margin-top: 0;
+    margin-left: 0.35rem;
+    padding: 0.45rem 0.55rem;
+    width: auto;
+    text-align: center;
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .logout:hover {
+    background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
+    color: var(--status-unreachable);
+    border-color: color-mix(in srgb, var(--status-unreachable) 50%, var(--card-border));
+  }
   .header { padding: 0.5rem 1rem; position: static; }
   .content { padding: 1rem; }
+}
+
+/* ----- Phone (≤ 480px): sidebar wraps to two rows so brand + nav
+        don't horizontally scroll on narrow handsets. ------------- */
+@media (max-width: 480px) {
+  .sidebar {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    /* Box-sizing belt-and-braces: padding shouldn't bleed past 100vw. */
+    max-width: 100%;
+  }
+  .brand {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    padding-bottom: 0.4rem;
+    margin-bottom: 0.35rem;
+    border-bottom: 1px solid var(--card-border);
+    min-width: 0;
+  }
+  .brand-text { min-width: 0; overflow: hidden; }
+  .brand-text h1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  nav {
+    flex: 1 1 0;
+    min-width: 0;
+    justify-content: flex-start;
+    gap: 0.15rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  nav::-webkit-scrollbar { display: none; }
+  .nav-link {
+    /* Tighter taps on a 360px wide phone so 4 routes + sign-out
+       fit. Still ≥40px wide for thumb comfort. */
+    min-width: 40px;
+    padding: 0.45rem 0.55rem;
+  }
+  .logout {
+    margin-left: 0.35rem;
+    padding: 0.45rem 0.55rem;
+    flex-shrink: 0;
+  }
 }
 </style>

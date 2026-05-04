@@ -174,3 +174,46 @@ func TestSetServerStatus(t *testing.T) {
 	require.Equal(t, "reachable", got.Status)
 	require.NotNil(t, got.LastPingedAt)
 }
+
+func TestUpsertSystemSnapshot_ErrorOnlyPreservesPayload(t *testing.T) {
+	// Failure path of refreshSystem passes only LastError. Storage must
+	// keep the previously-captured payload — otherwise a transient SSH
+	// blip would wipe the dashboard's "System details" card and leave
+	// the operator looking at "Last capture failed" with nothing else
+	// useful, even though they had a fresh inventory minutes ago.
+	s := newTestStore(t)
+	ctx := context.Background()
+	srv, err := s.CreateServer(ctx, NewServer{
+		Name: "snap", Hostname: "snap.example.com", SSHUser: "monitor", SSHPort: 22, SSHKeyPath: "/tmp/k",
+	})
+	require.NoError(t, err)
+
+	good := []byte(`{"hello":"world"}`)
+	require.NoError(t, s.UpsertSystemSnapshot(ctx, SystemSnapshot{
+		ServerID: srv.ID,
+		Payload:  good,
+	}))
+
+	// Simulate a refresh failure — empty payload, only LastError.
+	require.NoError(t, s.UpsertSystemSnapshot(ctx, SystemSnapshot{
+		ServerID:  srv.ID,
+		LastError: "ssh: command timeout",
+	}))
+
+	got, err := s.GetSystemSnapshot(ctx, srv.ID)
+	require.NoError(t, err)
+	require.Equal(t, "ssh: command timeout", got.LastError)
+	require.Equal(t, string(good), string(got.Payload),
+		"transient failure must not erase last good payload")
+
+	// Subsequent successful refresh replaces payload AND clears the error.
+	better := []byte(`{"hello":"again"}`)
+	require.NoError(t, s.UpsertSystemSnapshot(ctx, SystemSnapshot{
+		ServerID: srv.ID,
+		Payload:  better,
+	}))
+	got, err = s.GetSystemSnapshot(ctx, srv.ID)
+	require.NoError(t, err)
+	require.Empty(t, got.LastError)
+	require.Equal(t, string(better), string(got.Payload))
+}

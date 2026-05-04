@@ -159,7 +159,7 @@ const hasFilters = computed(
       </thead>
       <tbody>
         <tr v-for="s in filtered" :key="`${s.server}|${s.bench}|${s.site}`">
-          <td>
+          <td data-label="Site">
             <RouterLink
               :to="`/sites/${encodeURIComponent(s.server)}/${encodeURIComponent(s.bench)}/${encodeURIComponent(s.site)}`"
             >
@@ -167,8 +167,8 @@ const hasFilters = computed(
               {{ s.site }}
             </RouterLink>
           </td>
-          <td class="mono">{{ s.server }}</td>
-          <td class="mono">{{ s.bench }}</td>
+          <td class="mono" data-label="Server">{{ s.server }}</td>
+          <td class="mono" data-label="Bench">{{ s.bench }}</td>
         </tr>
       </tbody>
     </table>
@@ -360,6 +360,55 @@ const hasFilters = computed(
   }
   .clear-btn {
     align-self: flex-end;
+  }
+
+  /* Sites table → card list. The 3-column layout on a 360px viewport
+     forces every cell to scroll; vertical cards are more legible.
+     Same data-label trick the Alerts page uses. */
+  .sites-table {
+    display: block;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+    white-space: normal;
+  }
+  .sites-table thead { display: none; }
+  .sites-table tbody { display: block; }
+  .sites-table tr {
+    display: block;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 0.55rem 0.8rem;
+    margin-bottom: 0.5rem;
+    box-shadow: var(--card-shadow);
+  }
+  .sites-table td {
+    display: block;
+    padding: 0.2rem 0;
+    border: none;
+    font-size: 0.85rem;
+    word-break: break-word;
+  }
+  .sites-table td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 600;
+    margin-bottom: 0.1rem;
+  }
+  .sites-table td:first-child::before {
+    /* Site row reads as the card title; suppress redundant "Site"
+       label and bump font size. */
+    display: none;
+  }
+  .sites-table td:first-child {
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
   }
 }
 </style>

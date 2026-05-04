@@ -17,7 +17,15 @@
 
 set -euo pipefail
 
-VERSION="2.4.0"
+VERSION="2.5.0"
+
+# Hard wall-clock budget for the WHOLE site-probe loop, regardless of
+# how many sites the bench has. SSH's command timeout is typically
+# 30s; we leave ~10s headroom for emit_meta + emit_server + per-bench
+# work so a bench with 30+ sites doesn't get killed mid-loop and lose
+# the trailing ###END marker. Sites past the budget are emitted with
+# is_healthy=0 + http_status_code=0 — no curl call, no time spent.
+SITE_PROBE_BUDGET_S="${SITE_PROBE_BUDGET_S:-20}"
 
 # Self-renice + ionice so the collector NEVER outranks the bench's own
 # workloads. CPU nice +10 deprioritizes us under load (default user
@@ -248,17 +256,26 @@ detect_bench_port_once() {
 
 # Per-site HTTP probe + emit using the cached port. Tighter per-probe
 # timeout (2s) so 30+ sites still fit the SSH budget.
+#
+# A 4th argument "skip" short-circuits the probe and emits
+# http_status_code=0 / is_healthy=0. Used by the main loop when the
+# wall-clock budget is exceeded — without this guard, a bench with
+# more sites than fit in the budget gets its remaining sites probed
+# anyway, the SSH timeout fires, and the parser sees torn output.
 emit_site() {
   local bench_name="$1"
   local site_name="$2"
   local port="$3"
+  local mode="${4:-probe}"
 
   echo "###SITE:$bench_name:$site_name"
 
   local out http_code time_s time_ms healthy
-  if [ "$port" = "0" ]; then
-    # No port detected — short-circuit to is_healthy=0; don't waste a
-    # 2s timeout per site on a connection-refused.
+  if [ "$mode" = "skip" ] || [ "$port" = "0" ]; then
+    # Either (a) we ran out of SSH budget before reaching this site, or
+    # (b) no port was detected for this bench. Same emit shape — saves
+    # the dashboard from rendering "no data" for skipped sites and
+    # makes the budget overrun observable as is_healthy=0.
     http_code=0
     time_ms=0
   else
@@ -275,12 +292,19 @@ emit_site() {
   echo "http_status_code=$http_code"
   echo "http_response_ms=$time_ms"
   # 2xx + 3xx are "site is responding" — count as healthy. 4xx/5xx
-  # mean the server's up but the site isn't routed correctly.
-  if [ "$http_code" -ge 200 ] 2>/dev/null && [ "$http_code" -lt 400 ] 2>/dev/null; then
-    healthy=1
-  else
-    healthy=0
-  fi
+  # mean the server's up but the site isn't routed correctly. Force
+  # http_code to a number first so a curl-failure value like "000" or
+  # an empty string can't crash the test under set -e.
+  case "$http_code" in
+    ''|*[!0-9]*) healthy=0 ;;
+    *)
+      if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 400 ]; then
+        healthy=1
+      else
+        healthy=0
+      fi
+      ;;
+  esac
   echo "is_healthy=$healthy"
 
   echo
@@ -290,6 +314,11 @@ emit_site() {
 
 emit_meta
 emit_server
+
+# Mark the start of the site-probe phase so the loop can self-throttle
+# against SITE_PROBE_BUDGET_S below. We don't include emit_meta /
+# emit_server in the budget — those are bounded and small.
+PROBE_START_TS="$(date +%s)"
 
 while IFS= read -r bench_path; do
   [ -n "$bench_path" ] || continue
@@ -320,7 +349,16 @@ while IFS= read -r bench_path; do
       [ -d "$site_dir" ] || continue
       [ -f "$site_dir/site_config.json" ] || continue
       site_name=$(basename "$site_dir")
-      emit_site "$bench_name" "$site_name" "$bench_port"
+      now_ts="$(date +%s)"
+      elapsed=$((now_ts - PROBE_START_TS))
+      if [ "$elapsed" -ge "$SITE_PROBE_BUDGET_S" ]; then
+        # Budget blown — emit the site shape with mode=skip so the
+        # parser still gets a complete section instead of the loop
+        # being killed by SSH and producing torn output.
+        emit_site "$bench_name" "$site_name" "$bench_port" "skip"
+      else
+        emit_site "$bench_name" "$site_name" "$bench_port"
+      fi
     done
     shopt -u nullglob
   fi

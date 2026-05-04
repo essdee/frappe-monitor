@@ -213,4 +213,18 @@ button.primary {
   font-size: 0.85rem;
   margin: 0.5rem 0;
 }
+
+@media (max-width: 720px) {
+  .add-form { padding: 0.85rem 0.95rem; max-width: 100%; }
+  .row { flex-direction: column; gap: 0.5rem; }
+  .row .port { width: 100%; }
+  .actions {
+    flex-direction: column-reverse;
+    gap: 0.5rem;
+  }
+  .actions button {
+    width: 100%;
+    padding: 0.55rem 1rem;
+  }
+}
 </style>

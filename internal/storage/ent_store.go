@@ -246,6 +246,12 @@ func (s *EntStore) GetSystemSnapshot(ctx context.Context, serverID int) (*System
 // UpsertSystemSnapshot writes the latest inventory for a server,
 // creating the row if absent or replacing the payload if present.
 // Captured_at is bumped automatically by the ent UpdateDefault.
+//
+// Empty Payload is treated as "leave existing payload alone" — the
+// failure path (refresh-system handler, on SSH or JSON-parse error)
+// passes only LastError so a transient failure doesn't wipe the last
+// good snapshot. To explicitly clear payload, callers must pass a
+// non-nil zero-byte slice (no current caller does).
 func (s *EntStore) UpsertSystemSnapshot(ctx context.Context, in SystemSnapshot) error {
 	existing, err := s.client.SystemSnapshot.Query().
 		Where(entsystemsnapshot.HasServerWith(entserver.ID(in.ServerID))).
@@ -261,10 +267,12 @@ func (s *EntStore) UpsertSystemSnapshot(ctx context.Context, in SystemSnapshot) 
 			Save(ctx)
 		return err
 	}
-	_, err = s.client.SystemSnapshot.UpdateOneID(existing.ID).
-		SetPayload(in.Payload).
-		SetLastError(in.LastError).
-		Save(ctx)
+	upd := s.client.SystemSnapshot.UpdateOneID(existing.ID).
+		SetLastError(in.LastError)
+	if len(in.Payload) > 0 {
+		upd = upd.SetPayload(in.Payload)
+	}
+	_, err = upd.Save(ctx)
 	return err
 }
 

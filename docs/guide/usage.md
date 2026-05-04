@@ -157,18 +157,25 @@ Six presets: `15m`, `1h`, `6h`, `24h`, `7d`, `30d`. Picking one rewrites the URL
 
 ## Renaming or removing a server
 
-In the dashboard, open the server's detail page. The header has three buttons:
+In the dashboard, open the server's detail page. The header has four buttons:
 
-- **Test SSH** — runs the same probe as `POST /api/v1/servers/{id}/test-connection`.
+- **Test SSH** — runs the same probe as `POST /api/v1/servers/{id}/test-connection`. On success the page-header status badge updates to `reachable` immediately (no manual refresh needed).
 - **Deploy collector** — re-pushes the embedded `frappe-monitor-collect.sh` to the host.
+- **Edit** — opens an in-page form for changing **hostname/IP**, **SSH user**, **port**, **key path**, and **bench paths** without re-creating the server. Updates apply on the next collector cycle. The metric `name` label is read-only here because renaming would orphan all historical VM series for this host — if you genuinely need to rename, do it via the API and re-tag your dashboards.
 - **Delete** — removes the server (with a confirm prompt). Cascades log cursors; alert states age out next cycle. Existing data in VictoriaMetrics + Loki ages out on retention.
 
-Renames + SSH credential changes go via the API:
+The Edit button is also the right path when:
+
+- The bench host's IP changed (e.g., re-provisioned VM) — change `hostname` and the next pull uses the new address.
+- You added a new bench under `/srv/<custom>` that the collector's auto-discover doesn't find — add the path to `bench_paths` and the next cycle will scan it explicitly.
+- You rotated the monitor's SSH key — change `ssh_key_path` and Test SSH to confirm.
+
+Curl equivalent (also useful for scripting + the `name` rename case):
 
 ```bash
 curl -u "admin:<password>" -X PATCH http://127.0.0.1:8080/api/v1/servers/1 \
   -H 'Content-Type: application/json' \
-  -d '{"name": "renamed", "ssh_user": "newuser"}'
+  -d '{"hostname": "10.0.0.7", "bench_paths": ["/srv/bench-prod"]}'
 ```
 
 ## What metrics are emitted

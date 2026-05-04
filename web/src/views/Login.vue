@@ -13,7 +13,13 @@ const justSignedOut = computed(() => route.query.signed_out === '1')
 
 // If we're already authed (e.g. someone bookmarked /login), bounce
 // straight to the next page instead of showing the form.
+//
+// Skip the bounce when `?signed_out=1` is present — the user just
+// clicked Sign out and any whoami() that still answers 200 (cookie
+// cache, in-flight request, server-side delay) would yank them back
+// into the dashboard, making logout look like a no-op.
 onMounted(async () => {
+  if (justSignedOut.value) return
   if (await whoami()) {
     redirectNext()
   }
@@ -225,7 +231,20 @@ input:focus {
   line-height: 1.55;
 }
 
+@media (max-width: 720px) {
+  .login-shell {
+    /* Pull the card to the top so the password field is reachable
+       above the OS keyboard on a phone — fully-centered cards push
+       the input behind the keyboard on smaller devices. */
+    place-items: start center;
+    padding-top: 2rem;
+  }
+}
 @media (max-width: 480px) {
   .login-card { padding: 1.5rem 1.25rem 1.25rem; }
+  .brand h1 { font-size: 1rem; }
+  .brand-sub { font-size: 0.65rem; }
+  .hint { font-size: 0.74rem; }
+  .hint code { word-break: break-all; }
 }
 </style>

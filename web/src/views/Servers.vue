@@ -163,4 +163,23 @@ const sorted = computed(() => {
 .muted {
   color: var(--muted);
 }
+
+@media (max-width: 720px) {
+  .page-header {
+    align-items: stretch;
+  }
+  .header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .header-actions .primary,
+  .header-actions .refresh-btn {
+    flex: 1;
+    justify-content: center;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+}
 </style>
