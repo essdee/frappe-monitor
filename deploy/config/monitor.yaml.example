@@ -1,0 +1,84 @@
+# frappe-monitor config
+server:
+  listen_addr: ":8080"
+  read_timeout_seconds: 15
+  write_timeout_seconds: 15
+
+database:
+  path: "./data/monitor.db"
+
+ssh:
+  dial_timeout_seconds: 10
+  command_timeout_seconds: 30
+  max_connections_per_host: 2
+
+log:
+  level: "info"   # debug | info | warn | error
+  format: "json"  # json | text
+
+metrics:
+  # VictoriaMetrics endpoint. /write is appended for pushes; the dashboard
+  # query proxy forwards to /api/v1/query_range. Pass the root URL.
+  vm_url: "http://127.0.0.1:8428"
+  push_timeout_seconds: 5
+  query_timeout_seconds: 15
+
+logs:
+  # Loki endpoint. /loki/api/v1/push is appended for pushes; the dashboard
+  # query proxy forwards to /loki/api/v1/query_range.
+  loki_url: "http://127.0.0.1:3100"
+  push_timeout_seconds: 5
+  query_timeout_seconds: 15
+
+scheduler:
+  # Default per-server pull interval. Master plan §5 default is 15 min;
+  # do not go below 5 minutes over real SSH.
+  default_interval_seconds: 900
+  # Cap on simultaneously-running pull jobs across the whole monitor.
+  max_parallel: 10
+  # Per-job ctx timeout. Pick well above P99(ssh + parse + push).
+  per_job_timeout_seconds: 30
+
+# --- Phase 7 auth ---------------------------------------------------------
+# HTTP basic auth. Empty password = auth disabled (dev / behind-internal-
+# network deploys). When set, the dashboard + API require credentials —
+# any username + this password. Browsers handle the prompt natively, so
+# the SPA needs no login page. /healthz stays unauthenticated for probes.
+auth:
+  password: ""
+  realm: "frappe-monitor"
+
+# --- Phase 6 alerts -------------------------------------------------------
+# Telegram alerting. enabled=false means no goroutine, no telegram
+# traffic, no extra rows in SQLite.
+#
+# To enable:
+#   1. Create a bot via @BotFather, copy the token.
+#   2. Add the bot to a chat (or DM it), get the chat_id from
+#      https://api.telegram.org/bot<token>/getUpdates after sending /start.
+#   3. Set enabled: true and fill in bot_token + chat_ids.
+#
+# Default rules cover server_unreachable, disk_almost_full, site_unhealthy,
+# redis_queue_high. Override or add via the rules: list below; the
+# defaults still fire unless disable_defaults: true.
+alerts:
+  enabled: false
+  evaluation_interval_seconds: 60
+  notify_repeat_seconds: 3600
+  vm_query_timeout_seconds: 10
+  telegram:
+    bot_token: ""
+    chat_ids: []
+    send_timeout_seconds: 5
+  disable_defaults: false
+  rules: []
+  # Example custom rule:
+  #   - name: cpu_saturated
+  #     expr: 100 * (1 - rate(frappe_server_cpu_idle[5m]) /
+  #                       rate(frappe_server_cpu_user[5m] +
+  #                            frappe_server_cpu_system[5m] +
+  #                            frappe_server_cpu_idle[5m] +
+  #                            frappe_server_cpu_iowait[5m])) > 95
+  #     severity: warning
+  #     fingerprint_labels: [server]
+  #     message: "CPU on {{.Labels.server}} is {{printf \"%.1f\" .Value}}% used."

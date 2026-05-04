@@ -1,0 +1,69 @@
+# Dev-only docker-compose: brings up VictoriaMetrics + Loki for local
+# development. The frappe-monitor binary runs on the host and points at
+# 127.0.0.1:8428 (VM) and 127.0.0.1:3100 (Loki).
+#
+# Up:    make vm-up        (brings up both services)
+# Down:  make vm-down
+# Logs:  make vm-logs / make loki-logs
+#
+# Production compose (with monitor + Caddy) lives separately and is
+# not part of this file — see master plan §10.
+
+services:
+  victoriametrics:
+    # Pinned tag (not :latest) so the smoke contract doesn't break the day VM
+    # ships an incompatible flag rename. Verified: v1.142.0 ingests our line
+    # protocol and honors -influxSkipSingleField. Bump deliberately when needed.
+    image: victoriametrics/victoria-metrics:v1.142.0
+    container_name: frappe-monitor-vm
+    # Bind to localhost only — VM is not a public-facing service.
+    ports:
+      - "127.0.0.1:8428:8428"
+    command:
+      - "--storageDataPath=/data"
+      - "--retentionPeriod=30d"
+      - "--httpListenAddr=:8428"
+      # Without this, VM's Influx-line-protocol ingestion appends the
+      # field name ("_value") to the metric name. We emit one field per
+      # line so the suffix is always "_value"; this flag keeps the
+      # metric name as written, matching the master plan's labelling
+      # convention (frappe_server_load_1m, not frappe_server_load_1m_value).
+      - "-influxSkipSingleField"
+      # VM's instant queries default to a 30s latency offset (a buffer
+      # for late-arriving data). In dev that makes the dashboard look
+      # frozen for 30s after the collector's first push. Set to 0 here
+      # so /api/v1/query reflects fresh writes immediately. Production
+      # compose may keep the default if late samples are common.
+      - "-search.latencyOffset=0s"
+    volumes:
+      - vm-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8428/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 6
+
+  loki:
+    # Pinned for the same reason as VM — Loki's config schema has shifted
+    # between major versions. Verified v3.4.1 with the bundled example
+    # config (no custom config file required for dev).
+    image: grafana/loki:3.4.1
+    container_name: frappe-monitor-loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:3100/ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+
+volumes:
+  vm-data:
+    name: frappe-monitor-vm-data
+  loki-data:
+    name: frappe-monitor-loki-data

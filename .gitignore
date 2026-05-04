@@ -1,0 +1,35 @@
+# build output
+/monitor-server
+/bin/
+
+# test + coverage
+*.out
+coverage.out
+
+# sqlite runtime files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/data/
+
+# secrets + local config
+.env
+/ssh-keys/*
+!/ssh-keys/.gitkeep
+/config/monitor.yaml
+
+# editor + os
+.idea/
+.vscode/
+.DS_Store
+
+# review-loop workflow folder (local handoff between worker and reviewer)
+/tasks/
+
+# Vite build output. Never tracked. The Go binary embeds this only
+# when built with `-tags=embed_dist` (set by `make build` after
+# `make web-build`); the default no-tag build uses the placeholder
+# handler in internal/web/embed_placeholder.go.
+/internal/web/dist/
+

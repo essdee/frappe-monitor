@@ -1,0 +1,9 @@
+###META
+version=1.0.0
+timestamp=1777000000
+hostname=fixture-host
+
+###SERVER
+load_1m=1.0
+load_5m=0.5
+load_15m=0.2

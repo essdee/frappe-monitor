@@ -1,0 +1,12 @@
+node_modules/
+*.tsbuildinfo
+.vite/
+
+# vue-tsc -b emits a compiled .js next to vite.config.ts; not for git.
+vite.config.js
+
+# Old (Phase 4 early) Vite output dir — outDir now writes to
+# ../internal/web/dist so the Go embed picks it up directly. Keep
+# this gitignore line so any leftover web/dist from older clones
+# isn't accidentally tracked.
+dist/
