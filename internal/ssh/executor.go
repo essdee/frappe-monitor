@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -43,9 +44,25 @@ func (t Target) addr() string {
 // Run is for commands that take no stdin. RunWithInput pipes the supplied
 // stdin string to the command's stdin and returns its combined stdout/stderr;
 // passing "" for stdin is equivalent to Run.
+//
+// Stream is for long-running commands whose stdout should be consumed
+// incrementally — e.g. the Phase 8 log streamer's `tail -F` pipeline.
+// The returned StreamHandle is an io.ReadCloser over stdout; Read
+// returns new bytes as they arrive on the wire and io.EOF when the
+// remote command exits cleanly. Always Close the handle — that signals
+// the remote process and tears down the SSH session. Close is safe to
+// call multiple times and from a different goroutine than Read.
 type Executor interface {
 	Run(ctx context.Context, tgt Target, cmd string) (string, error)
 	RunWithInput(ctx context.Context, tgt Target, cmd, stdin string) (string, error)
+	Stream(ctx context.Context, tgt Target, cmd string) (StreamHandle, error)
+}
+
+// StreamHandle is the handle returned by Executor.Stream. Reads are
+// blocking until new bytes arrive or the session ends; Close is
+// idempotent and concurrent-safe with Read.
+type StreamHandle interface {
+	io.ReadCloser
 }
 
 // Ping executes a no-op command and returns the round-trip latency.

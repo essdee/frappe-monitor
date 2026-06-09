@@ -151,6 +151,50 @@ alerts:
     #   severity: warning
     #   fingerprint_labels: [server]
     #   message: "CPU on {{.Labels.server}} is {{printf \"%.1f\" .Value}}% used."
+
+# --- Phase 8 streaming (per-event capture) -----------------------------
+# Long-lived SSH session per server that tails Frappe + MariaDB log
+# files via tail -F and pushes lines to Loki as they arrive. Disabled
+# by default — opt in once the streamer script is deployed to the
+# bench (see docs/guide/usage.md → "Enable per-event streaming").
+streaming:
+  enabled: false
+
+  # Free-form short string surfaced as a Loki/VM label so multi-monitor
+  # deployments don't collide. Empty is fine for single-monitor setups.
+  monitor_id: ""
+
+  # Absolute path on each bench where frappe-monitor-stream.sh lives.
+  # Phase 8b.1 expects you to deploy it there manually (or via a
+  # config-management tool); auto-deploy from the monitor lands in 8b.2.
+  script_path: "/home/frappe/.frappe-monitor/stream.sh"
+
+  # Files the streamer should tail. Every server tails the same set in
+  # 8b.1; per-server overrides arrive post-v1. The id appears as the
+  # log_type label in Loki.
+  files:
+    # - id:   web
+    #   path: /home/frappe/frappe-bench/logs/web.log
+    # - id:   err
+    #   path: /home/frappe/frappe-bench/logs/web.error.log
+    # - id:   slowq
+    #   path: /var/log/mysql/mariadb-slow.log
+
+  # How often the LokiSink flushes buffered entries. Lower = lower
+  # dashboard latency, higher = bigger Loki batches. Default 1s.
+  flush_interval_seconds: 1
+
+  # Per-stream buffer ceiling. Reaching this triggers an early flush
+  # so a burst doesn't grow buffers unbounded. Default 500.
+  max_batch_lines: 500
+
+  # Per-push timeout for Loki + VM. Default 10s.
+  push_timeout_seconds: 10
+
+  # Reconnect backoff. Doubles up to max on each disconnect. Default
+  # 1s → 60s.
+  min_backoff_seconds: 1
+  max_backoff_seconds: 60
 ```
 
 ## Validated invariants
@@ -170,6 +214,11 @@ The binary refuses to start if any of these are wrong:
 | `alerts.evaluation_interval_seconds` ≥ 15 (when enabled) | Anything lower is a tight loop on VM. |
 | `alerts.telegram.bot_token` non-empty (when enabled) | Without it, no notification can land. |
 | `alerts.telegram.chat_ids` non-empty (when enabled) | Same — fan-out target required. |
+| `streaming.script_path` non-empty (when enabled) | Required — sessions can't exec an empty path. |
+| `streaming.files` non-empty (when enabled) | Required — at least one (id, path) pair to tail. |
+| `streaming.flush_interval_seconds` ≥ 1 (when enabled) | Subsecond flushes burn CPU for no gain. |
+| `streaming.max_batch_lines` ≥ 1 (when enabled) | Zero would mean "flush on every line" — same problem. |
+| `streaming.max_backoff_seconds` ≥ `min_backoff_seconds` (when enabled) | Otherwise reconnect would jitter forever. |
 
 The error message names the offending key, e.g. `metrics.push_timeout_seconds must be >= 1, got 0`.
 

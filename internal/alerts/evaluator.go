@@ -89,7 +89,15 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule Rule, now time.Time) 
 		}
 		if shouldNotify {
 			msg := renderMessage(rule, sample)
-			if err := e.Notifier.Notify(ctx, rule.Severity, rule.Name, msg); err != nil {
+			notif := Notification{
+				Severity: rule.Severity,
+				RuleName: rule.Name,
+				Body:     msg,
+				Labels:   sample.Labels,
+				Resolved: false,
+				Time:     now,
+			}
+			if err := e.Notifier.Notify(ctx, notif); err != nil {
 				e.Logger.Warn("alerts: notify failed",
 					"rule", rule.Name, "fp", fp, "err", err)
 			} else {
@@ -107,7 +115,15 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule Rule, now time.Time) 
 		}
 		if previous.Status == "firing" {
 			msg := renderResolvedMessage(rule, previous)
-			if err := e.Notifier.Notify(ctx, rule.Severity, rule.Name+" RESOLVED", msg); err != nil {
+			notif := Notification{
+				Severity: rule.Severity,
+				RuleName: rule.Name,
+				Body:     msg,
+				Labels:   previous.Labels,
+				Resolved: true,
+				Time:     now,
+			}
+			if err := e.Notifier.Notify(ctx, notif); err != nil {
 				e.Logger.Warn("alerts: resolve notify failed",
 					"rule", rule.Name, "fp", fp, "err", err)
 			} else {

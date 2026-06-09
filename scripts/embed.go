@@ -15,6 +15,9 @@ var CollectorScript string
 //go:embed frappe-monitor-system.sh
 var SystemScript string
 
+//go:embed frappe-monitor-stream.sh
+var StreamerScript string
+
 // CollectorVersion returns the VERSION declared in the embedded
 // collector script. It scans for the first top-level `VERSION="..."`
 // assignment — collectors with long header comments are fine.
@@ -22,7 +25,18 @@ var SystemScript string
 // is a build-time invariant violation, but the runtime should not
 // crash on a malformed embed.
 func CollectorVersion() string {
-	for _, line := range strings.Split(CollectorScript, "\n") {
+	return scanVersion(CollectorScript)
+}
+
+// StreamerVersion returns the VERSION declared in the embedded
+// streamer script. Same protocol as CollectorVersion — first top-level
+// `VERSION="..."` line wins.
+func StreamerVersion() string {
+	return scanVersion(StreamerScript)
+}
+
+func scanVersion(script string) string {
+	for _, line := range strings.Split(script, "\n") {
 		line = strings.TrimSpace(line)
 		const prefix = `VERSION="`
 		if !strings.HasPrefix(line, prefix) {

@@ -21,6 +21,7 @@ type Config struct {
 	Scheduler SchedulerConfig `koanf:"scheduler"`
 	Auth      AuthConfig      `koanf:"auth"`
 	Alerts    AlertsConfig    `koanf:"alerts"`
+	Streaming StreamingConfig `koanf:"streaming"`
 }
 
 type ServerConfig struct {
@@ -101,6 +102,26 @@ type AlertsRule struct {
 	FingerprintLabels []string `koanf:"fingerprint_labels"`
 }
 
+// StreamingConfig mirrors internal/streamer.Config. Keep the koanf
+// shape close to the runtime struct so the wiring in main.go is a
+// straight field copy.
+type StreamingConfig struct {
+	Enabled              bool                  `koanf:"enabled"`
+	MonitorID            string                `koanf:"monitor_id"`
+	ScriptPath           string                `koanf:"script_path"`
+	Files                []StreamingFileConfig `koanf:"files"`
+	FlushIntervalSeconds int                   `koanf:"flush_interval_seconds"`
+	MaxBatchLines        int                   `koanf:"max_batch_lines"`
+	PushTimeoutSeconds   int                   `koanf:"push_timeout_seconds"`
+	MinBackoffSeconds    int                   `koanf:"min_backoff_seconds"`
+	MaxBackoffSeconds    int                   `koanf:"max_backoff_seconds"`
+}
+
+type StreamingFileConfig struct {
+	ID   string `koanf:"id"`
+	Path string `koanf:"path"`
+}
+
 func defaults() *koanf.Koanf {
 	k := koanf.New(".")
 	if err := k.Load(confmap.Provider(map[string]any{
@@ -130,6 +151,13 @@ func defaults() *koanf.Koanf {
 		"alerts.vm_query_timeout_seconds":    10,
 		"alerts.telegram.send_timeout_seconds": 5,
 		"alerts.disable_defaults":            false,
+		"streaming.enabled":                  false,
+		"streaming.script_path":              "",
+		"streaming.flush_interval_seconds":   1,
+		"streaming.max_batch_lines":          500,
+		"streaming.push_timeout_seconds":     10,
+		"streaming.min_backoff_seconds":      1,
+		"streaming.max_backoff_seconds":      60,
 	}, "."), nil); err != nil {
 		panic(fmt.Sprintf("config defaults: %v", err))
 	}
@@ -239,6 +267,28 @@ func (c *Config) validate() error {
 		}
 		if c.Alerts.NotifyRepeatSeconds < 0 {
 			return fmt.Errorf("alerts.notify_repeat_seconds must be >= 0, got %d", c.Alerts.NotifyRepeatSeconds)
+		}
+	}
+
+	// Streaming: the streamer package's own Validate handles ScriptPath
+	// + Files; we just keep the numeric guards here so a typo in YAML
+	// (push_timeout_seconds: 0) doesn't slip past.
+	if c.Streaming.Enabled {
+		if c.Streaming.FlushIntervalSeconds < 1 {
+			return fmt.Errorf("streaming.flush_interval_seconds must be >= 1, got %d", c.Streaming.FlushIntervalSeconds)
+		}
+		if c.Streaming.MaxBatchLines < 1 {
+			return fmt.Errorf("streaming.max_batch_lines must be >= 1, got %d", c.Streaming.MaxBatchLines)
+		}
+		if c.Streaming.PushTimeoutSeconds < 1 {
+			return fmt.Errorf("streaming.push_timeout_seconds must be >= 1, got %d", c.Streaming.PushTimeoutSeconds)
+		}
+		if c.Streaming.MinBackoffSeconds < 1 {
+			return fmt.Errorf("streaming.min_backoff_seconds must be >= 1, got %d", c.Streaming.MinBackoffSeconds)
+		}
+		if c.Streaming.MaxBackoffSeconds < c.Streaming.MinBackoffSeconds {
+			return fmt.Errorf("streaming.max_backoff_seconds (%d) must be >= streaming.min_backoff_seconds (%d)",
+				c.Streaming.MaxBackoffSeconds, c.Streaming.MinBackoffSeconds)
 		}
 	}
 
