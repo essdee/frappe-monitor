@@ -23,6 +23,12 @@ MONITOR_PID=""
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok: $*"; }
 
+# compose() runs whichever Docker Compose is available (the v2 plugin or
+# the standalone docker-compose), so brew's docker-compose works too.
+compose() {
+    if docker compose version >/dev/null 2>&1; then docker compose "$@"; else docker-compose "$@"; fi
+}
+
 cleanup() {
     echo
     echo "==> tearing down"
@@ -36,7 +42,7 @@ cleanup() {
         wait "$MONITOR_PID" 2>/dev/null || true
     fi
     if [ "${KEEP_BACKENDS:-0}" != "1" ]; then
-        (cd "$REPO_ROOT" && docker compose -f deploy/docker-compose.dev.yml down >/dev/null 2>&1 || true)
+        (cd "$REPO_ROOT" && compose -f deploy/docker-compose.dev.yml down >/dev/null 2>&1 || true)
         echo "  ok: VM + Loki stopped (data volumes preserved)"
     else
         echo "  >> KEEP_BACKENDS=1 — left VM + Loki running"
@@ -57,7 +63,8 @@ require go     "https://go.dev/doc/install (need Go 1.25+)"
 require node   "https://nodejs.org or your distro (need 20+)"
 require npm    "ships with Node"
 require docker "https://www.docker.com/products/docker-desktop/ (or colima/orbstack on macOS)"
-docker compose version >/dev/null 2>&1 || fail "docker compose plugin missing"
+{ docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1; } \
+    || fail "Docker Compose not found — need 'docker compose' (v2 plugin) or 'docker-compose' (standalone)"
 docker info >/dev/null 2>&1 || fail "docker daemon not running — start Docker Desktop / colima / OrbStack first"
 require curl   "your distro's package manager"
 require python3 "your distro's package manager (used to generate JSON for seeded log lines)"
@@ -83,7 +90,7 @@ ok "binary at bin/monitor-server ($(du -h bin/monitor-server | cut -f1))"
 # 3) VictoriaMetrics + Loki
 # ---------------------------------------------------------------------------
 echo "==> starting VictoriaMetrics + Loki via docker compose"
-docker compose -f deploy/docker-compose.dev.yml up -d >/dev/null 2>&1 \
+compose -f deploy/docker-compose.dev.yml up -d >/dev/null 2>&1 \
     || fail "docker compose up failed; try 'docker compose -f deploy/docker-compose.dev.yml up' to see the error"
 
 for _ in $(seq 1 60); do

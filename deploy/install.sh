@@ -1,59 +1,44 @@
 #!/usr/bin/env bash
-# Production install for frappe-monitor.
+# Cross-platform install for frappe-monitor.
 #
-# Idempotent: safe to re-run for upgrades. Re-running:
-#   - rebuilds the binary from the current checkout
-#   - replaces /usr/local/bin/frappe-monitor (atomic mv)
-#   - reinstalls systemd units (only if changed)
-#   - leaves /etc/frappe-monitor/monitor.yaml + /var/lib/frappe-monitor alone
-#   - restarts frappe-monitor.service so the new binary takes effect
+#   Linux  → systemd services + a dedicated frappe-monitor system user
+#            (production server install; run with sudo).
+#   macOS  → a launchd LaunchAgent under your user, everything in
+#            ~/.frappe-monitor (dev / local install; run WITHOUT sudo).
+#
+# The OS is auto-detected. Idempotent: safe to re-run for upgrades —
+# it rebuilds the binary, swaps it in atomically, refreshes the service
+# definition, and leaves your config + data alone.
 #
 # Usage:
-#   sudo ./deploy/install.sh                # full install or upgrade (prompts for
-#                                           # dashboard password + alerts on first run)
-#   sudo ./deploy/install.sh --no-stack     # skip VM+Loki bring-up (split-tier deploys)
-#   sudo ./deploy/install.sh --uninstall    # stop, disable, remove binary + units
-#                                           # (keeps /etc/frappe-monitor + data)
-#   sudo ./deploy/install.sh --purge        # --uninstall + nuke /etc/frappe-monitor,
-#                                           # /var/lib/frappe-monitor, docker volumes,
-#                                           # and the frappe-monitor user. Goes back
-#                                           # to a clean slate; next install re-prompts.
+#   Linux:  sudo ./deploy/install.sh            # install / upgrade
+#   macOS:       ./deploy/install.sh            # install / upgrade (no sudo)
 #
-# Non-interactive override (skip prompts) — pass via env or args:
-#   sudo MONITOR_PASSWORD=hunter2 ./deploy/install.sh
-#   sudo ./deploy/install.sh --password=hunter2
-#   sudo ./deploy/install.sh --password=hunter2 --enable-alerts \
+#   ./deploy/install.sh --no-stack              # skip VM+Loki bring-up
+#   ./deploy/install.sh --uninstall             # stop + remove service + binary
+#   ./deploy/install.sh --purge                 # --uninstall + wipe config/data/volumes
+#
+# Non-interactive (skip prompts), via env or args:
+#   MONITOR_PASSWORD=hunter2 ./deploy/install.sh
+#   ./deploy/install.sh --password=hunter2 --enable-alerts \
 #         --bot-token=<TOKEN> --chat-ids=12345,67890
 #
-# If --password isn't provided and stdin isn't a TTY, the script auto-
-# generates a random password and prints it. Existing /etc/frappe-monitor/
-# monitor.yaml is preserved on re-runs (delete it or use --purge to
-# re-prompt).
-#
-# Layout produced:
-#   /usr/local/bin/frappe-monitor              binary (CGO=0, embedded SPA)
-#   /etc/frappe-monitor/monitor.yaml           config (created from example on first install)
-#   /var/lib/frappe-monitor/                   SQLite DB + per-server state
-#   /opt/frappe-monitor/                       repo checkout (for compose + upgrade)
-#   /etc/systemd/system/frappe-monitor.service        the binary
-#   /etc/systemd/system/frappe-monitor-stack.service  VM + Loki via compose
-#
-# Requires: bash, sudo/root, Linux with systemd, Go ≥ 1.25, Node ≥ 20,
-# npm, Docker ≥ 24 with the compose plugin. The script verifies each
-# and bails with a copy-pasteable install hint if anything is missing.
+# Requires (both OSes): bash, Go ≥ 1.25, Node ≥ 20, npm, curl, and
+# Docker ≥ 24 with EITHER `docker compose` (v2 plugin) or `docker-compose`
+# (standalone). On macOS the Docker engine (Docker Desktop / colima /
+# OrbStack) must be running. The script verifies each and bails with a
+# copy-pasteable hint if anything is missing.
 #
 # Exits 0 on success, non-zero with a "FAIL:" line on failure.
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Args + paths
+# Args
 # ---------------------------------------------------------------------------
 SKIP_STACK=0
 UNINSTALL=0
 PURGE=0
-# Config knobs — env wins over arg when both supplied. All blank-default
-# so the prompt-on-first-install flow stays the dominant UX.
 MONITOR_PASSWORD="${MONITOR_PASSWORD:-}"
 MONITOR_ALERTS_ENABLED="${MONITOR_ALERTS_ENABLED:-}"        # "true" | "false"
 MONITOR_TELEGRAM_BOT_TOKEN="${MONITOR_TELEGRAM_BOT_TOKEN:-}"
@@ -77,59 +62,108 @@ for arg in "$@"; do
     esac
 done
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-INSTALL_USER="frappe-monitor"
-INSTALL_GROUP="frappe-monitor"
-BIN_DST="/usr/local/bin/frappe-monitor"
-ETC_DIR="/etc/frappe-monitor"
-STATE_DIR="/var/lib/frappe-monitor"
-OPT_DIR="/opt/frappe-monitor"
-SYSTEMD_DIR="/etc/systemd/system"
-
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok: $*"; }
 note() { echo "  >> $*"; }
 
-[ "$(id -u)" -eq 0 ] || fail "must run as root (use sudo)"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# sudo strips PATH and replaces it with secure_path from /etc/sudoers,
-# which usually doesn't include /usr/local/go/bin or per-user shim
-# directories. This is the most common first-run failure: "go not
-# found" even though the invoking user has it installed. Augment PATH
-# with the standard install locations relative to the invoking user's
-# home so the require_cmd checks below succeed.
-if [ -n "${SUDO_USER:-}" ]; then
+# ---------------------------------------------------------------------------
+# OS detection + platform layout
+# ---------------------------------------------------------------------------
+case "$(uname -s)" in
+    Linux)  IS_MAC=0 ;;
+    Darwin) IS_MAC=1 ;;
+    *) fail "unsupported OS '$(uname -s)' — this installer targets Linux or macOS" ;;
+esac
+
+# compose() runs the available Compose implementation (v2 plugin or the
+# standalone). have_compose reports whether either exists.
+have_compose() { docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1; }
+compose() {
+    if docker compose version >/dev/null 2>&1; then
+        docker compose "$@"
+    else
+        docker-compose "$@"
+    fi
+}
+
+if [ "$IS_MAC" = 1 ]; then
+    # macOS: user-space install under the current user's home. No sudo,
+    # no system user; launchd LaunchAgent keeps the binary running.
+    [ "$(id -u)" -ne 0 ] || fail "on macOS, run WITHOUT sudo (user-space install): ./deploy/install.sh"
+    BASE_DIR="$HOME/.frappe-monitor"
+    BIN_DST="$BASE_DIR/bin/frappe-monitor"
+    CONF_FILE="$BASE_DIR/monitor.yaml"
+    STATE_DIR="$BASE_DIR/data"
+    DEPLOY_DIR="$BASE_DIR/deploy"
+    LOG_DIR="$BASE_DIR/logs"
+    LAUNCH_DIR="$HOME/Library/LaunchAgents"
+    PLIST_LABEL="com.frappe-monitor"
+    PLIST="$LAUNCH_DIR/$PLIST_LABEL.plist"
+else
+    # Linux: production install with systemd + a dedicated system user.
+    [ "$(id -u)" -eq 0 ] || fail "on Linux, run as root: sudo ./deploy/install.sh"
+    INSTALL_USER="frappe-monitor"
+    INSTALL_GROUP="frappe-monitor"
+    BIN_DST="/usr/local/bin/frappe-monitor"
+    ETC_DIR="/etc/frappe-monitor"
+    CONF_FILE="$ETC_DIR/monitor.yaml"
+    STATE_DIR="/var/lib/frappe-monitor"
+    OPT_DIR="/opt/frappe-monitor"
+    DEPLOY_DIR="$OPT_DIR/deploy"
+    SYSTEMD_DIR="/etc/systemd/system"
+fi
+
+# On Linux, sudo strips PATH; re-add the common Go/Node install dirs of the
+# invoking user so the require_cmd checks find them. (No-op on macOS.)
+if [ "$IS_MAC" = 0 ] && [ -n "${SUDO_USER:-}" ]; then
     USER_HOME=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || echo "")
     if [ -n "$USER_HOME" ]; then
-        # asdf shims must come first so they shadow system Go, etc.
         if [ -d "$USER_HOME/.asdf/shims" ]; then
             PATH="$USER_HOME/.asdf/shims:$PATH"
         fi
         PATH="$PATH:/usr/local/go/bin:$USER_HOME/go/bin:$USER_HOME/.local/bin"
         if [ -d "$USER_HOME/.nvm" ]; then
-            # Pick the active nvm-installed node, if any.
             NVM_NODE_BIN=$(ls -1d "$USER_HOME"/.nvm/versions/node/*/bin 2>/dev/null | tail -1 || true)
             [ -n "$NVM_NODE_BIN" ] && PATH="$NVM_NODE_BIN:$PATH"
         fi
     fi
+    export PATH
 fi
-export PATH
 
 # ---------------------------------------------------------------------------
 # Uninstall path
 # ---------------------------------------------------------------------------
 if [ "$UNINSTALL" = "1" ]; then
     if [ "$PURGE" = "1" ]; then
-        echo "==> purging frappe-monitor (everything goes — config, data, volumes, user)"
+        echo "==> purging frappe-monitor (config, data, volumes — everything)"
     else
         echo "==> uninstalling frappe-monitor (config + data preserved)"
     fi
 
-    # Stop + disable systemd units first so docker volumes and dirs
-    # aren't busy when we try to delete them.
-    systemctl stop frappe-monitor.service       2>/dev/null || true
-    systemctl disable frappe-monitor.service    2>/dev/null || true
-    systemctl stop frappe-monitor-stack.service 2>/dev/null || true
+    if [ "$IS_MAC" = 1 ]; then
+        launchctl unload "$PLIST" 2>/dev/null || true
+        rm -f "$PLIST"
+        compose -f "$DEPLOY_DIR/docker-compose.prod.yml" down 2>/dev/null || true
+        rm -f "$BIN_DST"
+        ok "unloaded LaunchAgent, stopped stack, removed binary"
+        if [ "$PURGE" = "1" ]; then
+            rm -rf "$BASE_DIR"
+            docker volume rm frappe-monitor-vm-data   2>/dev/null && ok "removed volume frappe-monitor-vm-data"   || true
+            docker volume rm frappe-monitor-loki-data 2>/dev/null && ok "removed volume frappe-monitor-loki-data" || true
+            ok "removed $BASE_DIR"
+            echo; echo "==> purge complete. Re-run ./deploy/install.sh for a clean install."
+        else
+            note "config + data preserved at $BASE_DIR (use --purge to wipe)"
+        fi
+        exit 0
+    fi
+
+    # Linux uninstall.
+    systemctl stop frappe-monitor.service          2>/dev/null || true
+    systemctl disable frappe-monitor.service       2>/dev/null || true
+    systemctl stop frappe-monitor-stack.service    2>/dev/null || true
     systemctl disable frappe-monitor-stack.service 2>/dev/null || true
     rm -f "$SYSTEMD_DIR/frappe-monitor.service" "$SYSTEMD_DIR/frappe-monitor-stack.service"
     systemctl daemon-reload
@@ -144,12 +178,9 @@ if [ "$UNINSTALL" = "1" ]; then
             groupdel "$INSTALL_GROUP" 2>/dev/null || true
             ok "removed system user $INSTALL_USER"
         fi
-        docker volume rm frappe-monitor-vm-data   2>/dev/null \
-            && ok "removed docker volume frappe-monitor-vm-data"   || true
-        docker volume rm frappe-monitor-loki-data 2>/dev/null \
-            && ok "removed docker volume frappe-monitor-loki-data" || true
-        echo
-        echo "==> purge complete. Re-run 'sudo ./deploy/install.sh' for a clean install."
+        docker volume rm frappe-monitor-vm-data   2>/dev/null && ok "removed docker volume frappe-monitor-vm-data"   || true
+        docker volume rm frappe-monitor-loki-data 2>/dev/null && ok "removed docker volume frappe-monitor-loki-data" || true
+        echo; echo "==> purge complete. Re-run 'sudo ./deploy/install.sh' for a clean install."
     else
         note "config preserved at $ETC_DIR (delete manually or use --purge)"
         note "data preserved at $STATE_DIR (delete manually or use --purge)"
@@ -161,7 +192,7 @@ fi
 # ---------------------------------------------------------------------------
 # Step 1: prerequisites
 # ---------------------------------------------------------------------------
-echo "==> checking prerequisites"
+echo "==> checking prerequisites ($(uname -s))"
 
 require_cmd() {
     local cmd="$1"; local hint="$2"
@@ -170,24 +201,28 @@ require_cmd() {
 FAIL: '$cmd' not found in PATH.
   Searched: $PATH
 
-  If you have $cmd installed as your normal user but sudo can't see
-  it, re-run preserving your PATH:
-
-      sudo env "PATH=\$PATH" ./deploy/install.sh
-
-  Otherwise install $cmd system-wide:
+  Install $cmd, then re-run:
       $hint
 EOF
         exit 1
     fi
 }
 
-require_cmd go    "https://go.dev/doc/install — frappe-monitor needs Go ≥ 1.25"
-require_cmd node  "your distro's package manager — Node ≥ 20"
-require_cmd npm   "ships with Node"
-require_cmd docker "https://docs.docker.com/engine/install/"
-docker compose version >/dev/null 2>&1 || fail "docker compose plugin missing — apt install docker-compose-plugin (or your distro's equivalent)"
-require_cmd systemctl "this script targets systemd Linux; bail otherwise"
+require_cmd go     "https://go.dev/doc/install — frappe-monitor needs Go ≥ 1.25"
+require_cmd node   "Node ≥ 20 (nodejs.org, or brew install node on macOS)"
+require_cmd npm    "ships with Node"
+require_cmd curl   "your package manager (preinstalled on macOS)"
+require_cmd docker "https://docs.docker.com/get-docker/ (Docker Desktop / colima / OrbStack on macOS)"
+have_compose || fail "Docker Compose not found — need 'docker compose' (v2 plugin) OR 'docker-compose' (standalone). On macOS, Docker Desktop includes it."
+
+if [ "$IS_MAC" = 1 ]; then
+    # The running engine is only needed when we bring up the stack here.
+    if [ "$SKIP_STACK" = "0" ]; then
+        docker info >/dev/null 2>&1 || fail "Docker engine not running — start Docker Desktop (open -a Docker), then re-run. (Or pass --no-stack to point at an external VM/Loki.)"
+    fi
+else
+    require_cmd systemctl "this Linux path targets systemd"
+fi
 
 GO_VERSION=$(go env GOVERSION 2>/dev/null | sed 's/^go//')
 [ -n "$GO_VERSION" ] || fail "go env GOVERSION returned empty"
@@ -196,13 +231,10 @@ awk -v v="$MAJOR_MINOR" 'BEGIN { exit !(v+0 >= 1.25) }' || fail "Go $GO_VERSION 
 ok "go $GO_VERSION, node $(node --version), docker $(docker --version | awk '{print $3}' | tr -d ,)"
 
 # ---------------------------------------------------------------------------
-# Step 1.5: collect credentials BEFORE the long build, so the operator
-# types in their answers up-front and can walk away.
-#
-# Skipped entirely if /etc/frappe-monitor/monitor.yaml already exists
-# (re-runs preserve the operator's edits — use --purge to start fresh).
+# Step 1.5: collect credentials before the long build (skipped if config
+# already exists — re-runs preserve your edits; use --purge to re-prompt).
 # ---------------------------------------------------------------------------
-if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
+if [ ! -f "$CONF_FILE" ]; then
     echo "==> configuring monitor.yaml"
 
     if [ -z "$MONITOR_PASSWORD" ]; then
@@ -245,7 +277,7 @@ if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
         fi
         if [ -z "$MONITOR_TELEGRAM_BOT_TOKEN" ] || [ -z "$MONITOR_TELEGRAM_CHAT_IDS" ]; then
             note "alerts requested but bot_token or chat_ids missing — leaving disabled."
-            note "   set them later by editing $ETC_DIR/monitor.yaml; restart frappe-monitor."
+            note "   set them later by editing $CONF_FILE; restart the service."
             MONITOR_ALERTS_ENABLED=false
         fi
     fi
@@ -257,41 +289,47 @@ fi
 # ---------------------------------------------------------------------------
 echo "==> building binary (npm install + vite build + go build)"
 cd "$REPO_ROOT"
-# Build as the invoking user (not root) so node_modules ownership
-# stays sane. -H resets HOME to the target user's home dir — without
-# it, HOME stays /root from the parent sudo and Go's build cache
-# (~/.cache/go-build) plus npm's cache try to write under /root,
-# which fails. Pass PATH explicitly so /usr/local/go/bin and the
-# user's per-shell PATH augmentation from above are visible.
-SUDO_USER_NAME="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
-if [ "$SUDO_USER_NAME" != "root" ] && id -u "$SUDO_USER_NAME" >/dev/null 2>&1; then
-    sudo -u "$SUDO_USER_NAME" -H env "PATH=$PATH" make build >/dev/null
+if [ "$IS_MAC" = 0 ]; then
+    # Linux: build as the invoking user so node_modules ownership stays
+    # sane and the Go/npm caches land in that user's home, not /root.
+    SUDO_USER_NAME="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
+    if [ "$SUDO_USER_NAME" != "root" ] && id -u "$SUDO_USER_NAME" >/dev/null 2>&1; then
+        sudo -u "$SUDO_USER_NAME" -H env "PATH=$PATH" make build >/dev/null
+    else
+        make build >/dev/null
+    fi
 else
+    # macOS: we're already the target user.
     make build >/dev/null
 fi
 [ -x "$REPO_ROOT/bin/monitor-server" ] || fail "build did not produce $REPO_ROOT/bin/monitor-server"
-ok "binary built ($(du -h "$REPO_ROOT/bin/monitor-server" | cut -f1))"
+ok "binary built ($(du -h "$REPO_ROOT/bin/monitor-server" | cut -f1 | tr -d ' '))"
 
 # ---------------------------------------------------------------------------
-# Step 3: system user + directories
+# Step 3: directories (+ system user on Linux)
 # ---------------------------------------------------------------------------
-echo "==> system user + dirs"
-
-if ! id -u "$INSTALL_USER" >/dev/null 2>&1; then
-    useradd --system --shell /usr/sbin/nologin --home-dir "$STATE_DIR" \
-        --no-create-home --user-group "$INSTALL_USER"
-    ok "created system user $INSTALL_USER"
+echo "==> directories"
+if [ "$IS_MAC" = 1 ]; then
+    mkdir -p "$BASE_DIR/bin" "$STATE_DIR" "$DEPLOY_DIR" "$LOG_DIR" "$LAUNCH_DIR"
+    chmod 0700 "$BASE_DIR" # config holds the dashboard password
+    ok "laid out $BASE_DIR (bin, data, deploy, logs) + $LAUNCH_DIR"
 else
-    ok "user $INSTALL_USER already exists"
+    if ! id -u "$INSTALL_USER" >/dev/null 2>&1; then
+        useradd --system --shell /usr/sbin/nologin --home-dir "$STATE_DIR" \
+            --no-create-home --user-group "$INSTALL_USER"
+        ok "created system user $INSTALL_USER"
+    else
+        ok "user $INSTALL_USER already exists"
+    fi
+    install -d -o "$INSTALL_USER" -g "$INSTALL_GROUP" -m 0750 "$STATE_DIR"
+    install -d -o root            -g "$INSTALL_GROUP" -m 0750 "$ETC_DIR"
+    install -d -o root            -g root             -m 0755 "$OPT_DIR"
+    install -d -m 0755 "$DEPLOY_DIR"
+    ok "directories: $STATE_DIR (data), $ETC_DIR (config), $OPT_DIR (compose)"
 fi
 
-install -d -o "$INSTALL_USER" -g "$INSTALL_GROUP" -m 0750 "$STATE_DIR"
-install -d -o root            -g "$INSTALL_GROUP" -m 0750 "$ETC_DIR"
-install -d -o root            -g root             -m 0755 "$OPT_DIR"
-ok "directories laid out: $STATE_DIR (data), $ETC_DIR (config), $OPT_DIR (compose)"
-
 # ---------------------------------------------------------------------------
-# Step 4: install binary, config, compose, systemd units
+# Step 4: install binary + config + compose
 # ---------------------------------------------------------------------------
 echo "==> install files"
 
@@ -300,22 +338,19 @@ install -m 0755 "$REPO_ROOT/bin/monitor-server" "$BIN_DST.new"
 mv -f "$BIN_DST.new" "$BIN_DST"
 ok "installed $BIN_DST"
 
-if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
-    # Escape values for embedding in a double-quoted YAML string:
-    # backslash and double-quote become \\ and \" respectively.
+if [ ! -f "$CONF_FILE" ]; then
+    # Escape values for a double-quoted YAML string.
     yaml_dq() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
-
     PW_YAML=$(yaml_dq "$MONITOR_PASSWORD")
     BOT_YAML=$(yaml_dq "$MONITOR_TELEGRAM_BOT_TOKEN")
 
-    # Build the chat_ids YAML array from the comma-separated input.
     CHAT_IDS_YAML="[]"
     if [ -n "$MONITOR_TELEGRAM_CHAT_IDS" ]; then
         CHAT_IDS_YAML="["
         _first=1
         IFS=',' read -ra _ids <<< "$MONITOR_TELEGRAM_CHAT_IDS"
         for _id in "${_ids[@]}"; do
-            _id="${_id## }"; _id="${_id%% }"  # trim leading + trailing space
+            _id="${_id## }"; _id="${_id%% }"
             [ -z "$_id" ] && continue
             if [ "$_first" = 1 ]; then _first=0; else CHAT_IDS_YAML+=", "; fi
             CHAT_IDS_YAML+="\"$(yaml_dq "$_id")\""
@@ -323,16 +358,11 @@ if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
         CHAT_IDS_YAML+="]"
     fi
 
-    # Write the config from a heredoc — no sed, no escaping landmines.
-    # Permissions: 0640 root:frappe-monitor so the service can read it
-    # but other users on the host can't grep out the password.
-    umask 027
-    cat > "$ETC_DIR/monitor.yaml" <<EOF
+    umask 077
+    cat > "$CONF_FILE" <<EOF
 # frappe-monitor configuration.
-# Generated by deploy/install.sh on $(date -Iseconds).
-# Edit this file directly, then run:
-#     sudo systemctl restart frappe-monitor
-# to apply. Full reference: docs/guide/configuration.md.
+# Generated by deploy/install.sh on $(date +"%Y-%m-%dT%H:%M:%S%z").
+# Edit, then restart the service to apply. Reference: docs/guide/configuration.md.
 
 server:
   listen_addr: ":8080"
@@ -366,8 +396,6 @@ scheduler:
   max_parallel: 10
   per_job_timeout_seconds: 30
 
-# Set during install (sudo ./deploy/install.sh prompts for these).
-# Re-prompt by deleting this file or running 'sudo ./deploy/install.sh --purge'.
 auth:
   password: "$PW_YAML"
   realm: "frappe-monitor"
@@ -383,59 +411,115 @@ alerts:
     send_timeout_seconds: 5
   disable_defaults: false
   rules: []
+
+realtime:
+  enabled: true
+  ping_interval_seconds: 30
+  write_timeout_seconds: 10
+  send_buffer: 128
+  max_clients: 512
 EOF
-    chmod 0640 "$ETC_DIR/monitor.yaml"
-    chown root:"$INSTALL_GROUP" "$ETC_DIR/monitor.yaml"
-    ok "wrote $ETC_DIR/monitor.yaml (auth + alerts populated from your answers)"
+    chmod 0640 "$CONF_FILE"
+    if [ "$IS_MAC" = 0 ]; then
+        chown root:"$INSTALL_GROUP" "$CONF_FILE"
+    fi
+    ok "wrote $CONF_FILE (auth + alerts populated from your answers)"
 else
-    ok "preserving existing $ETC_DIR/monitor.yaml"
+    ok "preserving existing $CONF_FILE"
 fi
 
-# Compose file goes under /opt so the systemd unit's WorkingDirectory
-# matches whether or not the original repo checkout still exists.
-install -d -m 0755 "$OPT_DIR/deploy"
-install -m 0644 "$REPO_ROOT/deploy/docker-compose.prod.yml" "$OPT_DIR/deploy/docker-compose.prod.yml"
-ok "installed compose to $OPT_DIR/deploy/docker-compose.prod.yml"
-
-install -m 0644 "$REPO_ROOT/deploy/systemd/frappe-monitor.service"       "$SYSTEMD_DIR/frappe-monitor.service"
-install -m 0644 "$REPO_ROOT/deploy/systemd/frappe-monitor-stack.service" "$SYSTEMD_DIR/frappe-monitor-stack.service"
-systemctl daemon-reload
-ok "installed systemd units"
+install -m 0644 "$REPO_ROOT/deploy/docker-compose.prod.yml" "$DEPLOY_DIR/docker-compose.prod.yml"
+ok "installed compose to $DEPLOY_DIR/docker-compose.prod.yml"
 
 # ---------------------------------------------------------------------------
-# Step 5: start (or restart) services
+# Step 5: install + start the service
 # ---------------------------------------------------------------------------
-echo "==> services"
+echo "==> service + stack"
 
-if [ "$SKIP_STACK" = "0" ]; then
-    systemctl enable frappe-monitor-stack.service >/dev/null
-    systemctl restart frappe-monitor-stack.service
-    ok "frappe-monitor-stack.service (VM + Loki) started"
-
-    # Wait for VM + Loki to become healthy before starting the monitor
-    # itself so the first-cycle push doesn't fail.
+wait_for_backends() {
     for _ in $(seq 1 30); do
         if curl -fsS http://127.0.0.1:8428/health >/dev/null 2>&1 \
            && curl -fsS http://127.0.0.1:3100/ready >/dev/null 2>&1; then
-            break
+            return 0
         fi
         sleep 1
     done
     curl -fsS http://127.0.0.1:8428/health >/dev/null 2>&1 || fail "VM health check never succeeded"
     curl -fsS http://127.0.0.1:3100/ready  >/dev/null 2>&1 || fail "Loki readiness never succeeded"
-    ok "VM + Loki healthy"
-else
-    note "--no-stack: skipped VM+Loki bring-up. Configure metrics.vm_url + logs.loki_url in $ETC_DIR/monitor.yaml to point at your existing tier."
-fi
+}
 
-systemctl enable frappe-monitor.service >/dev/null
-systemctl restart frappe-monitor.service
-sleep 1
-if systemctl is-active --quiet frappe-monitor.service; then
-    ok "frappe-monitor.service is active"
+if [ "$IS_MAC" = 1 ]; then
+    # Bring up VM + Loki (restart: unless-stopped keeps them alive across
+    # Docker restarts; no separate stack agent needed).
+    if [ "$SKIP_STACK" = "0" ]; then
+        ( cd "$DEPLOY_DIR" && compose -f docker-compose.prod.yml up -d ) \
+            || fail "docker compose up failed (is the Docker engine running?)"
+        ok "VM + Loki started (docker compose up -d)"
+        wait_for_backends
+        ok "VM + Loki healthy"
+    else
+        note "--no-stack: point metrics.vm_url + logs.loki_url in $CONF_FILE at your existing tier."
+    fi
+
+    # launchd LaunchAgent for the binary.
+    cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$PLIST_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$BIN_DST</string>
+    <string>--config</string>
+    <string>$CONF_FILE</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>WorkingDirectory</key><string>$BASE_DIR</string>
+  <key>StandardOutPath</key><string>$LOG_DIR/monitor.log</string>
+  <key>StandardErrorPath</key><string>$LOG_DIR/monitor.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>
+EOF
+    chmod 0644 "$PLIST"
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load -w "$PLIST"
+    ok "loaded LaunchAgent $PLIST_LABEL"
+    sleep 2
+    if curl -fsS "http://127.0.0.1:8080/healthz" >/dev/null 2>&1; then
+        ok "frappe-monitor is responding on :8080"
+    else
+        note "service loaded; /healthz not up yet — tail logs: tail -f $LOG_DIR/monitor.log"
+    fi
 else
-    journalctl -u frappe-monitor --no-pager -n 30 >&2
-    fail "frappe-monitor.service did not start — see journalctl above"
+    # Linux: systemd units.
+    install -m 0644 "$REPO_ROOT/deploy/systemd/frappe-monitor.service"       "$SYSTEMD_DIR/frappe-monitor.service"
+    install -m 0644 "$REPO_ROOT/deploy/systemd/frappe-monitor-stack.service" "$SYSTEMD_DIR/frappe-monitor-stack.service"
+    systemctl daemon-reload
+    ok "installed systemd units"
+
+    if [ "$SKIP_STACK" = "0" ]; then
+        systemctl enable frappe-monitor-stack.service >/dev/null
+        systemctl restart frappe-monitor-stack.service
+        ok "frappe-monitor-stack.service (VM + Loki) started"
+        wait_for_backends
+        ok "VM + Loki healthy"
+    else
+        note "--no-stack: point metrics.vm_url + logs.loki_url in $CONF_FILE at your existing tier."
+    fi
+
+    systemctl enable frappe-monitor.service >/dev/null
+    systemctl restart frappe-monitor.service
+    sleep 1
+    if systemctl is-active --quiet frappe-monitor.service; then
+        ok "frappe-monitor.service is active"
+    else
+        journalctl -u frappe-monitor --no-pager -n 30 >&2
+        fail "frappe-monitor.service did not start — see journalctl above"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -445,15 +529,25 @@ echo
 echo "==> install complete"
 echo
 echo "  Binary:    $BIN_DST"
-echo "  Config:    $ETC_DIR/monitor.yaml"
+echo "  Config:    $CONF_FILE"
 echo "  Data:      $STATE_DIR/"
-echo "  Compose:   $OPT_DIR/deploy/docker-compose.prod.yml"
+echo "  Compose:   $DEPLOY_DIR/docker-compose.prod.yml"
 echo
-echo "  Status:    sudo systemctl status frappe-monitor"
-echo "  Logs:      sudo journalctl -u frappe-monitor -f"
-echo "  Stop:      sudo systemctl stop frappe-monitor frappe-monitor-stack"
-echo "  Start:     sudo systemctl start frappe-monitor-stack frappe-monitor"
+if [ "$IS_MAC" = 1 ]; then
+    echo "  Status:    launchctl list | grep frappe-monitor"
+    echo "  Logs:      tail -f $LOG_DIR/monitor.log"
+    echo "  Stop:      launchctl unload $PLIST"
+    echo "  Start:     launchctl load -w $PLIST"
+    echo "  Stack:     cd $DEPLOY_DIR && docker compose -f docker-compose.prod.yml {ps,down,up -d}"
+    echo
+    echo "  Dashboard: http://localhost:8080"
+else
+    echo "  Status:    sudo systemctl status frappe-monitor"
+    echo "  Logs:      sudo journalctl -u frappe-monitor -f"
+    echo "  Stop:      sudo systemctl stop frappe-monitor frappe-monitor-stack"
+    echo "  Start:     sudo systemctl start frappe-monitor-stack frappe-monitor"
+    echo
+    echo "  Dashboard: http://$(hostname):8080"
+fi
 echo
-echo "  Dashboard: http://$(hostname):$(grep -E '^\s*listen_addr:' "$ETC_DIR/monitor.yaml" | head -1 | sed 's/.*"\(:[0-9]*\)".*/\1/' | tr -d ':')"
-echo
-echo "  Next: read docs/guide/usage.md to add your first bench server."
+echo "  Next: open the dashboard, log in, and add your first bench server."

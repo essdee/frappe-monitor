@@ -23,20 +23,29 @@ The complete operator guide lives in **[`docs/guide/`](docs/guide/)**:
 
 Design decisions (frozen-in-time) live in `docs/YYYY-MM-DD/N.md`. The Phase 1 master plan is in [`docs/2026-04-22/1.md`](docs/2026-04-22/1.md).
 
-## Quick install (production, one shot)
+## Quick install (one shot)
+
+`deploy/install.sh` auto-detects the OS:
 
 ```bash
-git clone <this repo> /tmp/frappe-monitor-src
-cd /tmp/frappe-monitor-src
+# Linux (production server) — systemd + a frappe-monitor system user:
 sudo ./deploy/install.sh
+
+# macOS (dev / local) — launchd LaunchAgent under your user, no sudo:
+./deploy/install.sh
 ```
 
-That builds the binary, creates the `frappe-monitor` system user, lays out `/etc/frappe-monitor/`, `/var/lib/frappe-monitor/`, `/opt/frappe-monitor/`, installs two systemd units (`frappe-monitor.service` for the binary, `frappe-monitor-stack.service` for VictoriaMetrics + Loki via docker compose), and starts everything. Idempotent — re-running upgrades in place. See [`docs/guide/deployment.md`](docs/guide/deployment.md) for the full reference.
+On **Linux** it builds the binary, creates the `frappe-monitor` system user, lays out `/etc/frappe-monitor/`, `/var/lib/frappe-monitor/`, `/opt/frappe-monitor/`, installs two systemd units (`frappe-monitor.service` + `frappe-monitor-stack.service` for VictoriaMetrics + Loki), and starts everything.
+
+On **macOS** it installs everything under `~/.frappe-monitor/`, brings up VM + Loki via Docker, and loads a launchd LaunchAgent (`com.frappe-monitor`) that keeps the binary running. The Docker engine (Docker Desktop / colima / OrbStack) must be running; either `docker compose` (v2) or `docker-compose` (standalone) works.
+
+Both paths are idempotent — re-running upgrades in place. See [`docs/guide/deployment.md`](docs/guide/deployment.md) for the full reference.
 
 ```bash
-sudo systemctl status frappe-monitor              # check it's up
-sudo journalctl -u frappe-monitor -f              # tail logs
-# then open http://<host>:8080
+# Linux:                                  # macOS:
+sudo systemctl status frappe-monitor      launchctl list | grep frappe-monitor
+sudo journalctl -u frappe-monitor -f      tail -f ~/.frappe-monitor/logs/monitor.log
+# then open http://<host>:8080            # then open http://localhost:8080
 ```
 
 Add your first bench server: [`docs/guide/usage.md`](docs/guide/usage.md).
