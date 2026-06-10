@@ -17,6 +17,14 @@ func (r *statusRecorder) WriteHeader(c int) {
 	r.ResponseWriter.WriteHeader(c)
 }
 
+// Unwrap lets http.ResponseController reach the underlying ResponseWriter
+// for capabilities this recorder doesn't implement itself — notably
+// Hijack, which the WebSocket upgrade (/api/v1/ws) needs. Without it the
+// upgrade fails because the recorder hides the connection's Hijacker.
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

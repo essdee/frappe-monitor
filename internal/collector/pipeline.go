@@ -12,9 +12,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"frappe-monitor/internal/logs"
+	"frappe-monitor/internal/metrics"
 	"frappe-monitor/internal/parser"
+	"frappe-monitor/internal/realtime"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 )
@@ -38,6 +41,32 @@ type Pipeline struct {
 	Exec   sshpkg.Executor
 	Push   Pusher
 	Logger *slog.Logger
+
+	// Broadcaster, when set, pushes status + metrics events to connected
+	// dashboard clients over WebSocket so the UI updates without polling.
+	// Nil in tests; always set in the running binary.
+	Broadcaster realtime.Broadcaster
+}
+
+// emitStatus pushes a server.status event to the server-list room and the
+// per-server room so the dashboard updates a card the instant a pull
+// changes reachability — no polling. No-op when Broadcaster is nil.
+func (p *Pipeline) emitStatus(serverID int, status, lastErr string) {
+	if p.Broadcaster == nil {
+		return
+	}
+	data := map[string]any{
+		"id":             serverID,
+		"status":         status,
+		"last_error":     lastErr,
+		"last_pinged_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	p.Broadcaster.Broadcast(realtime.Event{
+		Type: realtime.TypeServerStatus, Topic: realtime.TopicServers(), Data: data,
+	})
+	p.Broadcaster.Broadcast(realtime.Event{
+		Type: realtime.TypeServerStatus, Topic: realtime.TopicServer(serverID), Data: data,
+	})
 }
 
 // CollectorPath is the location of the deployed bash collector on each
@@ -152,6 +181,11 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 	var body strings.Builder
 	body.WriteString(m.LineProtocol(srv.Name))
 
+	// Accumulate the parsed hierarchy so we can also push it over WebSocket
+	// after a successful VM write (the dashboard appends it to live charts).
+	var benchMetrics []metrics.BenchMetrics
+	var siteMetrics []metrics.SiteMetrics
+
 	benchOK, benchErr := 0, 0
 	for _, benchName := range parser.BenchNames(out) {
 		bm, err := parser.BenchFromSections(out, benchName)
@@ -164,6 +198,7 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		bm.Timestamp = m.Timestamp
 		bm.Server = srv.Name
 		body.WriteString(bm.LineProtocol(srv.Name))
+		benchMetrics = append(benchMetrics, bm)
 		benchOK++
 	}
 
@@ -180,6 +215,7 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		sm.Timestamp = m.Timestamp
 		sm.Server = srv.Name
 		body.WriteString(sm.LineProtocol(srv.Name))
+		siteMetrics = append(siteMetrics, sm)
 		siteOK++
 	}
 
@@ -195,6 +231,7 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		if err := p.Store.SetServerStatus(ctx, serverID, "reachable", ""); err != nil {
 			p.Logger.Error("collector: set status reachable", "server_id", serverID, "err", err)
 		}
+		p.emitStatus(serverID, "reachable", "")
 		return fmt.Errorf("push: %w", pushErr)
 	}
 
@@ -202,6 +239,8 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		p.Logger.Error("collector: set status reachable", "server_id", serverID, "err", err)
 		return fmt.Errorf("status: %w", err)
 	}
+	p.emitStatus(serverID, "reachable", "")
+	p.emitMetrics(serverID, srv.Name, m, benchMetrics, siteMetrics)
 	p.Logger.Info("collector: pull ok",
 		"server_id", serverID,
 		"server_name", srv.Name,
@@ -330,5 +369,6 @@ func (p *Pipeline) markUnreachable(ctx context.Context, serverID int, cause erro
 			"server_id", serverID, "err", err)
 		return err
 	}
+	p.emitStatus(serverID, "unreachable", msg)
 	return nil
 }

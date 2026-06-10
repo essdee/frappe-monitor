@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frappe-monitor/internal/logs"
+	"frappe-monitor/internal/realtime"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 )
@@ -110,6 +111,7 @@ func NewManager(
 	loki LokiPusher,
 	vm VMPusher,
 	logger *slog.Logger,
+	broadcaster realtime.Broadcaster,
 ) (*Manager, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -149,6 +151,7 @@ func NewManager(
 		MaxBatchLines: maxBatch,
 		PushTimeout:   pushTimeout,
 	}, loki, vm, store, resolver, logger)
+	sink.broadcaster = broadcaster
 
 	return &Manager{
 		cfg:       cfg,

@@ -98,7 +98,10 @@ type Service struct {
 
 // New builds a Service from config + dependencies. Returns nil + nil
 // when alerts are disabled — caller treats nil Service as "no-op".
-func New(cfg Config, vmBaseURL string, store storage.Store, logger *slog.Logger) (*Service, error) {
+//
+// extra notifiers are appended to the Telegram fan-out — used to push
+// fire/resolve events to the real-time dashboard alongside Telegram.
+func New(cfg Config, vmBaseURL string, store storage.Store, logger *slog.Logger, extra ...Notifier) (*Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -113,13 +116,14 @@ func New(cfg Config, vmBaseURL string, store storage.Store, logger *slog.Logger)
 
 	vm := NewHTTPVMClient(vmBaseURL, time.Duration(cfg.VMQueryTimeoutSeconds)*time.Second)
 
-	notifiers := make(MultiNotifier, 0, len(cfg.Telegram.ChatIDs))
+	notifiers := make(MultiNotifier, 0, len(cfg.Telegram.ChatIDs)+len(extra))
 	for _, id := range cfg.Telegram.ChatIDs {
 		notifiers = append(notifiers, NewTelegramClient(
 			cfg.Telegram.BotToken, id,
 			time.Duration(cfg.Telegram.SendTimeoutSeconds)*time.Second,
 		))
 	}
+	notifiers = append(notifiers, extra...)
 
 	ev := &Evaluator{
 		Rules:            rules,

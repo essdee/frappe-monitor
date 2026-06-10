@@ -21,12 +21,38 @@ import (
 	"frappe-monitor/internal/config"
 	"frappe-monitor/internal/logs"
 	"frappe-monitor/internal/metrics"
+	"frappe-monitor/internal/realtime"
 	"frappe-monitor/internal/scheduler"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 	"frappe-monitor/internal/streamer"
 	"frappe-monitor/scripts"
 )
+
+// wsAlertNotifier pushes alert fire/resolve events to the realtime hub so
+// the dashboard's Alerts page updates without polling. It implements
+// alerts.Notifier and joins the Telegram fan-out.
+type wsAlertNotifier struct{ hub *realtime.Hub }
+
+func (n wsAlertNotifier) Notify(_ context.Context, notif alerts.Notification) error {
+	typ := realtime.TypeAlertFiring
+	if notif.Resolved {
+		typ = realtime.TypeAlertResolved
+	}
+	n.hub.Broadcast(realtime.Event{
+		Type:  typ,
+		Topic: realtime.TopicAlerts(),
+		Data: map[string]any{
+			"rule_name": notif.RuleName,
+			"severity":  notif.Severity,
+			"labels":    notif.Labels,
+			"resolved":  notif.Resolved,
+			"body":      notif.Body,
+			"ts":        notif.Time.UnixMilli(),
+		},
+	})
+	return nil
+}
 
 func main() {
 	cfgPath := flag.String("config", "./config/monitor.yaml", "path to config yaml")
@@ -74,16 +100,22 @@ func run(cfgPath string) error {
 	})
 	defer pool.Close()
 
+	// Phase 8: real-time push hub. Producers (the pull pipeline, alerts,
+	// the streamer, server CRUD) broadcast events to subscribed dashboard
+	// clients over WebSocket, replacing the old setInterval polling.
+	hub := realtime.NewHub(logger)
+
 	// Phase 2: metrics push + scheduler.
 	vmClient := metrics.NewVMClient(
 		cfg.Metrics.VMURL,
 		time.Duration(cfg.Metrics.PushTimeoutSeconds)*time.Second,
 	)
 	pipeline := &collector.Pipeline{
-		Store:  store,
-		Exec:   pool,
-		Push:   vmClient,
-		Logger: logger,
+		Store:       store,
+		Exec:        pool,
+		Push:        vmClient,
+		Logger:      logger,
+		Broadcaster: hub,
 	}
 	sched := scheduler.New(
 		cfg.Scheduler.MaxParallel,
@@ -123,7 +155,7 @@ func run(cfgPath string) error {
 			FingerprintLabels: r.FingerprintLabels,
 		})
 	}
-	alertsSvc, err := alerts.New(alertsCfg, cfg.Metrics.VMURL, store, logger)
+	alertsSvc, err := alerts.New(alertsCfg, cfg.Metrics.VMURL, store, logger, wsAlertNotifier{hub})
 	if err != nil {
 		return fmt.Errorf("alerts: %w", err)
 	}
@@ -160,7 +192,7 @@ func run(cfgPath string) error {
 		cfg.Logs.LokiURL,
 		time.Duration(cfg.Logs.PushTimeoutSeconds)*time.Second,
 	)
-	streamMgr, err := streamer.NewManager(streamCfg, pool, store, lokiClient, vmClient, logger)
+	streamMgr, err := streamer.NewManager(streamCfg, pool, store, lokiClient, vmClient, logger, hub)
 	if err != nil {
 		return fmt.Errorf("streamer: %w", err)
 	}
@@ -271,6 +303,9 @@ func run(cfgPath string) error {
 			return alertsCfg.Rules
 		}(),
 		AlertsEnabled: cfg.Alerts.Enabled,
+
+		// Phase 8: real-time WebSocket hub (mounts GET /api/v1/ws).
+		Hub: hub,
 	})
 
 	srv := &http.Server{
@@ -321,6 +356,9 @@ func run(cfgPath string) error {
 		// the per-session shutdown grace period.
 		streamMgr.Stop(5 * time.Second)
 	}
+	// Disconnect WebSocket clients before stopping the HTTP server so the
+	// long-lived /ws handlers return promptly and don't block Shutdown.
+	hub.Close()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("http shutdown: %w", err)
 	}

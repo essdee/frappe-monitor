@@ -11,9 +11,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"frappe-monitor/scripts"
+	"frappe-monitor/internal/realtime"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
+	"frappe-monitor/scripts"
 )
 
 type serverHandlers struct {
@@ -26,6 +27,17 @@ type serverHandlers struct {
 	// ones) without a process restart. Nil = no-op.
 	onServerCreated func(serverID int)
 	onServerDeleted func(serverID int)
+
+	// broadcaster pushes server.created/updated/deleted events to the
+	// dashboard so the server list updates live. Nil = no-op (tests).
+	broadcaster realtime.Broadcaster
+}
+
+// emit broadcasts a realtime event when a broadcaster is wired.
+func (h *serverHandlers) emit(ev realtime.Event) {
+	if h.broadcaster != nil {
+		h.broadcaster.Broadcast(ev)
+	}
 }
 
 func (h *serverHandlers) mount(r chi.Router) {
@@ -143,6 +155,7 @@ func (h *serverHandlers) create(w http.ResponseWriter, r *http.Request) {
 	if h.onServerCreated != nil {
 		h.onServerCreated(s.ID)
 	}
+	h.emit(realtime.Event{Type: realtime.TypeServerCreated, Topic: realtime.TopicServers(), Data: toDTO(s)})
 	writeJSON(w, http.StatusCreated, toDTO(s))
 }
 
@@ -232,7 +245,10 @@ func (h *serverHandlers) patch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toDTO(updated))
+	dto := toDTO(updated)
+	h.emit(realtime.Event{Type: realtime.TypeServerUpdated, Topic: realtime.TopicServers(), Data: dto})
+	h.emit(realtime.Event{Type: realtime.TypeServerUpdated, Topic: realtime.TopicServer(id), Data: dto})
+	writeJSON(w, http.StatusOK, dto)
 }
 
 // delete removes a server by id. Cascading delete on the schema's
@@ -257,6 +273,8 @@ func (h *serverHandlers) delete(w http.ResponseWriter, r *http.Request) {
 	if h.onServerDeleted != nil {
 		h.onServerDeleted(id)
 	}
+	h.emit(realtime.Event{Type: realtime.TypeServerDeleted, Topic: realtime.TopicServers(), Data: map[string]any{"id": id}})
+	h.emit(realtime.Event{Type: realtime.TypeServerDeleted, Topic: realtime.TopicServer(id), Data: map[string]any{"id": id}})
 	w.WriteHeader(http.StatusNoContent)
 }
 

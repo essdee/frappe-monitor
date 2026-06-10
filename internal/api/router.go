@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"frappe-monitor/internal/alerts"
+	"frappe-monitor/internal/realtime"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 	webpkg "frappe-monitor/internal/web"
@@ -48,6 +49,11 @@ type Deps struct {
 	// shows "no rules configured").
 	AlertsRules   []alerts.Rule
 	AlertsEnabled bool
+
+	// Phase 8 real-time: the WebSocket hub. When non-nil, GET
+	// /api/v1/ws is mounted (behind the auth gate) so the dashboard can
+	// receive pushes instead of polling. Nil = endpoint not mounted.
+	Hub *realtime.Hub
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -83,6 +89,7 @@ func NewRouter(d Deps) http.Handler {
 			logger:          d.Logger,
 			onServerCreated: d.OnServerCreated,
 			onServerDeleted: d.OnServerDeleted,
+			broadcaster:     d.Hub,
 		}
 		h.mount(api)
 
@@ -117,6 +124,13 @@ func NewRouter(d Deps) http.Handler {
 			logger:  d.Logger,
 		}
 		api.Get("/alerts", ah.list)
+
+		// Phase 8 real-time push. Behind the auth gate: the upgrade
+		// request carries the session cookie, validated by authGate
+		// before we hijack the connection.
+		if d.Hub != nil {
+			api.Get("/ws", d.Hub.ServeWS)
+		}
 	})
 
 	// SPA mount: every non-/api, non-/healthz path is delegated to the

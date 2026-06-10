@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frappe-monitor/internal/logs"
+	"frappe-monitor/internal/realtime"
 	"frappe-monitor/internal/storage"
 )
 
@@ -104,6 +105,10 @@ type LokiSink struct {
 	resolver FilePathResolver
 	logger   *slog.Logger
 
+	// broadcaster, when set, pushes each tailed line to the dashboard's
+	// live log feed for that server over WebSocket. Nil = no-op.
+	broadcaster realtime.Broadcaster
+
 	mu      sync.Mutex
 	streams map[streamKey]*streamBuf
 	// bytes: cumulative source-file bytes consumed since the last
@@ -158,6 +163,22 @@ func (s *LokiSink) OnLine(ctx context.Context, serverID int, fileID, content str
 	s.lastSeen[serverID] = observedAt
 	overflow := len(buf.entries) >= s.cfg.MaxBatchLines
 	s.mu.Unlock()
+
+	// Push the line to the dashboard's live feed for this server. The hub
+	// only delivers to clients subscribed to logs:<serverID>, and drops
+	// slow ones, so a chatty log can't back-pressure ingest.
+	if s.broadcaster != nil {
+		s.broadcaster.Broadcast(realtime.Event{
+			Type:  realtime.TypeLogLine,
+			Topic: realtime.TopicLogs(serverID),
+			Data: map[string]any{
+				"server_id": serverID,
+				"file_id":   fileID,
+				"line":      content,
+				"ts":        observedAt.UnixMilli(),
+			},
+		})
+	}
 
 	if overflow {
 		// Flush is best-effort; failures are logged inside Flush. We
