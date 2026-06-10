@@ -233,6 +233,34 @@ The default rule set fires on:
 
 Each unique target (server / mount / site / queue) gets one notification on first fire, then re-pages every `notify_repeat_seconds` (default 1h) while still firing, then a single recovery message when the condition clears.
 
+### What the messages look like
+
+Telegram messages render in HTML mode with a severity icon, a bolded headline, the rule's rendered message body as the focal point, and a derived hierarchy breadcrumb (server → bench → site, taken from the firing series' labels — only the levels that exist are shown). Footer carries the verb (`fired` / `cleared`) and a wall-clock timestamp.
+
+Firing (critical):
+
+```
+🚨 CRITICAL — site_unhealthy
+
+Site "client-a.com" on prod-1/production-bench is unhealthy.
+
+prod-1 → production-bench → client-a.com
+fired 21:14 IST
+```
+
+Resolved:
+
+```
+✅ RESOLVED — site_unhealthy
+
+Site "client-a.com" on prod-1/production-bench is unhealthy.
+
+prod-1 → production-bench → client-a.com
+cleared 21:18 IST
+```
+
+Severity icons: `🚨 critical`, `⚠️ warning`, `ℹ️ info`. Resolved messages always use `✅` regardless of original severity. Untrusted strings (rule names, label values, body) are HTML-escaped before being placed into the template.
+
 To add custom rules, append to `alerts.rules`:
 
 ```yaml
@@ -246,3 +274,78 @@ alerts:
 ```
 
 The expression is any PromQL that returns a non-empty result vector when the alert should fire. `fingerprint_labels` chooses which series labels distinguish unique alerts; if omitted, every label is used (which is sometimes too noisy).
+
+## Enable per-event streaming (Phase 8)
+
+The 15-minute SSH-pull collector samples state on a cron tick. Streaming complements it: the monitor opens a long-lived SSH session per server that runs `tail -F` over Frappe and MariaDB log files, and pushes each new line into Loki as it arrives — no per-event delay. Design rationale + tradeoffs: [`docs/2026-05-07/2.md`](../2026-05-07/2.md).
+
+This is opt-in. Both pipelines can run side by side; the streamer doesn't replace the cron pull.
+
+### One-time per bench
+
+1. **Deploy the streamer script** to the SSH user's home on each bench. The script ships embedded in the monitor binary; the simplest copy path:
+
+   ```bash
+   # from the monitor host:
+   ssh frappe-monitor@<bench> "mkdir -p ~/.frappe-monitor"
+   # the script body lives at scripts/frappe-monitor-stream.sh in the repo
+   scp scripts/frappe-monitor-stream.sh frappe-monitor@<bench>:~/.frappe-monitor/stream.sh
+   ssh frappe-monitor@<bench> "chmod +x ~/.frappe-monitor/stream.sh"
+   ```
+
+2. **Make sure the SSH user can read every file in `streaming.files`.** Frappe's own logs (`web.log`, `web.error.log`, etc.) are usually fine; the MariaDB slow query log typically needs a one-time permissions adjustment:
+
+   ```bash
+   sudo chmod g+r /var/log/mysql/mariadb-slow.log
+   sudo usermod -a -G adm frappe-monitor
+   ```
+
+3. (Optional) Lower MariaDB's `long_query_time` so slow queries actually land in the slow log. `0.5` (= 500ms) is a sane default — at this threshold MariaDB documents <0.1% overhead.
+
+### Turn it on
+
+In `/etc/frappe-monitor/monitor.yaml`:
+
+```yaml
+streaming:
+  enabled: true
+  script_path: /home/frappe-monitor/.frappe-monitor/stream.sh
+  files:
+    - id: web
+      path: /home/frappe/frappe-bench/logs/web.log
+    - id: err
+      path: /home/frappe/frappe-bench/logs/web.error.log
+    - id: worker_err
+      path: /home/frappe/frappe-bench/logs/worker.error.log
+    - id: schedule_err
+      path: /home/frappe/frappe-bench/logs/schedule.error.log
+    - id: slowq
+      path: /var/log/mysql/mariadb-slow.log
+```
+
+Restart: `sudo systemctl restart frappe-monitor`.
+
+### Verify it's working
+
+The monitor emits two stream-health metrics to VictoriaMetrics:
+
+```promql
+# Should be 1 for each streaming server. 0 = disconnected.
+frappe_stream_connected
+
+# Lag (seconds) between the most recent line and now, per server.
+# Spikes during a Loki blip; should hover near 0 in steady state.
+frappe_stream_lag_seconds
+```
+
+Logs land in Loki under stream labels `{server="id-<N>", log_type=<id>, monitor=<monitor_id>}`. Quick LogQL sanity check:
+
+```logql
+{server="id-1", log_type="err"}
+```
+
+A successful first connect logs `streamer: launched session` and `streamer: bench version` at info level; a misconfigured `script_path` shows `streamer: session error` repeatedly.
+
+### Stop it without restarting
+
+Set `streaming.enabled: false`, restart. The cron-pull pipeline keeps running. Per-server toggles are post-v1; today it's all-or-nothing.

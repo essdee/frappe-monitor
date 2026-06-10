@@ -19,10 +19,12 @@ import (
 	"frappe-monitor/internal/api"
 	"frappe-monitor/internal/collector"
 	"frappe-monitor/internal/config"
+	"frappe-monitor/internal/logs"
 	"frappe-monitor/internal/metrics"
 	"frappe-monitor/internal/scheduler"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
+	"frappe-monitor/internal/streamer"
 	"frappe-monitor/scripts"
 )
 
@@ -134,6 +136,43 @@ func run(cfgPath string) error {
 			"rule_count_user", len(cfg.Alerts.Rules))
 	}
 
+	// Phase 8: streamer (per-event capture). Disabled by default;
+	// when enabled, opens a long-lived SSH session per server to
+	// tail Frappe + MariaDB logs and push them to Loki. Health
+	// metrics (frappe_stream_connected, frappe_stream_lag_seconds)
+	// land in VM. NewManager returns nil + nil when disabled.
+	streamCfg := streamer.Config{
+		Enabled:              cfg.Streaming.Enabled,
+		MonitorID:            cfg.Streaming.MonitorID,
+		ScriptPath:           cfg.Streaming.ScriptPath,
+		FlushIntervalSeconds: cfg.Streaming.FlushIntervalSeconds,
+		MaxBatchLines:        cfg.Streaming.MaxBatchLines,
+		PushTimeoutSeconds:   cfg.Streaming.PushTimeoutSeconds,
+		MinBackoffSeconds:    cfg.Streaming.MinBackoffSeconds,
+		MaxBackoffSeconds:    cfg.Streaming.MaxBackoffSeconds,
+	}
+	for _, f := range cfg.Streaming.Files {
+		streamCfg.Files = append(streamCfg.Files, streamer.FileSpecConfig{
+			ID: f.ID, Path: f.Path,
+		})
+	}
+	lokiClient := logs.NewLokiClient(
+		cfg.Logs.LokiURL,
+		time.Duration(cfg.Logs.PushTimeoutSeconds)*time.Second,
+	)
+	streamMgr, err := streamer.NewManager(streamCfg, pool, store, lokiClient, vmClient, logger)
+	if err != nil {
+		return fmt.Errorf("streamer: %w", err)
+	}
+	if streamMgr != nil {
+		if err := streamMgr.Start(ctx); err != nil {
+			return fmt.Errorf("streamer start: %w", err)
+		}
+		logger.Info("streamer manager started",
+			"file_count", len(cfg.Streaming.Files),
+			"script_path", cfg.Streaming.ScriptPath)
+	}
+
 	// Lifecycle hooks: when a server is added/removed via the API,
 	// register/deregister its scheduler entry so it picks up (or
 	// stops) on the next tick — no process restart required.
@@ -150,6 +189,18 @@ func run(cfgPath string) error {
 			return
 		}
 		logger.Info("scheduler: hot-added server", "server_id", serverID, "spec", scheduleSpec)
+
+		// Phase 8: hot-launch the streamer for the new server. No-op
+		// when streaming is disabled (streamMgr is nil).
+		if streamMgr != nil {
+			go func() {
+				launchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := streamMgr.LaunchServer(launchCtx, serverID); err != nil {
+					logger.Warn("streamer: hot-launch failed", "server_id", serverID, "err", err)
+				}
+			}()
+		}
 
 		// Best-effort: capture a system snapshot in the background.
 		// Failures land in last_error on the SystemSnapshot row; the
@@ -184,6 +235,9 @@ func run(cfgPath string) error {
 	}
 	onServerDeleted := func(serverID int) {
 		sched.RemoveKeyed(serverID)
+		if streamMgr != nil {
+			streamMgr.RemoveServer(serverID)
+		}
 		logger.Info("scheduler: hot-removed server", "server_id", serverID)
 	}
 
@@ -260,6 +314,12 @@ func run(cfgPath string) error {
 	}
 	if alertsSvc != nil {
 		alertsSvc.Stop()
+	}
+	if streamMgr != nil {
+		// Stop the streamer BEFORE shutting down the store/pool —
+		// the manager's final flush touches both. 5s timeout matches
+		// the per-session shutdown grace period.
+		streamMgr.Stop(5 * time.Second)
 	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("http shutdown: %w", err)

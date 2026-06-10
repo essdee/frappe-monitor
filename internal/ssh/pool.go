@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -93,6 +94,99 @@ func (p *Pool) RunWithInput(ctx context.Context, tgt Target, cmd, stdin string) 
 	case <-time.After(timeout):
 		_ = sess.Signal(ssh.SIGKILL)
 		return out.String(), fmt.Errorf("ssh run %q on %s: %w after %s", cmd, tgt.addr(), ErrTimeout, timeout)
+	}
+}
+
+// Stream opens a session, starts cmd, and returns its stdout as a
+// StreamHandle. Unlike Run, it does NOT wait for cmd to finish — the
+// caller drives the stream by reading until EOF (clean exit) or a
+// non-EOF error (network drop, host reboot, etc.). The CommandTimeout
+// from PoolConfig is intentionally NOT applied here; long-lived
+// streams (the streamer's tail -F session is forever) would otherwise
+// be killed at the timeout. Callers manage their own deadlines.
+func (p *Pool) Stream(ctx context.Context, tgt Target, cmd string) (StreamHandle, error) {
+	client, err := p.getOrDial(ctx, tgt)
+	if err != nil {
+		return nil, err
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		// Same stale-connection retry the synchronous path uses.
+		p.dropClient(tgt)
+		client, err = p.getOrDial(ctx, tgt)
+		if err != nil {
+			return nil, err
+		}
+		sess, err = client.NewSession()
+		if err != nil {
+			return nil, fmt.Errorf("ssh new session %s: %w", tgt.addr(), err)
+		}
+	}
+	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		_ = sess.Close()
+		return nil, fmt.Errorf("ssh stdout pipe %s: %w", tgt.addr(), err)
+	}
+	// Drain stderr into a small bounded buffer so the remote isn't
+	// stalled by a full pipe; we don't surface stderr from streams
+	// today, but we MUST consume it to avoid wedging the session.
+	if stderr, err := sess.StderrPipe(); err == nil {
+		go io.Copy(io.Discard, stderr)
+	}
+	if err := sess.Start(cmd); err != nil {
+		_ = sess.Close()
+		return nil, fmt.Errorf("ssh start %q on %s: %w", cmd, tgt.addr(), err)
+	}
+	h := &poolStream{
+		sess:   sess,
+		stdout: stdout,
+		addr:   tgt.addr(),
+		closed: make(chan struct{}),
+	}
+	go h.watchCtx(ctx)
+	return h, nil
+}
+
+// poolStream is the StreamHandle returned by Pool.Stream. The Close
+// path is the load-bearing one: it sends SIGTERM (so the remote
+// streamer's trap fires and cleans up tail children) and closes the
+// session. Idempotent via sync.Once so a defer + ctx-watcher don't
+// double-close.
+type poolStream struct {
+	sess   *ssh.Session
+	stdout io.Reader
+	addr   string
+
+	closeOnce sync.Once
+	closed    chan struct{}
+	closeErr  error
+}
+
+func (s *poolStream) Read(p []byte) (int, error) {
+	return s.stdout.Read(p)
+}
+
+func (s *poolStream) Close() error {
+	s.closeOnce.Do(func() {
+		// Best-effort SIGTERM to give the remote bash trap a chance
+		// to clean up child tail processes. crypto/ssh accepts the
+		// POSIX signal name; some servers ignore it, that's fine.
+		_ = s.sess.Signal(ssh.SIGTERM)
+		s.closeErr = s.sess.Close()
+		close(s.closed)
+	})
+	return s.closeErr
+}
+
+// watchCtx forwards ctx cancellation to the session — when the parent
+// context (usually the monitor's root signal-aware ctx) is canceled,
+// in-flight streams should tear down promptly, not block on Read. The
+// goroutine exits cleanly when Close is called explicitly.
+func (s *poolStream) watchCtx(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		_ = s.Close()
+	case <-s.closed:
 	}
 }
 

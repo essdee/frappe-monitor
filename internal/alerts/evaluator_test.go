@@ -139,16 +139,25 @@ type recordedNotifier struct {
 	calls []notifyCall
 }
 
+// notifyCall mirrors the legacy positional signature so existing
+// assertions (.severity / .rule / .message / .resolved) still read
+// naturally even though the interface now takes a Notification struct.
 type notifyCall struct {
 	severity string
 	rule     string
 	message  string
+	resolved bool
 }
 
-func (r *recordedNotifier) Notify(_ context.Context, severity, rule, msg string) error {
+func (r *recordedNotifier) Notify(_ context.Context, n Notification) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, notifyCall{severity, rule, msg})
+	r.calls = append(r.calls, notifyCall{
+		severity: n.Severity,
+		rule:     n.RuleName,
+		message:  n.Body,
+		resolved: n.Resolved,
+	})
 	return nil
 }
 
@@ -257,7 +266,9 @@ func TestEvaluator_ResolutionDeletesAndNotifies(t *testing.T) {
 	ev.EvaluateOnce(context.Background())
 
 	require.Len(t, notif.calls, 2, "resolution should be the second notification")
-	require.Contains(t, notif.calls[1].rule, "RESOLVED")
+	require.True(t, notif.calls[1].resolved, "second call must be flagged as a resolution")
+	require.Equal(t, "x", notif.calls[1].rule, "rule name should not be mutated for resolutions")
+	require.False(t, notif.calls[0].resolved, "first call is the firing event, not a resolution")
 	require.Empty(t, store.rows, "resolved state should be deleted")
 }
 
