@@ -16,7 +16,8 @@ The complete operator guide lives in **[`docs/guide/`](docs/guide/)**:
 | Day-2 ops (start/stop/upgrade/logs) | [`docs/guide/operations.md`](docs/guide/operations.md) |
 | Config reference | [`docs/guide/configuration.md`](docs/guide/configuration.md) |
 | HTTP API reference | [`docs/guide/api.md`](docs/guide/api.md) |
-| What runs where, why | [`docs/guide/architecture.md`](docs/guide/architecture.md) |
+| What runs where, why (operator view) | [`docs/guide/architecture.md`](docs/guide/architecture.md) |
+| Full engineering deep-dive (every package, wire formats, data model, extension points) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | Things broken? | [`docs/guide/troubleshooting.md`](docs/guide/troubleshooting.md) |
 | Contributing & maintenance | [`docs/guide/contributing.md`](docs/guide/contributing.md) |
 
