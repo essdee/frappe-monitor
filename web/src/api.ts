@@ -377,8 +377,9 @@ export interface DBTarget {
   server?: string
   name: string
   enabled: boolean
+  engine: string // 'mysql' | 'postgres'
   lag_threshold_seconds: number
-  mysql_command: string
+  client_command: string
   defaults_file?: string
   socket?: string
   heartbeat_enabled: boolean
@@ -398,8 +399,9 @@ export interface NewDBTargetInput {
   server_id: number
   name: string
   enabled?: boolean
+  engine?: string
   lag_threshold_seconds?: number
-  mysql_command?: string
+  client_command?: string
   defaults_file?: string
   socket?: string
   heartbeat_enabled?: boolean

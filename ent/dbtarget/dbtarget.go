@@ -21,10 +21,12 @@ const (
 	FieldName = "name"
 	// FieldEnabled holds the string denoting the enabled field in the database.
 	FieldEnabled = "enabled"
+	// FieldEngine holds the string denoting the engine field in the database.
+	FieldEngine = "engine"
 	// FieldLagThresholdSeconds holds the string denoting the lag_threshold_seconds field in the database.
 	FieldLagThresholdSeconds = "lag_threshold_seconds"
-	// FieldMysqlCommand holds the string denoting the mysql_command field in the database.
-	FieldMysqlCommand = "mysql_command"
+	// FieldClientCommand holds the string denoting the client_command field in the database.
+	FieldClientCommand = "client_command"
 	// FieldDefaultsFile holds the string denoting the defaults_file field in the database.
 	FieldDefaultsFile = "defaults_file"
 	// FieldSocket holds the string denoting the socket field in the database.
@@ -70,8 +72,9 @@ var Columns = []string{
 	FieldServerID,
 	FieldName,
 	FieldEnabled,
+	FieldEngine,
 	FieldLagThresholdSeconds,
-	FieldMysqlCommand,
+	FieldClientCommand,
 	FieldDefaultsFile,
 	FieldSocket,
 	FieldHeartbeatEnabled,
@@ -106,8 +109,6 @@ var (
 	DefaultLagThresholdSeconds int
 	// LagThresholdSecondsValidator is a validator for the "lag_threshold_seconds" field. It is called by the builders before save.
 	LagThresholdSecondsValidator func(int) error
-	// DefaultMysqlCommand holds the default value on creation for the "mysql_command" field.
-	DefaultMysqlCommand string
 	// DefaultHeartbeatEnabled holds the default value on creation for the "heartbeat_enabled" field.
 	DefaultHeartbeatEnabled bool
 	// DefaultIoRunning holds the default value on creation for the "io_running" field.
@@ -121,6 +122,32 @@ var (
 	// UpdateDefaultUpdatedAt holds the default value on update for the "updated_at" field.
 	UpdateDefaultUpdatedAt func() time.Time
 )
+
+// Engine defines the type for the "engine" enum field.
+type Engine string
+
+// EngineMysql is the default value of the Engine enum.
+const DefaultEngine = EngineMysql
+
+// Engine values.
+const (
+	EngineMysql    Engine = "mysql"
+	EnginePostgres Engine = "postgres"
+)
+
+func (e Engine) String() string {
+	return string(e)
+}
+
+// EngineValidator is a validator for the "engine" field enum values. It is called by the builders before save.
+func EngineValidator(e Engine) error {
+	switch e {
+	case EngineMysql, EnginePostgres:
+		return nil
+	default:
+		return fmt.Errorf("dbtarget: invalid enum value for engine field: %q", e)
+	}
+}
 
 // Status defines the type for the "status" enum field.
 type Status string
@@ -174,14 +201,19 @@ func ByEnabled(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEnabled, opts...).ToFunc()
 }
 
+// ByEngine orders the results by the engine field.
+func ByEngine(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEngine, opts...).ToFunc()
+}
+
 // ByLagThresholdSeconds orders the results by the lag_threshold_seconds field.
 func ByLagThresholdSeconds(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLagThresholdSeconds, opts...).ToFunc()
 }
 
-// ByMysqlCommand orders the results by the mysql_command field.
-func ByMysqlCommand(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldMysqlCommand, opts...).ToFunc()
+// ByClientCommand orders the results by the client_command field.
+func ByClientCommand(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldClientCommand, opts...).ToFunc()
 }
 
 // ByDefaultsFile orders the results by the defaults_file field.

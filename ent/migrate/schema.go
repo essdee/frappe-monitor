@@ -38,8 +38,9 @@ var (
 		{Name: "id", Type: field.TypeInt, Increment: true},
 		{Name: "name", Type: field.TypeString},
 		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "engine", Type: field.TypeEnum, Enums: []string{"mysql", "postgres"}, Default: "mysql"},
 		{Name: "lag_threshold_seconds", Type: field.TypeInt, Default: 30},
-		{Name: "mysql_command", Type: field.TypeString, Default: "mysql"},
+		{Name: "client_command", Type: field.TypeString, Nullable: true},
 		{Name: "defaults_file", Type: field.TypeString, Nullable: true},
 		{Name: "socket", Type: field.TypeString, Nullable: true},
 		{Name: "heartbeat_enabled", Type: field.TypeBool, Default: false},
@@ -63,7 +64,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "db_targets_servers_db_targets",
-				Columns:    []*schema.Column{DbTargetsColumns[18]},
+				Columns:    []*schema.Column{DbTargetsColumns[19]},
 				RefColumns: []*schema.Column{ServersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},

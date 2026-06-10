@@ -49,8 +49,9 @@ type dbTargetDTO struct {
 	ServerID            int        `json:"server_id"`
 	Name                string     `json:"name"`
 	Enabled             bool       `json:"enabled"`
+	Engine              string     `json:"engine"`
 	LagThresholdSeconds int        `json:"lag_threshold_seconds"`
-	MySQLCommand        string     `json:"mysql_command"`
+	ClientCommand       string     `json:"client_command"`
 	DefaultsFile        string     `json:"defaults_file,omitempty"`
 	Socket              string     `json:"socket,omitempty"`
 	HeartbeatEnabled    bool       `json:"heartbeat_enabled"`
@@ -71,8 +72,8 @@ type dbTargetDTO struct {
 
 func dbToDTO(t *storage.DBTarget) dbTargetDTO {
 	return dbTargetDTO{
-		ID: t.ID, ServerID: t.ServerID, Name: t.Name, Enabled: t.Enabled,
-		LagThresholdSeconds: t.LagThresholdSeconds, MySQLCommand: t.MySQLCommand,
+		ID: t.ID, ServerID: t.ServerID, Name: t.Name, Enabled: t.Enabled, Engine: t.Engine,
+		LagThresholdSeconds: t.LagThresholdSeconds, ClientCommand: t.ClientCommand,
 		DefaultsFile: t.DefaultsFile, Socket: t.Socket,
 		HeartbeatEnabled: t.HeartbeatEnabled, HeartbeatQuery: t.HeartbeatQuery,
 		Status: t.Status, LastCheckedAt: t.LastCheckedAt,
@@ -86,8 +87,9 @@ type createDBTargetReq struct {
 	ServerID            int    `json:"server_id"`
 	Name                string `json:"name"`
 	Enabled             *bool  `json:"enabled"`
+	Engine              string `json:"engine"`
 	LagThresholdSeconds int    `json:"lag_threshold_seconds"`
-	MySQLCommand        string `json:"mysql_command"`
+	ClientCommand       string `json:"client_command"`
 	DefaultsFile        string `json:"defaults_file"`
 	Socket              string `json:"socket"`
 	HeartbeatEnabled    bool   `json:"heartbeat_enabled"`
@@ -112,6 +114,10 @@ func (h *dbTargetHandlers) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "heartbeat_query is required when heartbeat is enabled")
 		return
 	}
+	if req.Engine != "" && req.Engine != "mysql" && req.Engine != "postgres" {
+		writeErr(w, http.StatusBadRequest, "engine must be 'mysql' or 'postgres'")
+		return
+	}
 	// The DB target rides a registered server's SSH; reject unknown ids.
 	if _, err := h.store.GetServer(r.Context(), req.ServerID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -126,8 +132,8 @@ func (h *dbTargetHandlers) create(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 	t, err := h.store.CreateDBTarget(r.Context(), storage.NewDBTarget{
-		ServerID: req.ServerID, Name: req.Name, Enabled: enabled,
-		LagThresholdSeconds: req.LagThresholdSeconds, MySQLCommand: req.MySQLCommand,
+		ServerID: req.ServerID, Name: req.Name, Enabled: enabled, Engine: req.Engine,
+		LagThresholdSeconds: req.LagThresholdSeconds, ClientCommand: req.ClientCommand,
 		DefaultsFile: req.DefaultsFile, Socket: req.Socket,
 		HeartbeatEnabled: req.HeartbeatEnabled, HeartbeatQuery: req.HeartbeatQuery,
 	})
@@ -166,8 +172,9 @@ type patchDBTargetReq struct {
 	ServerID            *int    `json:"server_id,omitempty"`
 	Name                *string `json:"name,omitempty"`
 	Enabled             *bool   `json:"enabled,omitempty"`
+	Engine              *string `json:"engine,omitempty"`
 	LagThresholdSeconds *int    `json:"lag_threshold_seconds,omitempty"`
-	MySQLCommand        *string `json:"mysql_command,omitempty"`
+	ClientCommand       *string `json:"client_command,omitempty"`
 	DefaultsFile        *string `json:"defaults_file,omitempty"`
 	Socket              *string `json:"socket,omitempty"`
 	HeartbeatEnabled    *bool   `json:"heartbeat_enabled,omitempty"`
@@ -197,6 +204,10 @@ func (h *dbTargetHandlers) patch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "heartbeat_query is required when heartbeat is enabled")
 		return
 	}
+	if req.Engine != nil && *req.Engine != "mysql" && *req.Engine != "postgres" {
+		writeErr(w, http.StatusBadRequest, "engine must be 'mysql' or 'postgres'")
+		return
+	}
 	// Changing the SSH host: re-validate the new server exists (the edge
 	// is a FK; a bad id would otherwise fail opaquely).
 	if req.ServerID != nil {
@@ -210,9 +221,9 @@ func (h *dbTargetHandlers) patch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	t, err := h.store.UpdateDBTarget(r.Context(), id, storage.UpdateDBTarget{
-		ServerID: req.ServerID,
+		ServerID: req.ServerID, Engine: req.Engine,
 		Name:     req.Name, Enabled: req.Enabled, LagThresholdSeconds: req.LagThresholdSeconds,
-		MySQLCommand: req.MySQLCommand, DefaultsFile: req.DefaultsFile, Socket: req.Socket,
+		ClientCommand: req.ClientCommand, DefaultsFile: req.DefaultsFile, Socket: req.Socket,
 		HeartbeatEnabled: req.HeartbeatEnabled, HeartbeatQuery: req.HeartbeatQuery,
 	})
 	if errors.Is(err, storage.ErrNotFound) {

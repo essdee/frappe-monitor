@@ -22,7 +22,8 @@ func TestDBTarget_CRUDStatusAndServerMove(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, srv.ID, tgt.ServerID)
 	require.Equal(t, 45, tgt.LagThresholdSeconds)
-	require.Equal(t, "mysql", tgt.MySQLCommand, "default applied")
+	require.Equal(t, "mysql", tgt.Engine, "default engine")
+	require.Equal(t, "", tgt.ClientCommand, "no client command default (plugin picks it)")
 	require.Equal(t, "unknown", tgt.Status)
 
 	list, err := s.ListDBTargets(ctx)

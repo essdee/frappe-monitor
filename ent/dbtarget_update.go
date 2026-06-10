@@ -71,6 +71,20 @@ func (_u *DBTargetUpdate) SetNillableEnabled(v *bool) *DBTargetUpdate {
 	return _u
 }
 
+// SetEngine sets the "engine" field.
+func (_u *DBTargetUpdate) SetEngine(v dbtarget.Engine) *DBTargetUpdate {
+	_u.mutation.SetEngine(v)
+	return _u
+}
+
+// SetNillableEngine sets the "engine" field if the given value is not nil.
+func (_u *DBTargetUpdate) SetNillableEngine(v *dbtarget.Engine) *DBTargetUpdate {
+	if v != nil {
+		_u.SetEngine(*v)
+	}
+	return _u
+}
+
 // SetLagThresholdSeconds sets the "lag_threshold_seconds" field.
 func (_u *DBTargetUpdate) SetLagThresholdSeconds(v int) *DBTargetUpdate {
 	_u.mutation.ResetLagThresholdSeconds()
@@ -92,17 +106,23 @@ func (_u *DBTargetUpdate) AddLagThresholdSeconds(v int) *DBTargetUpdate {
 	return _u
 }
 
-// SetMysqlCommand sets the "mysql_command" field.
-func (_u *DBTargetUpdate) SetMysqlCommand(v string) *DBTargetUpdate {
-	_u.mutation.SetMysqlCommand(v)
+// SetClientCommand sets the "client_command" field.
+func (_u *DBTargetUpdate) SetClientCommand(v string) *DBTargetUpdate {
+	_u.mutation.SetClientCommand(v)
 	return _u
 }
 
-// SetNillableMysqlCommand sets the "mysql_command" field if the given value is not nil.
-func (_u *DBTargetUpdate) SetNillableMysqlCommand(v *string) *DBTargetUpdate {
+// SetNillableClientCommand sets the "client_command" field if the given value is not nil.
+func (_u *DBTargetUpdate) SetNillableClientCommand(v *string) *DBTargetUpdate {
 	if v != nil {
-		_u.SetMysqlCommand(*v)
+		_u.SetClientCommand(*v)
 	}
+	return _u
+}
+
+// ClearClientCommand clears the value of the "client_command" field.
+func (_u *DBTargetUpdate) ClearClientCommand() *DBTargetUpdate {
+	_u.mutation.ClearClientCommand()
 	return _u
 }
 
@@ -381,6 +401,11 @@ func (_u *DBTargetUpdate) check() error {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "DBTarget.name": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Engine(); ok {
+		if err := dbtarget.EngineValidator(v); err != nil {
+			return &ValidationError{Name: "engine", err: fmt.Errorf(`ent: validator failed for field "DBTarget.engine": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.LagThresholdSeconds(); ok {
 		if err := dbtarget.LagThresholdSecondsValidator(v); err != nil {
 			return &ValidationError{Name: "lag_threshold_seconds", err: fmt.Errorf(`ent: validator failed for field "DBTarget.lag_threshold_seconds": %w`, err)}
@@ -415,14 +440,20 @@ func (_u *DBTargetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(dbtarget.FieldEnabled, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.Engine(); ok {
+		_spec.SetField(dbtarget.FieldEngine, field.TypeEnum, value)
+	}
 	if value, ok := _u.mutation.LagThresholdSeconds(); ok {
 		_spec.SetField(dbtarget.FieldLagThresholdSeconds, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.AddedLagThresholdSeconds(); ok {
 		_spec.AddField(dbtarget.FieldLagThresholdSeconds, field.TypeInt, value)
 	}
-	if value, ok := _u.mutation.MysqlCommand(); ok {
-		_spec.SetField(dbtarget.FieldMysqlCommand, field.TypeString, value)
+	if value, ok := _u.mutation.ClientCommand(); ok {
+		_spec.SetField(dbtarget.FieldClientCommand, field.TypeString, value)
+	}
+	if _u.mutation.ClientCommandCleared() {
+		_spec.ClearField(dbtarget.FieldClientCommand, field.TypeString)
 	}
 	if value, ok := _u.mutation.DefaultsFile(); ok {
 		_spec.SetField(dbtarget.FieldDefaultsFile, field.TypeString, value)
@@ -578,6 +609,20 @@ func (_u *DBTargetUpdateOne) SetNillableEnabled(v *bool) *DBTargetUpdateOne {
 	return _u
 }
 
+// SetEngine sets the "engine" field.
+func (_u *DBTargetUpdateOne) SetEngine(v dbtarget.Engine) *DBTargetUpdateOne {
+	_u.mutation.SetEngine(v)
+	return _u
+}
+
+// SetNillableEngine sets the "engine" field if the given value is not nil.
+func (_u *DBTargetUpdateOne) SetNillableEngine(v *dbtarget.Engine) *DBTargetUpdateOne {
+	if v != nil {
+		_u.SetEngine(*v)
+	}
+	return _u
+}
+
 // SetLagThresholdSeconds sets the "lag_threshold_seconds" field.
 func (_u *DBTargetUpdateOne) SetLagThresholdSeconds(v int) *DBTargetUpdateOne {
 	_u.mutation.ResetLagThresholdSeconds()
@@ -599,17 +644,23 @@ func (_u *DBTargetUpdateOne) AddLagThresholdSeconds(v int) *DBTargetUpdateOne {
 	return _u
 }
 
-// SetMysqlCommand sets the "mysql_command" field.
-func (_u *DBTargetUpdateOne) SetMysqlCommand(v string) *DBTargetUpdateOne {
-	_u.mutation.SetMysqlCommand(v)
+// SetClientCommand sets the "client_command" field.
+func (_u *DBTargetUpdateOne) SetClientCommand(v string) *DBTargetUpdateOne {
+	_u.mutation.SetClientCommand(v)
 	return _u
 }
 
-// SetNillableMysqlCommand sets the "mysql_command" field if the given value is not nil.
-func (_u *DBTargetUpdateOne) SetNillableMysqlCommand(v *string) *DBTargetUpdateOne {
+// SetNillableClientCommand sets the "client_command" field if the given value is not nil.
+func (_u *DBTargetUpdateOne) SetNillableClientCommand(v *string) *DBTargetUpdateOne {
 	if v != nil {
-		_u.SetMysqlCommand(*v)
+		_u.SetClientCommand(*v)
 	}
+	return _u
+}
+
+// ClearClientCommand clears the value of the "client_command" field.
+func (_u *DBTargetUpdateOne) ClearClientCommand() *DBTargetUpdateOne {
+	_u.mutation.ClearClientCommand()
 	return _u
 }
 
@@ -901,6 +952,11 @@ func (_u *DBTargetUpdateOne) check() error {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "DBTarget.name": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Engine(); ok {
+		if err := dbtarget.EngineValidator(v); err != nil {
+			return &ValidationError{Name: "engine", err: fmt.Errorf(`ent: validator failed for field "DBTarget.engine": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.LagThresholdSeconds(); ok {
 		if err := dbtarget.LagThresholdSecondsValidator(v); err != nil {
 			return &ValidationError{Name: "lag_threshold_seconds", err: fmt.Errorf(`ent: validator failed for field "DBTarget.lag_threshold_seconds": %w`, err)}
@@ -952,14 +1008,20 @@ func (_u *DBTargetUpdateOne) sqlSave(ctx context.Context) (_node *DBTarget, err 
 	if value, ok := _u.mutation.Enabled(); ok {
 		_spec.SetField(dbtarget.FieldEnabled, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.Engine(); ok {
+		_spec.SetField(dbtarget.FieldEngine, field.TypeEnum, value)
+	}
 	if value, ok := _u.mutation.LagThresholdSeconds(); ok {
 		_spec.SetField(dbtarget.FieldLagThresholdSeconds, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.AddedLagThresholdSeconds(); ok {
 		_spec.AddField(dbtarget.FieldLagThresholdSeconds, field.TypeInt, value)
 	}
-	if value, ok := _u.mutation.MysqlCommand(); ok {
-		_spec.SetField(dbtarget.FieldMysqlCommand, field.TypeString, value)
+	if value, ok := _u.mutation.ClientCommand(); ok {
+		_spec.SetField(dbtarget.FieldClientCommand, field.TypeString, value)
+	}
+	if _u.mutation.ClientCommandCleared() {
+		_spec.ClearField(dbtarget.FieldClientCommand, field.TypeString)
 	}
 	if value, ok := _u.mutation.DefaultsFile(); ok {
 		_spec.SetField(dbtarget.FieldDefaultsFile, field.TypeString, value)

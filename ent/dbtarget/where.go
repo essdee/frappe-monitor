@@ -75,9 +75,9 @@ func LagThresholdSeconds(v int) predicate.DBTarget {
 	return predicate.DBTarget(sql.FieldEQ(FieldLagThresholdSeconds, v))
 }
 
-// MysqlCommand applies equality check predicate on the "mysql_command" field. It's identical to MysqlCommandEQ.
-func MysqlCommand(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldEQ(FieldMysqlCommand, v))
+// ClientCommand applies equality check predicate on the "client_command" field. It's identical to ClientCommandEQ.
+func ClientCommand(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldEQ(FieldClientCommand, v))
 }
 
 // DefaultsFile applies equality check predicate on the "defaults_file" field. It's identical to DefaultsFileEQ.
@@ -235,6 +235,26 @@ func EnabledNEQ(v bool) predicate.DBTarget {
 	return predicate.DBTarget(sql.FieldNEQ(FieldEnabled, v))
 }
 
+// EngineEQ applies the EQ predicate on the "engine" field.
+func EngineEQ(v Engine) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldEQ(FieldEngine, v))
+}
+
+// EngineNEQ applies the NEQ predicate on the "engine" field.
+func EngineNEQ(v Engine) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldNEQ(FieldEngine, v))
+}
+
+// EngineIn applies the In predicate on the "engine" field.
+func EngineIn(vs ...Engine) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldIn(FieldEngine, vs...))
+}
+
+// EngineNotIn applies the NotIn predicate on the "engine" field.
+func EngineNotIn(vs ...Engine) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldNotIn(FieldEngine, vs...))
+}
+
 // LagThresholdSecondsEQ applies the EQ predicate on the "lag_threshold_seconds" field.
 func LagThresholdSecondsEQ(v int) predicate.DBTarget {
 	return predicate.DBTarget(sql.FieldEQ(FieldLagThresholdSeconds, v))
@@ -275,69 +295,79 @@ func LagThresholdSecondsLTE(v int) predicate.DBTarget {
 	return predicate.DBTarget(sql.FieldLTE(FieldLagThresholdSeconds, v))
 }
 
-// MysqlCommandEQ applies the EQ predicate on the "mysql_command" field.
-func MysqlCommandEQ(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldEQ(FieldMysqlCommand, v))
+// ClientCommandEQ applies the EQ predicate on the "client_command" field.
+func ClientCommandEQ(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldEQ(FieldClientCommand, v))
 }
 
-// MysqlCommandNEQ applies the NEQ predicate on the "mysql_command" field.
-func MysqlCommandNEQ(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldNEQ(FieldMysqlCommand, v))
+// ClientCommandNEQ applies the NEQ predicate on the "client_command" field.
+func ClientCommandNEQ(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldNEQ(FieldClientCommand, v))
 }
 
-// MysqlCommandIn applies the In predicate on the "mysql_command" field.
-func MysqlCommandIn(vs ...string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldIn(FieldMysqlCommand, vs...))
+// ClientCommandIn applies the In predicate on the "client_command" field.
+func ClientCommandIn(vs ...string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldIn(FieldClientCommand, vs...))
 }
 
-// MysqlCommandNotIn applies the NotIn predicate on the "mysql_command" field.
-func MysqlCommandNotIn(vs ...string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldNotIn(FieldMysqlCommand, vs...))
+// ClientCommandNotIn applies the NotIn predicate on the "client_command" field.
+func ClientCommandNotIn(vs ...string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldNotIn(FieldClientCommand, vs...))
 }
 
-// MysqlCommandGT applies the GT predicate on the "mysql_command" field.
-func MysqlCommandGT(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldGT(FieldMysqlCommand, v))
+// ClientCommandGT applies the GT predicate on the "client_command" field.
+func ClientCommandGT(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldGT(FieldClientCommand, v))
 }
 
-// MysqlCommandGTE applies the GTE predicate on the "mysql_command" field.
-func MysqlCommandGTE(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldGTE(FieldMysqlCommand, v))
+// ClientCommandGTE applies the GTE predicate on the "client_command" field.
+func ClientCommandGTE(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldGTE(FieldClientCommand, v))
 }
 
-// MysqlCommandLT applies the LT predicate on the "mysql_command" field.
-func MysqlCommandLT(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldLT(FieldMysqlCommand, v))
+// ClientCommandLT applies the LT predicate on the "client_command" field.
+func ClientCommandLT(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldLT(FieldClientCommand, v))
 }
 
-// MysqlCommandLTE applies the LTE predicate on the "mysql_command" field.
-func MysqlCommandLTE(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldLTE(FieldMysqlCommand, v))
+// ClientCommandLTE applies the LTE predicate on the "client_command" field.
+func ClientCommandLTE(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldLTE(FieldClientCommand, v))
 }
 
-// MysqlCommandContains applies the Contains predicate on the "mysql_command" field.
-func MysqlCommandContains(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldContains(FieldMysqlCommand, v))
+// ClientCommandContains applies the Contains predicate on the "client_command" field.
+func ClientCommandContains(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldContains(FieldClientCommand, v))
 }
 
-// MysqlCommandHasPrefix applies the HasPrefix predicate on the "mysql_command" field.
-func MysqlCommandHasPrefix(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldHasPrefix(FieldMysqlCommand, v))
+// ClientCommandHasPrefix applies the HasPrefix predicate on the "client_command" field.
+func ClientCommandHasPrefix(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldHasPrefix(FieldClientCommand, v))
 }
 
-// MysqlCommandHasSuffix applies the HasSuffix predicate on the "mysql_command" field.
-func MysqlCommandHasSuffix(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldHasSuffix(FieldMysqlCommand, v))
+// ClientCommandHasSuffix applies the HasSuffix predicate on the "client_command" field.
+func ClientCommandHasSuffix(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldHasSuffix(FieldClientCommand, v))
 }
 
-// MysqlCommandEqualFold applies the EqualFold predicate on the "mysql_command" field.
-func MysqlCommandEqualFold(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldEqualFold(FieldMysqlCommand, v))
+// ClientCommandIsNil applies the IsNil predicate on the "client_command" field.
+func ClientCommandIsNil() predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldIsNull(FieldClientCommand))
 }
 
-// MysqlCommandContainsFold applies the ContainsFold predicate on the "mysql_command" field.
-func MysqlCommandContainsFold(v string) predicate.DBTarget {
-	return predicate.DBTarget(sql.FieldContainsFold(FieldMysqlCommand, v))
+// ClientCommandNotNil applies the NotNil predicate on the "client_command" field.
+func ClientCommandNotNil() predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldNotNull(FieldClientCommand))
+}
+
+// ClientCommandEqualFold applies the EqualFold predicate on the "client_command" field.
+func ClientCommandEqualFold(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldEqualFold(FieldClientCommand, v))
+}
+
+// ClientCommandContainsFold applies the ContainsFold predicate on the "client_command" field.
+func ClientCommandContainsFold(v string) predicate.DBTarget {
+	return predicate.DBTarget(sql.FieldContainsFold(FieldClientCommand, v))
 }
 
 // DefaultsFileEQ applies the EQ predicate on the "defaults_file" field.

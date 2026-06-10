@@ -25,14 +25,23 @@ type Result struct {
 	LastError           string
 }
 
-// Check SSHes into the server and reads replication status (+ optional
-// heartbeat lag). It never returns an error — a failure becomes an
-// unreachable Result with LastError set.
+// Check SSHes into the server and reads replication status, dispatching to
+// the engine-specific plugin (mysql/mariadb or postgres). It never returns
+// an error — a failure becomes an unreachable Result with LastError set.
 func (c *Checker) Check(ctx context.Context, tgt sshpkg.Target, t *storage.DBTarget) Result {
-	base := shellQuote(firstNonEmpty(t.MySQLCommand, "mysql"))
+	switch t.Engine {
+	case "postgres", "postgresql":
+		return c.checkPostgres(ctx, tgt, t)
+	default:
+		return c.checkMySQL(ctx, tgt, t)
+	}
+}
+
+// checkMySQL reads replication status from a MySQL/MariaDB replica.
+func (c *Checker) checkMySQL(ctx context.Context, tgt sshpkg.Target, t *storage.DBTarget) Result {
+	base := shellQuote(firstNonEmpty(t.ClientCommand, "mysql"))
 	if t.DefaultsFile != "" {
-		// --defaults-file must come first.
-		base = shellQuote(firstNonEmpty(t.MySQLCommand, "mysql")) + " --defaults-file=" + shellQuote(t.DefaultsFile)
+		base += " --defaults-file=" + shellQuote(t.DefaultsFile)
 	}
 	if t.Socket != "" {
 		base += " --socket=" + shellQuote(t.Socket)

@@ -805,9 +805,10 @@ type DBTargetMutation struct {
 	id                       *int
 	name                     *string
 	enabled                  *bool
+	engine                   *dbtarget.Engine
 	lag_threshold_seconds    *int
 	addlag_threshold_seconds *int
-	mysql_command            *string
+	client_command           *string
 	defaults_file            *string
 	socket                   *string
 	heartbeat_enabled        *bool
@@ -1037,6 +1038,42 @@ func (m *DBTargetMutation) ResetEnabled() {
 	m.enabled = nil
 }
 
+// SetEngine sets the "engine" field.
+func (m *DBTargetMutation) SetEngine(d dbtarget.Engine) {
+	m.engine = &d
+}
+
+// Engine returns the value of the "engine" field in the mutation.
+func (m *DBTargetMutation) Engine() (r dbtarget.Engine, exists bool) {
+	v := m.engine
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEngine returns the old "engine" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldEngine(ctx context.Context) (v dbtarget.Engine, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEngine is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEngine requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEngine: %w", err)
+	}
+	return oldValue.Engine, nil
+}
+
+// ResetEngine resets all changes to the "engine" field.
+func (m *DBTargetMutation) ResetEngine() {
+	m.engine = nil
+}
+
 // SetLagThresholdSeconds sets the "lag_threshold_seconds" field.
 func (m *DBTargetMutation) SetLagThresholdSeconds(i int) {
 	m.lag_threshold_seconds = &i
@@ -1093,40 +1130,53 @@ func (m *DBTargetMutation) ResetLagThresholdSeconds() {
 	m.addlag_threshold_seconds = nil
 }
 
-// SetMysqlCommand sets the "mysql_command" field.
-func (m *DBTargetMutation) SetMysqlCommand(s string) {
-	m.mysql_command = &s
+// SetClientCommand sets the "client_command" field.
+func (m *DBTargetMutation) SetClientCommand(s string) {
+	m.client_command = &s
 }
 
-// MysqlCommand returns the value of the "mysql_command" field in the mutation.
-func (m *DBTargetMutation) MysqlCommand() (r string, exists bool) {
-	v := m.mysql_command
+// ClientCommand returns the value of the "client_command" field in the mutation.
+func (m *DBTargetMutation) ClientCommand() (r string, exists bool) {
+	v := m.client_command
 	if v == nil {
 		return
 	}
 	return *v, true
 }
 
-// OldMysqlCommand returns the old "mysql_command" field's value of the DBTarget entity.
+// OldClientCommand returns the old "client_command" field's value of the DBTarget entity.
 // If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *DBTargetMutation) OldMysqlCommand(ctx context.Context) (v string, err error) {
+func (m *DBTargetMutation) OldClientCommand(ctx context.Context) (v string, err error) {
 	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldMysqlCommand is only allowed on UpdateOne operations")
+		return v, errors.New("OldClientCommand is only allowed on UpdateOne operations")
 	}
 	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldMysqlCommand requires an ID field in the mutation")
+		return v, errors.New("OldClientCommand requires an ID field in the mutation")
 	}
 	oldValue, err := m.oldValue(ctx)
 	if err != nil {
-		return v, fmt.Errorf("querying old value for OldMysqlCommand: %w", err)
+		return v, fmt.Errorf("querying old value for OldClientCommand: %w", err)
 	}
-	return oldValue.MysqlCommand, nil
+	return oldValue.ClientCommand, nil
 }
 
-// ResetMysqlCommand resets all changes to the "mysql_command" field.
-func (m *DBTargetMutation) ResetMysqlCommand() {
-	m.mysql_command = nil
+// ClearClientCommand clears the value of the "client_command" field.
+func (m *DBTargetMutation) ClearClientCommand() {
+	m.client_command = nil
+	m.clearedFields[dbtarget.FieldClientCommand] = struct{}{}
+}
+
+// ClientCommandCleared returns if the "client_command" field was cleared in this mutation.
+func (m *DBTargetMutation) ClientCommandCleared() bool {
+	_, ok := m.clearedFields[dbtarget.FieldClientCommand]
+	return ok
+}
+
+// ResetClientCommand resets all changes to the "client_command" field.
+func (m *DBTargetMutation) ResetClientCommand() {
+	m.client_command = nil
+	delete(m.clearedFields, dbtarget.FieldClientCommand)
 }
 
 // SetDefaultsFile sets the "defaults_file" field.
@@ -1791,7 +1841,7 @@ func (m *DBTargetMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *DBTargetMutation) Fields() []string {
-	fields := make([]string, 0, 18)
+	fields := make([]string, 0, 19)
 	if m.server != nil {
 		fields = append(fields, dbtarget.FieldServerID)
 	}
@@ -1801,11 +1851,14 @@ func (m *DBTargetMutation) Fields() []string {
 	if m.enabled != nil {
 		fields = append(fields, dbtarget.FieldEnabled)
 	}
+	if m.engine != nil {
+		fields = append(fields, dbtarget.FieldEngine)
+	}
 	if m.lag_threshold_seconds != nil {
 		fields = append(fields, dbtarget.FieldLagThresholdSeconds)
 	}
-	if m.mysql_command != nil {
-		fields = append(fields, dbtarget.FieldMysqlCommand)
+	if m.client_command != nil {
+		fields = append(fields, dbtarget.FieldClientCommand)
 	}
 	if m.defaults_file != nil {
 		fields = append(fields, dbtarget.FieldDefaultsFile)
@@ -1860,10 +1913,12 @@ func (m *DBTargetMutation) Field(name string) (ent.Value, bool) {
 		return m.Name()
 	case dbtarget.FieldEnabled:
 		return m.Enabled()
+	case dbtarget.FieldEngine:
+		return m.Engine()
 	case dbtarget.FieldLagThresholdSeconds:
 		return m.LagThresholdSeconds()
-	case dbtarget.FieldMysqlCommand:
-		return m.MysqlCommand()
+	case dbtarget.FieldClientCommand:
+		return m.ClientCommand()
 	case dbtarget.FieldDefaultsFile:
 		return m.DefaultsFile()
 	case dbtarget.FieldSocket:
@@ -1905,10 +1960,12 @@ func (m *DBTargetMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldName(ctx)
 	case dbtarget.FieldEnabled:
 		return m.OldEnabled(ctx)
+	case dbtarget.FieldEngine:
+		return m.OldEngine(ctx)
 	case dbtarget.FieldLagThresholdSeconds:
 		return m.OldLagThresholdSeconds(ctx)
-	case dbtarget.FieldMysqlCommand:
-		return m.OldMysqlCommand(ctx)
+	case dbtarget.FieldClientCommand:
+		return m.OldClientCommand(ctx)
 	case dbtarget.FieldDefaultsFile:
 		return m.OldDefaultsFile(ctx)
 	case dbtarget.FieldSocket:
@@ -1965,6 +2022,13 @@ func (m *DBTargetMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetEnabled(v)
 		return nil
+	case dbtarget.FieldEngine:
+		v, ok := value.(dbtarget.Engine)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEngine(v)
+		return nil
 	case dbtarget.FieldLagThresholdSeconds:
 		v, ok := value.(int)
 		if !ok {
@@ -1972,12 +2036,12 @@ func (m *DBTargetMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLagThresholdSeconds(v)
 		return nil
-	case dbtarget.FieldMysqlCommand:
+	case dbtarget.FieldClientCommand:
 		v, ok := value.(string)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
-		m.SetMysqlCommand(v)
+		m.SetClientCommand(v)
 		return nil
 	case dbtarget.FieldDefaultsFile:
 		v, ok := value.(string)
@@ -2139,6 +2203,9 @@ func (m *DBTargetMutation) AddField(name string, value ent.Value) error {
 // mutation.
 func (m *DBTargetMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(dbtarget.FieldClientCommand) {
+		fields = append(fields, dbtarget.FieldClientCommand)
+	}
 	if m.FieldCleared(dbtarget.FieldDefaultsFile) {
 		fields = append(fields, dbtarget.FieldDefaultsFile)
 	}
@@ -2174,6 +2241,9 @@ func (m *DBTargetMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *DBTargetMutation) ClearField(name string) error {
 	switch name {
+	case dbtarget.FieldClientCommand:
+		m.ClearClientCommand()
+		return nil
 	case dbtarget.FieldDefaultsFile:
 		m.ClearDefaultsFile()
 		return nil
@@ -2212,11 +2282,14 @@ func (m *DBTargetMutation) ResetField(name string) error {
 	case dbtarget.FieldEnabled:
 		m.ResetEnabled()
 		return nil
+	case dbtarget.FieldEngine:
+		m.ResetEngine()
+		return nil
 	case dbtarget.FieldLagThresholdSeconds:
 		m.ResetLagThresholdSeconds()
 		return nil
-	case dbtarget.FieldMysqlCommand:
-		m.ResetMysqlCommand()
+	case dbtarget.FieldClientCommand:
+		m.ResetClientCommand()
 		return nil
 	case dbtarget.FieldDefaultsFile:
 		m.ResetDefaultsFile()

@@ -91,8 +91,9 @@ type DBTarget struct {
 	ServerID            int
 	Name                string
 	Enabled             bool
+	Engine              string // "mysql" | "postgres"
 	LagThresholdSeconds int
-	MySQLCommand        string
+	ClientCommand       string // remote client binary; empty = engine default
 	DefaultsFile        string
 	Socket              string
 	HeartbeatEnabled    bool
@@ -113,8 +114,9 @@ type NewDBTarget struct {
 	ServerID            int
 	Name                string
 	Enabled             bool
+	Engine              string
 	LagThresholdSeconds int
-	MySQLCommand        string
+	ClientCommand       string
 	DefaultsFile        string
 	Socket              string
 	HeartbeatEnabled    bool
@@ -126,8 +128,9 @@ type UpdateDBTarget struct {
 	ServerID            *int
 	Name                *string
 	Enabled             *bool
+	Engine              *string
 	LagThresholdSeconds *int
-	MySQLCommand        *string
+	ClientCommand       *string
 	DefaultsFile        *string
 	Socket              *string
 	HeartbeatEnabled    *bool

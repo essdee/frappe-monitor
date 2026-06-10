@@ -38,8 +38,9 @@ const blank = (): NewDBTargetInput & { enabled: boolean } => ({
   server_id: servers.value[0]?.id ?? 0,
   name: '',
   enabled: true,
+  engine: 'mysql',
   lag_threshold_seconds: 30,
-  mysql_command: 'mysql',
+  client_command: '',
   defaults_file: '',
   socket: '',
   heartbeat_enabled: false,
@@ -58,8 +59,9 @@ function openEdit(t: DBTarget) {
     server_id: t.server_id,
     name: t.name,
     enabled: t.enabled,
+    engine: t.engine,
     lag_threshold_seconds: t.lag_threshold_seconds,
-    mysql_command: t.mysql_command,
+    client_command: t.client_command,
     defaults_file: t.defaults_file ?? '',
     socket: t.socket ?? '',
     heartbeat_enabled: t.heartbeat_enabled,
@@ -166,17 +168,23 @@ function lagText(t: DBTarget): string {
             <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }} ({{ s.hostname }})</option>
           </select>
         </label>
+        <label>Engine
+          <select v-model="form.engine">
+            <option value="mysql">MySQL / MariaDB</option>
+            <option value="postgres">PostgreSQL</option>
+          </select>
+        </label>
         <label>Lag threshold (seconds)
           <input v-model.number="form.lag_threshold_seconds" type="number" min="1" />
         </label>
-        <label>mysql command
-          <input v-model="form.mysql_command" placeholder="mysql" />
+        <label>Client command
+          <input v-model="form.client_command" :placeholder="form.engine === 'postgres' ? 'psql' : 'mysql'" />
         </label>
         <label>Defaults file (creds)
-          <input v-model="form.defaults_file" placeholder="~/.my.cnf" />
+          <input v-model="form.defaults_file" :placeholder="form.engine === 'postgres' ? '~/.pgpass' : '~/.my.cnf'" />
         </label>
-        <label>Socket (optional)
-          <input v-model="form.socket" placeholder="/run/mysqld/mysqld.sock" />
+        <label>Socket / host (optional)
+          <input v-model="form.socket" :placeholder="form.engine === 'postgres' ? '/var/run/postgresql' : '/run/mysqld/mysqld.sock'" />
         </label>
         <label class="checkbox">
           <input v-model="form.enabled" type="checkbox" /> Enabled
@@ -186,7 +194,9 @@ function lagText(t: DBTarget): string {
         </label>
         <label v-if="form.heartbeat_enabled" class="wide">Heartbeat query (returns lag seconds)
           <input v-model="form.heartbeat_query"
-            placeholder="SELECT TIMESTAMPDIFF(SECOND, ts, NOW()) FROM heartbeat.heartbeat LIMIT 1" />
+            :placeholder="form.engine === 'postgres'
+              ? 'SELECT EXTRACT(EPOCH FROM (now() - ts)) FROM heartbeat ORDER BY ts DESC LIMIT 1'
+              : 'SELECT TIMESTAMPDIFF(SECOND, ts, NOW()) FROM heartbeat.heartbeat LIMIT 1'" />
         </label>
       </div>
       <p v-if="formError" class="error">{{ formError }}</p>

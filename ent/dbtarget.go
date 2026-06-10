@@ -24,10 +24,12 @@ type DBTarget struct {
 	Name string `json:"name,omitempty"`
 	// Enabled holds the value of the "enabled" field.
 	Enabled bool `json:"enabled,omitempty"`
+	// Engine holds the value of the "engine" field.
+	Engine dbtarget.Engine `json:"engine,omitempty"`
 	// LagThresholdSeconds holds the value of the "lag_threshold_seconds" field.
 	LagThresholdSeconds int `json:"lag_threshold_seconds,omitempty"`
-	// MysqlCommand holds the value of the "mysql_command" field.
-	MysqlCommand string `json:"mysql_command,omitempty"`
+	// ClientCommand holds the value of the "client_command" field.
+	ClientCommand string `json:"client_command,omitempty"`
 	// DefaultsFile holds the value of the "defaults_file" field.
 	DefaultsFile string `json:"defaults_file,omitempty"`
 	// Socket holds the value of the "socket" field.
@@ -91,7 +93,7 @@ func (*DBTarget) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case dbtarget.FieldID, dbtarget.FieldServerID, dbtarget.FieldLagThresholdSeconds, dbtarget.FieldLagSeconds:
 			values[i] = new(sql.NullInt64)
-		case dbtarget.FieldName, dbtarget.FieldMysqlCommand, dbtarget.FieldDefaultsFile, dbtarget.FieldSocket, dbtarget.FieldHeartbeatQuery, dbtarget.FieldStatus, dbtarget.FieldLastError:
+		case dbtarget.FieldName, dbtarget.FieldEngine, dbtarget.FieldClientCommand, dbtarget.FieldDefaultsFile, dbtarget.FieldSocket, dbtarget.FieldHeartbeatQuery, dbtarget.FieldStatus, dbtarget.FieldLastError:
 			values[i] = new(sql.NullString)
 		case dbtarget.FieldLastCheckedAt, dbtarget.FieldCreatedAt, dbtarget.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -134,17 +136,23 @@ func (_m *DBTarget) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.Enabled = value.Bool
 			}
+		case dbtarget.FieldEngine:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field engine", values[i])
+			} else if value.Valid {
+				_m.Engine = dbtarget.Engine(value.String)
+			}
 		case dbtarget.FieldLagThresholdSeconds:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for field lag_threshold_seconds", values[i])
 			} else if value.Valid {
 				_m.LagThresholdSeconds = int(value.Int64)
 			}
-		case dbtarget.FieldMysqlCommand:
+		case dbtarget.FieldClientCommand:
 			if value, ok := values[i].(*sql.NullString); !ok {
-				return fmt.Errorf("unexpected type %T for field mysql_command", values[i])
+				return fmt.Errorf("unexpected type %T for field client_command", values[i])
 			} else if value.Valid {
-				_m.MysqlCommand = value.String
+				_m.ClientCommand = value.String
 			}
 		case dbtarget.FieldDefaultsFile:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -277,11 +285,14 @@ func (_m *DBTarget) String() string {
 	builder.WriteString("enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Enabled))
 	builder.WriteString(", ")
+	builder.WriteString("engine=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Engine))
+	builder.WriteString(", ")
 	builder.WriteString("lag_threshold_seconds=")
 	builder.WriteString(fmt.Sprintf("%v", _m.LagThresholdSeconds))
 	builder.WriteString(", ")
-	builder.WriteString("mysql_command=")
-	builder.WriteString(_m.MysqlCommand)
+	builder.WriteString("client_command=")
+	builder.WriteString(_m.ClientCommand)
 	builder.WriteString(", ")
 	builder.WriteString("defaults_file=")
 	builder.WriteString(_m.DefaultsFile)

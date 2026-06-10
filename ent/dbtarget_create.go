@@ -47,6 +47,20 @@ func (_c *DBTargetCreate) SetNillableEnabled(v *bool) *DBTargetCreate {
 	return _c
 }
 
+// SetEngine sets the "engine" field.
+func (_c *DBTargetCreate) SetEngine(v dbtarget.Engine) *DBTargetCreate {
+	_c.mutation.SetEngine(v)
+	return _c
+}
+
+// SetNillableEngine sets the "engine" field if the given value is not nil.
+func (_c *DBTargetCreate) SetNillableEngine(v *dbtarget.Engine) *DBTargetCreate {
+	if v != nil {
+		_c.SetEngine(*v)
+	}
+	return _c
+}
+
 // SetLagThresholdSeconds sets the "lag_threshold_seconds" field.
 func (_c *DBTargetCreate) SetLagThresholdSeconds(v int) *DBTargetCreate {
 	_c.mutation.SetLagThresholdSeconds(v)
@@ -61,16 +75,16 @@ func (_c *DBTargetCreate) SetNillableLagThresholdSeconds(v *int) *DBTargetCreate
 	return _c
 }
 
-// SetMysqlCommand sets the "mysql_command" field.
-func (_c *DBTargetCreate) SetMysqlCommand(v string) *DBTargetCreate {
-	_c.mutation.SetMysqlCommand(v)
+// SetClientCommand sets the "client_command" field.
+func (_c *DBTargetCreate) SetClientCommand(v string) *DBTargetCreate {
+	_c.mutation.SetClientCommand(v)
 	return _c
 }
 
-// SetNillableMysqlCommand sets the "mysql_command" field if the given value is not nil.
-func (_c *DBTargetCreate) SetNillableMysqlCommand(v *string) *DBTargetCreate {
+// SetNillableClientCommand sets the "client_command" field if the given value is not nil.
+func (_c *DBTargetCreate) SetNillableClientCommand(v *string) *DBTargetCreate {
 	if v != nil {
-		_c.SetMysqlCommand(*v)
+		_c.SetClientCommand(*v)
 	}
 	return _c
 }
@@ -301,13 +315,13 @@ func (_c *DBTargetCreate) defaults() {
 		v := dbtarget.DefaultEnabled
 		_c.mutation.SetEnabled(v)
 	}
+	if _, ok := _c.mutation.Engine(); !ok {
+		v := dbtarget.DefaultEngine
+		_c.mutation.SetEngine(v)
+	}
 	if _, ok := _c.mutation.LagThresholdSeconds(); !ok {
 		v := dbtarget.DefaultLagThresholdSeconds
 		_c.mutation.SetLagThresholdSeconds(v)
-	}
-	if _, ok := _c.mutation.MysqlCommand(); !ok {
-		v := dbtarget.DefaultMysqlCommand
-		_c.mutation.SetMysqlCommand(v)
 	}
 	if _, ok := _c.mutation.HeartbeatEnabled(); !ok {
 		v := dbtarget.DefaultHeartbeatEnabled
@@ -351,6 +365,14 @@ func (_c *DBTargetCreate) check() error {
 	if _, ok := _c.mutation.Enabled(); !ok {
 		return &ValidationError{Name: "enabled", err: errors.New(`ent: missing required field "DBTarget.enabled"`)}
 	}
+	if _, ok := _c.mutation.Engine(); !ok {
+		return &ValidationError{Name: "engine", err: errors.New(`ent: missing required field "DBTarget.engine"`)}
+	}
+	if v, ok := _c.mutation.Engine(); ok {
+		if err := dbtarget.EngineValidator(v); err != nil {
+			return &ValidationError{Name: "engine", err: fmt.Errorf(`ent: validator failed for field "DBTarget.engine": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.LagThresholdSeconds(); !ok {
 		return &ValidationError{Name: "lag_threshold_seconds", err: errors.New(`ent: missing required field "DBTarget.lag_threshold_seconds"`)}
 	}
@@ -358,9 +380,6 @@ func (_c *DBTargetCreate) check() error {
 		if err := dbtarget.LagThresholdSecondsValidator(v); err != nil {
 			return &ValidationError{Name: "lag_threshold_seconds", err: fmt.Errorf(`ent: validator failed for field "DBTarget.lag_threshold_seconds": %w`, err)}
 		}
-	}
-	if _, ok := _c.mutation.MysqlCommand(); !ok {
-		return &ValidationError{Name: "mysql_command", err: errors.New(`ent: missing required field "DBTarget.mysql_command"`)}
 	}
 	if _, ok := _c.mutation.HeartbeatEnabled(); !ok {
 		return &ValidationError{Name: "heartbeat_enabled", err: errors.New(`ent: missing required field "DBTarget.heartbeat_enabled"`)}
@@ -422,13 +441,17 @@ func (_c *DBTargetCreate) createSpec() (*DBTarget, *sqlgraph.CreateSpec) {
 		_spec.SetField(dbtarget.FieldEnabled, field.TypeBool, value)
 		_node.Enabled = value
 	}
+	if value, ok := _c.mutation.Engine(); ok {
+		_spec.SetField(dbtarget.FieldEngine, field.TypeEnum, value)
+		_node.Engine = value
+	}
 	if value, ok := _c.mutation.LagThresholdSeconds(); ok {
 		_spec.SetField(dbtarget.FieldLagThresholdSeconds, field.TypeInt, value)
 		_node.LagThresholdSeconds = value
 	}
-	if value, ok := _c.mutation.MysqlCommand(); ok {
-		_spec.SetField(dbtarget.FieldMysqlCommand, field.TypeString, value)
-		_node.MysqlCommand = value
+	if value, ok := _c.mutation.ClientCommand(); ok {
+		_spec.SetField(dbtarget.FieldClientCommand, field.TypeString, value)
+		_node.ClientCommand = value
 	}
 	if value, ok := _c.mutation.DefaultsFile(); ok {
 		_spec.SetField(dbtarget.FieldDefaultsFile, field.TypeString, value)

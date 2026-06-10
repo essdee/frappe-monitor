@@ -26,10 +26,13 @@ func (DBTarget) Fields() []ent.Field {
 		// Config (admin-editable).
 		field.String("name").NotEmpty(),
 		field.Bool("enabled").Default(true),
+		// Database engine — selects the replication-check plugin.
+		field.Enum("engine").Values("mysql", "postgres").Default("mysql"),
 		// Replication-lag alert threshold for this target, in seconds.
 		field.Int("lag_threshold_seconds").Default(30).Positive(),
-		// mysql client invocation on the remote host.
-		field.String("mysql_command").Default("mysql"),
+		// Client binary on the remote host (the mysql/mariadb client, or
+		// psql). Empty = the engine's default ("mysql" / "psql").
+		field.String("client_command").Optional(),
 		// my.cnf-style file holding the DB credentials (a user with
 		// REPLICATION CLIENT), so no DB password is stored here.
 		field.String("defaults_file").Optional(),

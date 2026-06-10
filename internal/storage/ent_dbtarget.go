@@ -14,8 +14,9 @@ func entToDBTarget(r *ent.DBTarget) *DBTarget {
 		ServerID:            r.ServerID,
 		Name:                r.Name,
 		Enabled:             r.Enabled,
+		Engine:              string(r.Engine),
 		LagThresholdSeconds: r.LagThresholdSeconds,
-		MySQLCommand:        r.MysqlCommand,
+		ClientCommand:       r.ClientCommand,
 		DefaultsFile:        r.DefaultsFile,
 		Socket:              r.Socket,
 		HeartbeatEnabled:    r.HeartbeatEnabled,
@@ -37,7 +38,8 @@ func (s *EntStore) CreateDBTarget(ctx context.Context, in NewDBTarget) (*DBTarge
 		SetServerID(in.ServerID).
 		SetName(in.Name).
 		SetEnabled(in.Enabled).
-		SetMysqlCommand(firstNonEmpty(in.MySQLCommand, "mysql")).
+		SetEngine(entdbtarget.Engine(firstNonEmpty(in.Engine, "mysql"))).
+		SetClientCommand(in.ClientCommand).
 		SetDefaultsFile(in.DefaultsFile).
 		SetSocket(in.Socket).
 		SetHeartbeatEnabled(in.HeartbeatEnabled).
@@ -86,11 +88,14 @@ func (s *EntStore) UpdateDBTarget(ctx context.Context, id int, in UpdateDBTarget
 	if in.Enabled != nil {
 		u = u.SetEnabled(*in.Enabled)
 	}
+	if in.Engine != nil {
+		u = u.SetEngine(entdbtarget.Engine(*in.Engine))
+	}
 	if in.LagThresholdSeconds != nil {
 		u = u.SetLagThresholdSeconds(*in.LagThresholdSeconds)
 	}
-	if in.MySQLCommand != nil {
-		u = u.SetMysqlCommand(*in.MySQLCommand)
+	if in.ClientCommand != nil {
+		u = u.SetClientCommand(*in.ClientCommand)
 	}
 	if in.DefaultsFile != nil {
 		u = u.SetDefaultsFile(*in.DefaultsFile)
