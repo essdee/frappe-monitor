@@ -22,6 +22,7 @@ type Config struct {
 	Auth      AuthConfig      `koanf:"auth"`
 	Alerts    AlertsConfig    `koanf:"alerts"`
 	Streaming StreamingConfig `koanf:"streaming"`
+	Realtime  RealtimeConfig  `koanf:"realtime"`
 }
 
 type ServerConfig struct {
@@ -122,6 +123,25 @@ type StreamingFileConfig struct {
 	Path string `koanf:"path"`
 }
 
+// RealtimeConfig tunes the WebSocket push layer (the dashboard's
+// transport). The WebSocket shares the main HTTP listener, so its "port"
+// is server.listen_addr — there is no separate port to configure.
+type RealtimeConfig struct {
+	// Enabled exposes GET /api/v1/ws. When false the endpoint isn't
+	// mounted and the dashboard falls back to manual reloads. Default true.
+	Enabled bool `koanf:"enabled"`
+	// PingIntervalSeconds is the keepalive cadence per connection.
+	PingIntervalSeconds int `koanf:"ping_interval_seconds"`
+	// WriteTimeoutSeconds bounds a single frame write / ping.
+	WriteTimeoutSeconds int `koanf:"write_timeout_seconds"`
+	// SendBuffer is the per-client queue depth before a slow client is
+	// dropped. Bounds per-connection memory.
+	SendBuffer int `koanf:"send_buffer"`
+	// MaxClients caps total concurrent connections (0 = unlimited). A
+	// safety bound so a connection flood can't exhaust the monitor host.
+	MaxClients int `koanf:"max_clients"`
+}
+
 func defaults() *koanf.Koanf {
 	k := koanf.New(".")
 	if err := k.Load(confmap.Provider(map[string]any{
@@ -158,6 +178,11 @@ func defaults() *koanf.Koanf {
 		"streaming.push_timeout_seconds":     10,
 		"streaming.min_backoff_seconds":      1,
 		"streaming.max_backoff_seconds":      60,
+		"realtime.enabled":                   true,
+		"realtime.ping_interval_seconds":     30,
+		"realtime.write_timeout_seconds":     10,
+		"realtime.send_buffer":               128,
+		"realtime.max_clients":               512,
 	}, "."), nil); err != nil {
 		panic(fmt.Sprintf("config defaults: %v", err))
 	}
@@ -289,6 +314,23 @@ func (c *Config) validate() error {
 		if c.Streaming.MaxBackoffSeconds < c.Streaming.MinBackoffSeconds {
 			return fmt.Errorf("streaming.max_backoff_seconds (%d) must be >= streaming.min_backoff_seconds (%d)",
 				c.Streaming.MaxBackoffSeconds, c.Streaming.MinBackoffSeconds)
+		}
+	}
+
+	// Realtime: numeric guards (the WS shares the HTTP listener, no port
+	// of its own). MaxClients == 0 means unlimited, so only reject < 0.
+	if c.Realtime.Enabled {
+		if c.Realtime.PingIntervalSeconds < 1 {
+			return fmt.Errorf("realtime.ping_interval_seconds must be >= 1, got %d", c.Realtime.PingIntervalSeconds)
+		}
+		if c.Realtime.WriteTimeoutSeconds < 1 {
+			return fmt.Errorf("realtime.write_timeout_seconds must be >= 1, got %d", c.Realtime.WriteTimeoutSeconds)
+		}
+		if c.Realtime.SendBuffer < 1 {
+			return fmt.Errorf("realtime.send_buffer must be >= 1, got %d", c.Realtime.SendBuffer)
+		}
+		if c.Realtime.MaxClients < 0 {
+			return fmt.Errorf("realtime.max_clients must be >= 0 (0 = unlimited), got %d", c.Realtime.MaxClients)
 		}
 	}
 

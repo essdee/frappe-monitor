@@ -10,19 +10,6 @@ import (
 	"github.com/coder/websocket/wsjson"
 )
 
-const (
-	// sendBuffer is how many events we queue per client before declaring
-	// it too slow and dropping it. Generous enough to ride out a brief
-	// stall, small enough that a dead client doesn't pin much memory.
-	sendBuffer = 128
-	// pingInterval keeps the connection alive through idle proxies and
-	// detects half-open connections.
-	pingInterval = 30 * time.Second
-	// writeTimeout bounds a single frame write / ping so one wedged
-	// client can't block its own write pump forever.
-	writeTimeout = 10 * time.Second
-)
-
 // Client is one connected dashboard WebSocket. It owns a read pump
 // (handling subscribe/unsubscribe control frames) and a write pump
 // (draining the send queue and pinging for keepalive).
@@ -144,7 +131,7 @@ func (c *Client) handle(msg ClientMessage) {
 // writePump drains the send queue to the socket and pings periodically.
 // Any write/ping error closes the client.
 func (c *Client) writePump(ctx context.Context) {
-	ping := time.NewTicker(pingInterval)
+	ping := time.NewTicker(c.hub.cfg.PingInterval)
 	defer ping.Stop()
 	for {
 		select {
@@ -158,7 +145,7 @@ func (c *Client) writePump(ctx context.Context) {
 				return
 			}
 		case <-ping.C:
-			pctx, cancel := context.WithTimeout(ctx, writeTimeout)
+			pctx, cancel := context.WithTimeout(ctx, c.hub.cfg.WriteTimeout)
 			err := c.conn.Ping(pctx)
 			cancel()
 			if err != nil {
@@ -170,7 +157,7 @@ func (c *Client) writePump(ctx context.Context) {
 }
 
 func (c *Client) writeEvent(ctx context.Context, ev Event) error {
-	wctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	wctx, cancel := context.WithTimeout(ctx, c.hub.cfg.WriteTimeout)
 	defer cancel()
 	return wsjson.Write(wctx, c.conn, ev)
 }

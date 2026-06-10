@@ -49,7 +49,7 @@ func readUntil(ctx context.Context, conn *websocket.Conn, want string) (Event, e
 }
 
 func TestHub_BroadcastReachesSubscriber(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, HubConfig{})
 	conn, ctx, cleanup := dialHub(t, hub)
 	defer cleanup()
 
@@ -84,7 +84,7 @@ func TestHub_BroadcastReachesSubscriber(t *testing.T) {
 }
 
 func TestHub_FiltersUnsubscribedTopics(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, HubConfig{})
 	conn, ctx, cleanup := dialHub(t, hub)
 	defer cleanup()
 
@@ -127,7 +127,7 @@ loop:
 }
 
 func TestHub_ClientCountAndClose(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, HubConfig{})
 	conn, ctx, cleanup := dialHub(t, hub)
 	defer cleanup()
 	_ = ctx
@@ -143,7 +143,7 @@ func TestHub_ClientCountAndClose(t *testing.T) {
 // TestHub_HasSubscribers guards the per-topic subscriber index that lets
 // hot producers skip building events nobody is watching.
 func TestHub_HasSubscribers(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, HubConfig{})
 	conn, ctx, cleanup := dialHub(t, hub)
 	defer cleanup()
 
@@ -163,7 +163,7 @@ func TestHub_HasSubscribers(t *testing.T) {
 // TestHub_HasSubscribersClearedOnDisconnect ensures a dropped connection
 // releases its topic counts (no leak that would keep producers working).
 func TestHub_HasSubscribersClearedOnDisconnect(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, HubConfig{})
 	conn, ctx, cleanup := dialHub(t, hub)
 	defer cleanup()
 

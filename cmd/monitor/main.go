@@ -102,8 +102,15 @@ func run(cfgPath string) error {
 
 	// Phase 8: real-time push hub. Producers (the pull pipeline, alerts,
 	// the streamer, server CRUD) broadcast events to subscribed dashboard
-	// clients over WebSocket, replacing the old setInterval polling.
-	hub := realtime.NewHub(logger)
+	// clients over WebSocket, replacing the old setInterval polling. The
+	// hub always exists (broadcasting with no clients is cheap); the /ws
+	// endpoint is only mounted when realtime.enabled.
+	hub := realtime.NewHub(logger, realtime.HubConfig{
+		SendBuffer:   cfg.Realtime.SendBuffer,
+		PingInterval: time.Duration(cfg.Realtime.PingIntervalSeconds) * time.Second,
+		WriteTimeout: time.Duration(cfg.Realtime.WriteTimeoutSeconds) * time.Second,
+		MaxClients:   cfg.Realtime.MaxClients,
+	})
 
 	// Phase 2: metrics push + scheduler.
 	vmClient := metrics.NewVMClient(
@@ -304,8 +311,15 @@ func run(cfgPath string) error {
 		}(),
 		AlertsEnabled: cfg.Alerts.Enabled,
 
-		// Phase 8: real-time WebSocket hub (mounts GET /api/v1/ws).
-		Hub: hub,
+		// Phase 8: real-time WebSocket hub. Mount GET /api/v1/ws only when
+		// realtime is enabled; the hub itself always runs (no-op with no
+		// clients) so producers don't need a separate nil path.
+		Hub: func() *realtime.Hub {
+			if cfg.Realtime.Enabled {
+				return hub
+			}
+			return nil
+		}(),
 	})
 
 	srv := &http.Server{

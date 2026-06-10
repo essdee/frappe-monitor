@@ -15,8 +15,31 @@ import (
 // drops a client that can't keep up, so one slow browser can never wedge
 // a producer. Our scale (a handful of dashboard tabs) makes the simple
 // lock-per-broadcast approach more than fast enough.
+// HubConfig tunes per-connection behavior. Zero values get sane defaults,
+// so NewHub(logger, HubConfig{}) is valid (used by tests).
+type HubConfig struct {
+	SendBuffer   int           // per-client queue depth (default 128)
+	PingInterval time.Duration // keepalive cadence (default 30s)
+	WriteTimeout time.Duration // per-frame write / ping bound (default 10s)
+	MaxClients   int           // total concurrent connection cap; 0 = unlimited
+}
+
+func (c HubConfig) withDefaults() HubConfig {
+	if c.SendBuffer <= 0 {
+		c.SendBuffer = 128
+	}
+	if c.PingInterval <= 0 {
+		c.PingInterval = 30 * time.Second
+	}
+	if c.WriteTimeout <= 0 {
+		c.WriteTimeout = 10 * time.Second
+	}
+	return c
+}
+
 type Hub struct {
 	logger  *slog.Logger
+	cfg     HubConfig
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
 	// topicSubs is a per-topic subscriber count so HasSubscribers is O(1)
@@ -25,13 +48,14 @@ type Hub struct {
 	closed    bool
 }
 
-// NewHub constructs an empty Hub.
-func NewHub(logger *slog.Logger) *Hub {
+// NewHub constructs an empty Hub with the given connection tuning.
+func NewHub(logger *slog.Logger, cfg HubConfig) *Hub {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Hub{
 		logger:    logger,
+		cfg:       cfg.withDefaults(),
 		clients:   map[*Client]struct{}{},
 		topicSubs: map[string]int{},
 	}

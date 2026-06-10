@@ -82,3 +82,15 @@ alerts:
   #     severity: warning
   #     fingerprint_labels: [server]
   #     message: "CPU on {{.Labels.server}} is {{printf \"%.1f\" .Value}}% used."
+
+# --- Phase 8 real-time (WebSocket push) -----------------------------------
+#
+# The dashboard receives live updates over a WebSocket instead of polling.
+# The socket shares this process's HTTP listener, so its "port" is
+# server.listen_addr above — there is no separate port to open.
+realtime:
+  enabled: true               # expose GET /api/v1/ws; false = manual reloads
+  ping_interval_seconds: 30   # keepalive cadence per connection
+  write_timeout_seconds: 10   # bound on a single frame write / ping
+  send_buffer: 128            # per-client queue depth before a slow client is dropped
+  max_clients: 512            # total concurrent connections (0 = unlimited)

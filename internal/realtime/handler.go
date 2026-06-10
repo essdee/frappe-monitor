@@ -20,6 +20,13 @@ import (
 // connections are additionally blocked because the session cookie is
 // SameSite=Strict and won't be sent on a cross-site upgrade.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+	// Cap total connections so a flood can't exhaust the monitor host.
+	// (Soft check — a small overshoot under a race is harmless.)
+	if h.cfg.MaxClients > 0 && h.ClientCount() >= h.cfg.MaxClients {
+		http.Error(w, "too many realtime connections", http.StatusServiceUnavailable)
+		return
+	}
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 	if err != nil {
 		h.logger.Warn("realtime: websocket accept failed", "err", err)
@@ -31,7 +38,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		hub:    h,
 		conn:   conn,
 		logger: h.logger,
-		send:   make(chan Event, sendBuffer),
+		send:   make(chan Event, h.cfg.SendBuffer),
 		done:   make(chan struct{}),
 		cancel: cancel,
 		subs:   map[string]bool{},
