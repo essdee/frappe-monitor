@@ -12,6 +12,8 @@ import {
 } from '../api'
 import { useTimeRange } from '../composables/useTimeRange'
 import { useMetricsRange } from '../composables/useMetricsRange'
+import { useRealtimeTopic } from '../composables/useRealtime'
+import { topics } from '../realtime'
 import MetricChart from '../components/MetricChart.vue'
 import SystemDetailsCard from '../components/SystemDetailsCard.vue'
 import EditServerForm from '../components/EditServerForm.vue'
@@ -38,7 +40,25 @@ function onEdited(updated: Server) {
   deployMsg.value = null
 }
 
-const { range, refreshSec } = useTimeRange()
+const { range } = useTimeRange()
+
+// Numeric id for the realtime metrics topic.
+const serverId = computed<number | null>(() => (Number.isFinite(props.id) ? props.id : null))
+
+// Live status: patch the header badge the instant a pull updates this
+// server's reachability, instead of waiting for a manual reload.
+useRealtimeTopic(topics.server(props.id), {
+  'server.status': (ev) => {
+    if (server.value && ev.data?.id === props.id) {
+      server.value = {
+        ...server.value,
+        status: ev.data.status,
+        last_error: ev.data.last_error,
+        last_pinged_at: ev.data.last_pinged_at,
+      }
+    }
+  },
+})
 
 async function loadServer() {
   serverError.value = null
@@ -142,10 +162,10 @@ const loadQuery = computed(() => {
   return `frappe_server_load_1m{server="${name}"} or frappe_server_load_5m{server="${name}"} or frappe_server_load_15m{server="${name}"}`
 })
 
-const cpu = useMetricsRange(cpuQuery, range, refreshSec)
-const mem = useMetricsRange(memQuery, range, refreshSec)
-const disk = useMetricsRange(diskQuery, range, refreshSec)
-const load = useMetricsRange(loadQuery, range, refreshSec)
+const cpu = useMetricsRange(cpuQuery, range, serverId)
+const mem = useMetricsRange(memQuery, range, serverId)
+const disk = useMetricsRange(diskQuery, range, serverId)
+const load = useMetricsRange(loadQuery, range, serverId)
 
 const cpuLabel = (_m: Record<string, string>) => 'cpu used'
 const memLabel = (_m: Record<string, string>) => 'mem used'

@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Boxes, Server, RefreshCw, ChevronRight } from 'lucide-vue-next'
 import { fetchBenches, type BenchPair } from '../api'
-import { useTimeRange } from '../composables/useTimeRange'
+import { useRealtimeRefetch } from '../composables/useRealtime'
+import { topics } from '../realtime'
 
 const benches = ref<BenchPair[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
-const { refreshSec } = useTimeRange()
 
 async function refresh() {
   loading.value = true
@@ -22,19 +22,10 @@ async function refresh() {
   }
 }
 
-let timer: ReturnType<typeof setInterval> | null = null
-function arm(secs: number) {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
-  if (secs > 0) timer = setInterval(refresh, secs * 1000)
-}
-watch(refreshSec, (s) => arm(s), { immediate: true })
-onScopeDispose(() => {
-  if (timer) clearInterval(timer)
-})
 onMounted(refresh)
+// Re-derive the bench list when a collection cycle lands (a new bench may
+// have appeared). Event-driven via WebSocket, debounced — no polling.
+useRealtimeRefetch(topics.servers(), ['server.status'], refresh)
 
 // Group by server so the operator can scan one server at a time.
 const grouped = computed<{ server: string; benches: string[] }[]>(() => {

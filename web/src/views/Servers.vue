@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Plus, RefreshCw, Server as ServerIcon } from 'lucide-vue-next'
-import { useTimeRange } from '../composables/useTimeRange'
 import { useServers } from '../composables/useServers'
 import ServerCard from '../components/ServerCard.vue'
 import AddServerForm from '../components/AddServerForm.vue'
 
-const { refreshSec } = useTimeRange()
-const { servers, loading, error, refresh } = useServers(refreshSec)
+const { servers, loading, error, refresh } = useServers()
 
 const showAdd = ref(false)
 function onCreated() {

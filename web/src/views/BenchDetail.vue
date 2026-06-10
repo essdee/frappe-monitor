@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { fetchBench, type BenchDetail } from '../api'
 import { useTimeRange } from '../composables/useTimeRange'
 import { useMetricsRange } from '../composables/useMetricsRange'
+import { useServerId } from '../composables/useServerId'
+import { useServerMetrics } from '../composables/useRealtime'
 import MetricChart from '../components/MetricChart.vue'
 
 const props = defineProps<{ server: string; bench: string }>()
@@ -10,7 +12,9 @@ const props = defineProps<{ server: string; bench: string }>()
 const detail = ref<BenchDetail | null>(null)
 const detailError = ref<string | null>(null)
 const detailLoading = ref(false)
-const { range, refreshSec } = useTimeRange()
+const { range } = useTimeRange()
+// Numeric id for the realtime metrics topic (resolved from the name).
+const serverId = useServerId(computed(() => props.server))
 
 async function loadDetail() {
   detailLoading.value = true
@@ -26,19 +30,9 @@ async function loadDetail() {
 
 onMounted(loadDetail)
 watch(() => [props.server, props.bench], loadDetail)
-
-let timer: ReturnType<typeof setInterval> | null = null
-function arm(secs: number) {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
-  if (secs > 0) timer = setInterval(loadDetail, secs * 1000)
-}
-watch(refreshSec, (s) => arm(s), { immediate: true })
-onScopeDispose(() => {
-  if (timer) clearInterval(timer)
-})
+// Refresh the summary on the next collection push (the charts handle
+// their own live updates via useMetricsRange). Event-driven, no polling.
+useServerMetrics(serverId, loadDetail)
 
 const labels = computed(() => `server="${props.server}",bench="${props.bench}"`)
 
@@ -48,9 +42,9 @@ const supervisorQuery = computed(
 const queueQuery = computed(() => `frappe_bench_redis_queue_depth{${labels.value}}`)
 const appsQuery = computed(() => `frappe_bench_apps_count{${labels.value}}`)
 
-const supervisor = useMetricsRange(supervisorQuery, range, refreshSec)
-const queues = useMetricsRange(queueQuery, range, refreshSec)
-const apps = useMetricsRange(appsQuery, range, refreshSec)
+const supervisor = useMetricsRange(supervisorQuery, range, serverId)
+const queues = useMetricsRange(queueQuery, range, serverId)
+const apps = useMetricsRange(appsQuery, range, serverId)
 
 const supervisorLabel = (m: Record<string, string>) => m.__name__ ?? 'supervisor'
 const queueLabel = (m: Record<string, string>) => m.queue ?? 'queue'

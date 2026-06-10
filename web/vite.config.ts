@@ -21,6 +21,10 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: false,
+        // Proxy the /api/v1/ws WebSocket upgrade too. changeOrigin stays
+        // false so the Host header is preserved and the monitor's
+        // same-origin check passes in dev.
+        ws: true,
       },
       '/healthz': {
         target: 'http://localhost:8080',

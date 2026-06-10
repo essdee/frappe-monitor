@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   fetchSite,
   queryLogs,
@@ -7,6 +7,8 @@ import {
 } from '../api'
 import { useTimeRange } from '../composables/useTimeRange'
 import { useMetricsRange } from '../composables/useMetricsRange'
+import { useServerId } from '../composables/useServerId'
+import { useServerLogs, useServerMetrics } from '../composables/useRealtime'
 import MetricChart from '../components/MetricChart.vue'
 
 const props = defineProps<{ server: string; bench: string; site: string }>()
@@ -14,7 +16,8 @@ const props = defineProps<{ server: string; bench: string; site: string }>()
 const detail = ref<SiteDetail | null>(null)
 const detailError = ref<string | null>(null)
 const detailLoading = ref(false)
-const { range, refreshSec } = useTimeRange()
+const { range } = useTimeRange()
+const serverId = useServerId(computed(() => props.server))
 
 async function loadDetail() {
   detailLoading.value = true
@@ -44,9 +47,9 @@ const healthQuery = computed(
   () => `frappe_site_is_healthy{${labels.value}}`,
 )
 
-const response = useMetricsRange(responseQuery, range, refreshSec)
-const status = useMetricsRange(statusQuery, range, refreshSec)
-const health = useMetricsRange(healthQuery, range, refreshSec)
+const response = useMetricsRange(responseQuery, range, serverId)
+const status = useMetricsRange(statusQuery, range, serverId)
+const health = useMetricsRange(healthQuery, range, serverId)
 
 const oneSeriesLabel = (m: Record<string, string>) =>
   m.__name__ ?? m.site ?? 'series'
@@ -78,20 +81,20 @@ async function loadLogs() {
   }
 }
 
-let logTimer: ReturnType<typeof setInterval> | null = null
-function armLogs(secs: number) {
-  if (logTimer) {
-    clearInterval(logTimer)
-    logTimer = null
-  }
-  if (secs > 0) logTimer = setInterval(loadLogs, secs * 1000)
-}
-watch(refreshSec, (s) => armLogs(s), { immediate: true })
 watch([range, () => props.server, () => props.bench], loadLogs)
 onMounted(loadLogs)
-onScopeDispose(() => {
-  if (logTimer) clearInterval(logTimer)
+
+// Live: prepend each pushed log line for this server, and refresh the
+// site summary on the next collection. Event-driven over WebSocket — no
+// polling. (Loki has no site label yet, so the feed is server-scoped,
+// matching the bench-error-log approximation of the initial load.)
+useServerLogs(serverId, (d) => {
+  logEntries.value = [
+    { ts: d.ts, line: d.line, stream: { log_type: d.file_id, server: props.server } },
+    ...logEntries.value,
+  ].slice(0, 500)
 })
+useServerMetrics(serverId, loadDetail)
 
 function fmtTime(ms: number): string {
   return new Date(ms).toLocaleString()

@@ -1,14 +1,16 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useTimeRange, PRESETS } from '../composables/useTimeRange'
+import { useRealtimeStatus } from '../composables/useRealtime'
 
-const { range, refreshSec, selectPreset, setRefresh } = useTimeRange()
+const { range, selectPreset } = useTimeRange()
 
-const REFRESH_OPTIONS = [
-  { label: 'Off', value: 0 },
-  { label: '30s', value: 30 },
-  { label: '1m', value: 60 },
-  { label: '5m', value: 300 },
-]
+// Live push connection — replaces the old refresh-interval dropdown. The
+// dashboard updates on server push now, so there's no interval to pick.
+const conn = useRealtimeStatus()
+const connLabel = computed(() =>
+  conn.value === 'open' ? 'Live' : conn.value === 'connecting' ? 'Connecting…' : 'Offline',
+)
 
 function formatTs(ts: number): string {
   const d = new Date(ts * 1000)
@@ -28,13 +30,9 @@ function formatTs(ts: number): string {
         {{ label }}
       </button>
     </div>
-    <div class="refresh">
-      <label>Refresh:</label>
-      <select :value="refreshSec" @change="setRefresh(Number(($event.target as HTMLSelectElement).value))">
-        <option v-for="o in REFRESH_OPTIONS" :key="o.value" :value="o.value">
-          {{ o.label }}
-        </option>
-      </select>
+    <div class="conn" :class="conn" :title="`real-time connection: ${connLabel}`">
+      <span class="dot"></span>
+      <span class="conn-label">{{ connLabel }}</span>
     </div>
     <div class="window">
       {{ formatTs(range.from) }} &rarr; {{ formatTs(range.to) }}
@@ -68,19 +66,27 @@ function formatTs(ts: number): string {
 .preset:hover {
   border-color: var(--accent);
 }
-.refresh {
+.conn {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
   white-space: nowrap;
+  color: var(--muted);
 }
-.refresh select {
-  background: var(--card-bg);
-  color: var(--fg);
-  border: 1px solid var(--card-border);
-  padding: 0.2rem 0.4rem;
-  border-radius: 4px;
-  font: inherit;
+.conn .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.conn.open .dot {
+  background: var(--status-reachable);
+}
+.conn.connecting .dot {
+  background: var(--status-warning);
+}
+.conn.closed .dot {
+  background: var(--status-unreachable);
 }
 .window {
   color: var(--muted);
@@ -110,7 +116,7 @@ function formatTs(ts: number): string {
     flex-shrink: 0;
     padding: 0.35rem 0.7rem;
   }
-  .refresh {
+  .conn {
     margin-left: auto;
   }
   .window {

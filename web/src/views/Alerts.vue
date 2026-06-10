@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   Bell,
   BellOff,
@@ -9,9 +9,9 @@ import {
   Info,
 } from 'lucide-vue-next'
 import { fetchAlerts, type AlertsResponse } from '../api'
-import { useTimeRange } from '../composables/useTimeRange'
+import { useRealtimeRefetch } from '../composables/useRealtime'
+import { topics } from '../realtime'
 
-const { refreshSec } = useTimeRange()
 const data = ref<AlertsResponse | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -28,19 +28,10 @@ async function refresh() {
   }
 }
 
-let timer: ReturnType<typeof setInterval> | null = null
-function arm(secs: number) {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
-  if (secs > 0) timer = setInterval(refresh, secs * 1000)
-}
-watch(refreshSec, (s) => arm(s), { immediate: true })
-onScopeDispose(() => {
-  if (timer) clearInterval(timer)
-})
 onMounted(refresh)
+// Refresh the firing list + rules the instant an alert fires or clears.
+// Pure WebSocket push — no polling.
+useRealtimeRefetch(topics.alerts(), ['alert.firing', 'alert.resolved'], refresh)
 
 const enabled = computed(() => data.value?.enabled ?? false)
 const rules = computed(() => data.value?.rules ?? [])
