@@ -164,20 +164,26 @@ func (s *LokiSink) OnLine(ctx context.Context, serverID int, fileID, content str
 	overflow := len(buf.entries) >= s.cfg.MaxBatchLines
 	s.mu.Unlock()
 
-	// Push the line to the dashboard's live feed for this server. The hub
-	// only delivers to clients subscribed to logs:<serverID>, and drops
-	// slow ones, so a chatty log can't back-pressure ingest.
+	// Push the line to the dashboard's live feed for this server — but only
+	// when someone is actually watching. Building the event for every
+	// tailed line when nobody has the live tail open (the common case)
+	// would burn CPU/GC on the hot ingest path; HasSubscribers short-
+	// circuits that. The hub drops slow clients, so a chatty log can't
+	// back-pressure ingest either.
 	if s.broadcaster != nil {
-		s.broadcaster.Broadcast(realtime.Event{
-			Type:  realtime.TypeLogLine,
-			Topic: realtime.TopicLogs(serverID),
-			Data: map[string]any{
-				"server_id": serverID,
-				"file_id":   fileID,
-				"line":      content,
-				"ts":        observedAt.UnixMilli(),
-			},
-		})
+		topic := realtime.TopicLogs(serverID)
+		if s.broadcaster.HasSubscribers(topic) {
+			s.broadcaster.Broadcast(realtime.Event{
+				Type:  realtime.TypeLogLine,
+				Topic: topic,
+				Data: map[string]any{
+					"server_id": serverID,
+					"file_id":   fileID,
+					"line":      content,
+					"ts":        observedAt.UnixMilli(),
+				},
+			})
+		}
 	}
 
 	if overflow {

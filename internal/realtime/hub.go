@@ -19,7 +19,10 @@ type Hub struct {
 	logger  *slog.Logger
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
-	closed  bool
+	// topicSubs is a per-topic subscriber count so HasSubscribers is O(1)
+	// and a hot producer can skip work for a topic nobody is watching.
+	topicSubs map[string]int
+	closed    bool
 }
 
 // NewHub constructs an empty Hub.
@@ -27,7 +30,40 @@ func NewHub(logger *slog.Logger) *Hub {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Hub{logger: logger, clients: map[*Client]struct{}{}}
+	return &Hub{
+		logger:    logger,
+		clients:   map[*Client]struct{}{},
+		topicSubs: map[string]int{},
+	}
+}
+
+// HasSubscribers reports whether any client is currently subscribed to
+// the topic. Lets producers skip building an event nobody will receive.
+func (h *Hub) HasSubscribers(topic string) bool {
+	if h == nil {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.topicSubs[topic] > 0
+}
+
+// incSub / decSub maintain the per-topic subscriber count. Called by a
+// client as its subscription set changes (and by remove on disconnect).
+func (h *Hub) incSub(topic string) {
+	h.mu.Lock()
+	h.topicSubs[topic]++
+	h.mu.Unlock()
+}
+
+func (h *Hub) decSub(topic string) {
+	h.mu.Lock()
+	if h.topicSubs[topic] <= 1 {
+		delete(h.topicSubs, topic)
+	} else {
+		h.topicSubs[topic]--
+	}
+	h.mu.Unlock()
 }
 
 // Broadcast fans an event out to every client subscribed to ev.Topic
@@ -63,10 +99,19 @@ func (h *Hub) add(c *Client) bool {
 	return true
 }
 
-// remove unregisters a client. Idempotent.
+// remove unregisters a client and releases its topic-subscriber counts.
+// Idempotent.
 func (h *Hub) remove(c *Client) {
+	subs := c.topicSet()
 	h.mu.Lock()
 	delete(h.clients, c)
+	for _, t := range subs {
+		if h.topicSubs[t] <= 1 {
+			delete(h.topicSubs, t)
+		} else {
+			h.topicSubs[t]--
+		}
+	}
 	h.mu.Unlock()
 }
 
@@ -88,9 +133,19 @@ func (h *Hub) Close() {
 		clients = append(clients, c)
 	}
 	h.clients = map[*Client]struct{}{}
+	h.topicSubs = map[string]int{}
 	h.mu.Unlock()
 
+	// Close concurrently so a few half-open sockets can't serialize into a
+	// slow shutdown. Each close() cancels the read ctx first, which makes
+	// the underlying conn close return promptly.
+	var wg sync.WaitGroup
 	for _, c := range clients {
-		c.close()
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			c.close()
+		}(c)
 	}
+	wg.Wait()
 }

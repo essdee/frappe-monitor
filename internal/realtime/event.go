@@ -73,13 +73,17 @@ func TopicAlerts() string { return "alerts" }
 func TopicLogs(serverID int) string { return fmt.Sprintf("logs:%d", serverID) }
 
 // Broadcaster is the narrow interface producers depend on so they don't
-// import the whole hub. *Hub implements it.
+// import the whole hub. *Hub implements it. HasSubscribers lets a hot
+// producer (e.g. the per-line log streamer) skip building an event when
+// nobody is listening on the topic.
 type Broadcaster interface {
 	Broadcast(ev Event)
+	HasSubscribers(topic string) bool
 }
 
 // NopBroadcaster is a no-op Broadcaster used when the hub is absent
 // (so producers never need a nil check).
 type NopBroadcaster struct{}
 
-func (NopBroadcaster) Broadcast(Event) {}
+func (NopBroadcaster) Broadcast(Event)            {}
+func (NopBroadcaster) HasSubscribers(string) bool { return false }

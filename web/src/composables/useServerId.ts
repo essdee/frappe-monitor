@@ -10,15 +10,25 @@ export function useServerId(serverName: Ref<string>): Ref<number | null> {
   const id = ref<number | null>(null)
   let cache: { name: string; id: number }[] | null = null
 
-  async function resolve() {
-    if (!cache) {
-      try {
-        cache = (await fetchServers()).map((s) => ({ name: s.name, id: s.id }))
-      } catch {
-        cache = []
-      }
+  async function load() {
+    try {
+      cache = (await fetchServers()).map((s) => ({ name: s.name, id: s.id }))
+    } catch {
+      cache = cache ?? []
     }
-    const found = cache.find((s) => s.name === serverName.value)
+  }
+
+  async function resolve() {
+    if (!cache) await load()
+    let found = cache!.find((s) => s.name === serverName.value)
+    if (!found) {
+      // Cache may be stale (a server was renamed/added since we loaded it —
+      // useServers patches its own list live, but ours is private). Refresh
+      // once before giving up, so a live rename/add doesn't permanently
+      // leave this view's metrics subscription dead.
+      await load()
+      found = cache!.find((s) => s.name === serverName.value)
+    }
     id.value = found ? found.id : null
   }
 

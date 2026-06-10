@@ -34,6 +34,15 @@ class RealtimeClient {
   private backoff = 1000
   private readonly maxBackoff = 30000
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  // opened: did the current socket ever reach OPEN? A socket that closes
+  // without opening means the upgrade was rejected — almost always the
+  // auth gate (401). We count those and stop after a few so an
+  // expired/idle session doesn't reconnect forever against a rejecting
+  // endpoint (the REST 401 redirect only fires when a REST call is made).
+  private opened = false
+  private handshakeFailures = 0
+  private readonly maxHandshakeFailures = 3
+  private stopped = false
 
   /** Reactive connection state for a UI indicator. */
   readonly state: Ref<ConnState> = ref('closed')
@@ -45,6 +54,7 @@ class RealtimeClient {
 
   /** Open the socket if not already open/connecting. Idempotent. */
   connect() {
+    if (this.stopped) return
     if (
       this.ws &&
       (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
@@ -52,10 +62,13 @@ class RealtimeClient {
       return
     }
     this.state.value = 'connecting'
+    this.opened = false
     const ws = new WebSocket(this.endpoint())
     this.ws = ws
 
     ws.onopen = () => {
+      this.opened = true
+      this.handshakeFailures = 0
       this.state.value = 'open'
       this.backoff = 1000
       // Re-assert every active subscription after a (re)connect.
@@ -83,6 +96,15 @@ class RealtimeClient {
     ws.onclose = () => {
       this.state.value = 'closed'
       this.ws = null
+      if (!this.opened) {
+        // Upgrade was rejected before it ever opened (most likely auth).
+        this.handshakeFailures++
+        if (this.handshakeFailures >= this.maxHandshakeFailures) {
+          this.stop()
+          this.redirectToLogin()
+          return
+        }
+      }
       this.scheduleReconnect()
     }
     ws.onerror = () => {
@@ -90,7 +112,37 @@ class RealtimeClient {
     }
   }
 
+  /** disconnect stops reconnection and closes the socket. Call on logout. */
+  disconnect() {
+    this.stop()
+  }
+
+  private stop() {
+    this.stopped = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    if (this.ws) {
+      try {
+        this.ws.close()
+      } catch {
+        // ignore
+      }
+      this.ws = null
+    }
+    this.state.value = 'closed'
+  }
+
+  private redirectToLogin() {
+    if (!window.location.pathname.startsWith('/login')) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search)
+      window.location.assign(`/login?next=${next}`)
+    }
+  }
+
   private scheduleReconnect() {
+    if (this.stopped) return
     if (this.reconnectTimer) return
     // Only bother reconnecting if something still cares about a topic.
     if (this.topicRefs.size === 0) return
@@ -110,6 +162,12 @@ class RealtimeClient {
 
   /** Subscribe to topics (ref-counted). Lazily connects on first use. */
   subscribe(topicList: string[]) {
+    // A fresh subscriber means the app wants the connection live again
+    // (e.g. after a re-login), so clear any prior stop.
+    if (this.stopped) {
+      this.stopped = false
+      this.handshakeFailures = 0
+    }
     const fresh: string[] = []
     for (const t of topicList) {
       const n = this.topicRefs.get(t) ?? 0

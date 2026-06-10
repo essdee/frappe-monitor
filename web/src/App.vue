@@ -11,6 +11,7 @@ import {
 } from 'lucide-vue-next'
 import TimelineFilter from './components/TimelineFilter.vue'
 import { logout } from './api'
+import { realtime } from './realtime'
 
 const route = useRoute()
 const bare = computed(() => route.meta.layout === 'bare')
@@ -19,6 +20,9 @@ async function handleLogout() {
   // Confirm so a misclick on a phone (where the button sits next to
   // nav links) doesn't drop the operator out of the dashboard mid-task.
   if (!window.confirm('Sign out of frappe-monitor?')) return
+  // Stop the live socket so it doesn't reconnect against a now-invalid
+  // session during the brief window before the hard navigation lands.
+  realtime.disconnect()
   try {
     await logout()
   } catch {

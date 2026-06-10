@@ -139,3 +139,40 @@ func TestHub_ClientCountAndClose(t *testing.T) {
 	require.Eventually(t, func() bool { return hub.ClientCount() == 0 },
 		2*time.Second, 20*time.Millisecond, "client should unregister on disconnect")
 }
+
+// TestHub_HasSubscribers guards the per-topic subscriber index that lets
+// hot producers skip building events nobody is watching.
+func TestHub_HasSubscribers(t *testing.T) {
+	hub := NewHub(nil)
+	conn, ctx, cleanup := dialHub(t, hub)
+	defer cleanup()
+
+	require.False(t, hub.HasSubscribers(TopicLogs(7)), "no subscribers initially")
+
+	require.NoError(t, wsjson.Write(ctx, conn,
+		ClientMessage{Action: ActionSubscribe, Topics: []string{TopicLogs(7)}}))
+	require.Eventually(t, func() bool { return hub.HasSubscribers(TopicLogs(7)) },
+		2*time.Second, 20*time.Millisecond, "subscribe should register the topic")
+
+	require.NoError(t, wsjson.Write(ctx, conn,
+		ClientMessage{Action: ActionUnsubscribe, Topics: []string{TopicLogs(7)}}))
+	require.Eventually(t, func() bool { return !hub.HasSubscribers(TopicLogs(7)) },
+		2*time.Second, 20*time.Millisecond, "unsubscribe should clear the topic")
+}
+
+// TestHub_HasSubscribersClearedOnDisconnect ensures a dropped connection
+// releases its topic counts (no leak that would keep producers working).
+func TestHub_HasSubscribersClearedOnDisconnect(t *testing.T) {
+	hub := NewHub(nil)
+	conn, ctx, cleanup := dialHub(t, hub)
+	defer cleanup()
+
+	require.NoError(t, wsjson.Write(ctx, conn,
+		ClientMessage{Action: ActionSubscribe, Topics: []string{TopicAlerts()}}))
+	require.Eventually(t, func() bool { return hub.HasSubscribers(TopicAlerts()) },
+		2*time.Second, 20*time.Millisecond)
+
+	_ = conn.Close(websocket.StatusNormalClosure, "")
+	require.Eventually(t, func() bool { return !hub.HasSubscribers(TopicAlerts()) },
+		2*time.Second, 20*time.Millisecond, "disconnect must release the subscriber count")
+}

@@ -51,6 +51,18 @@ func (c *Client) wants(topic string) bool {
 	return c.subs[topic]
 }
 
+// topicSet returns a snapshot of the client's subscribed topics. Used by
+// the hub on remove() to release the per-topic subscriber counts.
+func (c *Client) topicSet() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]string, 0, len(c.subs))
+	for t := range c.subs {
+		out = append(out, t)
+	}
+	return out
+}
+
 // enqueue does a non-blocking send onto the client's queue. If the queue
 // is full (slow/stuck client) the client is closed rather than blocking
 // the broadcasting producer.
@@ -59,8 +71,12 @@ func (c *Client) enqueue(ev Event) {
 	case c.send <- ev:
 	case <-c.done:
 	default:
+		// Slow/stuck client: tear it down WITHOUT blocking the broadcast.
+		// close() cancels the read ctx (which closes the socket promptly),
+		// but we run it off the hub lock the caller holds so one slow tab
+		// can never stall a producer even momentarily.
 		c.logger.Warn("realtime: client send queue full, dropping client")
-		c.close()
+		go c.close()
 	}
 }
 
@@ -92,23 +108,36 @@ func (c *Client) readPump(ctx context.Context) {
 	}
 }
 
-// handle applies a subscribe/unsubscribe control frame.
+// handle applies a subscribe/unsubscribe control frame and keeps the
+// hub's per-topic subscriber counts in sync.
 func (c *Client) handle(msg ClientMessage) {
+	var added, removed []string
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	switch msg.Action {
 	case ActionSubscribe:
 		for _, t := range msg.Topics {
-			if t != "" {
+			if t != "" && !c.subs[t] {
 				c.subs[t] = true
+				added = append(added, t)
 			}
 		}
 	case ActionUnsubscribe:
 		for _, t := range msg.Topics {
-			delete(c.subs, t)
+			if c.subs[t] {
+				delete(c.subs, t)
+				removed = append(removed, t)
+			}
 		}
 	default:
 		c.logger.Debug("realtime: unknown client action", "action", msg.Action)
+	}
+	c.mu.Unlock()
+	// Update hub counts outside c.mu — incSub/decSub take the hub lock.
+	for _, t := range added {
+		c.hub.incSub(t)
+	}
+	for _, t := range removed {
+		c.hub.decSub(t)
 	}
 }
 

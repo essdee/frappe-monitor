@@ -40,6 +40,21 @@ func (h *serverHandlers) emit(ev realtime.Event) {
 	}
 }
 
+// emitStatus broadcasts a server.status event mirroring the collector
+// pipeline's payload, so an API-driven status change (a manual test-
+// connection) updates the live cards on every connected dashboard
+// immediately — not just the tab that issued the probe.
+func (h *serverHandlers) emitStatus(id int, status, lastErr string) {
+	data := map[string]any{
+		"id":             id,
+		"status":         status,
+		"last_error":     lastErr,
+		"last_pinged_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	h.emit(realtime.Event{Type: realtime.TypeServerStatus, Topic: realtime.TopicServers(), Data: data})
+	h.emit(realtime.Event{Type: realtime.TypeServerStatus, Topic: realtime.TopicServer(id), Data: data})
+}
+
 func (h *serverHandlers) mount(r chi.Router) {
 	r.Post("/servers", h.create)
 	r.Get("/servers", h.list)
@@ -350,6 +365,7 @@ func (h *serverHandlers) testConnection(w http.ResponseWriter, r *http.Request) 
 		if upd := h.store.SetServerStatus(r.Context(), id, "unreachable", pingErr.Error()); upd != nil {
 			h.logger.Error("set status", "err", upd)
 		}
+		h.emitStatus(id, "unreachable", pingErr.Error())
 		writeJSON(w, http.StatusOK, testConnectionResp{
 			Reachable: false,
 			Error:     pingErr.Error(),
@@ -361,6 +377,7 @@ func (h *serverHandlers) testConnection(w http.ResponseWriter, r *http.Request) 
 	if upd := h.store.SetServerStatus(r.Context(), id, "reachable", ""); upd != nil {
 		h.logger.Error("set status", "err", upd)
 	}
+	h.emitStatus(id, "reachable", "")
 	writeJSON(w, http.StatusOK, testConnectionResp{
 		Reachable: true,
 		LatencyMs: lat.Milliseconds(),
