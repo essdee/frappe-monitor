@@ -55,9 +55,11 @@ type ServerEdges struct {
 	LogCursors []*LogCursor `json:"log_cursors,omitempty"`
 	// SystemSnapshot holds the value of the system_snapshot edge.
 	SystemSnapshot *SystemSnapshot `json:"system_snapshot,omitempty"`
+	// DbTargets holds the value of the db_targets edge.
+	DbTargets []*DBTarget `json:"db_targets,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [2]bool
+	loadedTypes [3]bool
 }
 
 // LogCursorsOrErr returns the LogCursors value or an error if the edge
@@ -78,6 +80,15 @@ func (e ServerEdges) SystemSnapshotOrErr() (*SystemSnapshot, error) {
 		return nil, &NotFoundError{label: systemsnapshot.Label}
 	}
 	return nil, &NotLoadedError{edge: "system_snapshot"}
+}
+
+// DbTargetsOrErr returns the DbTargets value or an error if the edge
+// was not loaded in eager-loading.
+func (e ServerEdges) DbTargetsOrErr() ([]*DBTarget, error) {
+	if e.loadedTypes[2] {
+		return e.DbTargets, nil
+	}
+	return nil, &NotLoadedError{edge: "db_targets"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -212,6 +223,11 @@ func (_m *Server) QueryLogCursors() *LogCursorQuery {
 // QuerySystemSnapshot queries the "system_snapshot" edge of the Server entity.
 func (_m *Server) QuerySystemSnapshot() *SystemSnapshotQuery {
 	return NewServerClient(_m.config).QuerySystemSnapshot(_m)
+}
+
+// QueryDbTargets queries the "db_targets" edge of the Server entity.
+func (_m *Server) QueryDbTargets() *DBTargetQuery {
+	return NewServerClient(_m.config).QueryDbTargets(_m)
 }
 
 // Update returns a builder for updating this Server.

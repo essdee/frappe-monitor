@@ -23,6 +23,7 @@ export const topics = {
   server: (id: number) => `server:${id}`,
   alerts: () => 'alerts',
   logs: (serverId: number) => `logs:${serverId}`,
+  databases: () => 'databases',
 }
 
 class RealtimeClient {

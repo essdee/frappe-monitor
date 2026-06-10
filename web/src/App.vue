@@ -5,6 +5,7 @@ import {
   Server,
   Boxes,
   Globe,
+  Database,
   Bell,
   Activity,
   LogOut,
@@ -61,6 +62,10 @@ async function handleLogout() {
         <RouterLink to="/sites" class="nav-link">
           <Globe :size="18" :stroke-width="2" />
           <span>Sites</span>
+        </RouterLink>
+        <RouterLink to="/databases" class="nav-link">
+          <Database :size="18" :stroke-width="2" />
+          <span>Databases</span>
         </RouterLink>
         <RouterLink to="/alerts" class="nav-link">
           <Bell :size="18" :stroke-width="2" />

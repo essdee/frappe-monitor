@@ -4,6 +4,7 @@ package ent
 
 import (
 	"frappe-monitor/ent/alertstate"
+	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/schema"
 	"frappe-monitor/ent/server"
@@ -43,6 +44,48 @@ func init() {
 	alertstate.DefaultUpdatedAt = alertstateDescUpdatedAt.Default.(func() time.Time)
 	// alertstate.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	alertstate.UpdateDefaultUpdatedAt = alertstateDescUpdatedAt.UpdateDefault.(func() time.Time)
+	dbtargetFields := schema.DBTarget{}.Fields()
+	_ = dbtargetFields
+	// dbtargetDescName is the schema descriptor for name field.
+	dbtargetDescName := dbtargetFields[1].Descriptor()
+	// dbtarget.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	dbtarget.NameValidator = dbtargetDescName.Validators[0].(func(string) error)
+	// dbtargetDescEnabled is the schema descriptor for enabled field.
+	dbtargetDescEnabled := dbtargetFields[2].Descriptor()
+	// dbtarget.DefaultEnabled holds the default value on creation for the enabled field.
+	dbtarget.DefaultEnabled = dbtargetDescEnabled.Default.(bool)
+	// dbtargetDescLagThresholdSeconds is the schema descriptor for lag_threshold_seconds field.
+	dbtargetDescLagThresholdSeconds := dbtargetFields[3].Descriptor()
+	// dbtarget.DefaultLagThresholdSeconds holds the default value on creation for the lag_threshold_seconds field.
+	dbtarget.DefaultLagThresholdSeconds = dbtargetDescLagThresholdSeconds.Default.(int)
+	// dbtarget.LagThresholdSecondsValidator is a validator for the "lag_threshold_seconds" field. It is called by the builders before save.
+	dbtarget.LagThresholdSecondsValidator = dbtargetDescLagThresholdSeconds.Validators[0].(func(int) error)
+	// dbtargetDescMysqlCommand is the schema descriptor for mysql_command field.
+	dbtargetDescMysqlCommand := dbtargetFields[4].Descriptor()
+	// dbtarget.DefaultMysqlCommand holds the default value on creation for the mysql_command field.
+	dbtarget.DefaultMysqlCommand = dbtargetDescMysqlCommand.Default.(string)
+	// dbtargetDescHeartbeatEnabled is the schema descriptor for heartbeat_enabled field.
+	dbtargetDescHeartbeatEnabled := dbtargetFields[7].Descriptor()
+	// dbtarget.DefaultHeartbeatEnabled holds the default value on creation for the heartbeat_enabled field.
+	dbtarget.DefaultHeartbeatEnabled = dbtargetDescHeartbeatEnabled.Default.(bool)
+	// dbtargetDescIoRunning is the schema descriptor for io_running field.
+	dbtargetDescIoRunning := dbtargetFields[13].Descriptor()
+	// dbtarget.DefaultIoRunning holds the default value on creation for the io_running field.
+	dbtarget.DefaultIoRunning = dbtargetDescIoRunning.Default.(bool)
+	// dbtargetDescSQLRunning is the schema descriptor for sql_running field.
+	dbtargetDescSQLRunning := dbtargetFields[14].Descriptor()
+	// dbtarget.DefaultSQLRunning holds the default value on creation for the sql_running field.
+	dbtarget.DefaultSQLRunning = dbtargetDescSQLRunning.Default.(bool)
+	// dbtargetDescCreatedAt is the schema descriptor for created_at field.
+	dbtargetDescCreatedAt := dbtargetFields[16].Descriptor()
+	// dbtarget.DefaultCreatedAt holds the default value on creation for the created_at field.
+	dbtarget.DefaultCreatedAt = dbtargetDescCreatedAt.Default.(func() time.Time)
+	// dbtargetDescUpdatedAt is the schema descriptor for updated_at field.
+	dbtargetDescUpdatedAt := dbtargetFields[17].Descriptor()
+	// dbtarget.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	dbtarget.DefaultUpdatedAt = dbtargetDescUpdatedAt.Default.(func() time.Time)
+	// dbtarget.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	dbtarget.UpdateDefaultUpdatedAt = dbtargetDescUpdatedAt.UpdateDefault.(func() time.Time)
 	logcursorFields := schema.LogCursor{}.Fields()
 	_ = logcursorFields
 	// logcursorDescLogPath is the schema descriptor for log_path field.

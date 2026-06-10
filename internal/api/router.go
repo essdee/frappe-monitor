@@ -54,6 +54,11 @@ type Deps struct {
 	// /api/v1/ws is mounted (behind the auth gate) so the dashboard can
 	// receive pushes instead of polling. Nil = endpoint not mounted.
 	Hub *realtime.Hub
+
+	// Phase 9 DB monitor: the on-demand replication checker
+	// (*dbmonitor.Service). Nil = /db-targets/{id}/check returns 503,
+	// but the CRUD endpoints still work.
+	DBChecker DBChecker
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -124,6 +129,17 @@ func NewRouter(d Deps) http.Handler {
 			logger:  d.Logger,
 		}
 		api.Get("/alerts", ah.list)
+
+		// Phase 9 DB monitor: admin-managed replication targets (CRUD +
+		// on-demand check). Always mounted; check returns 503 when the
+		// monitor service isn't wired.
+		dh := &dbTargetHandlers{
+			store:       d.Store,
+			logger:      d.Logger,
+			broadcaster: d.Hub,
+			checker:     d.DBChecker,
+		}
+		dh.mount(api)
 
 		// Phase 8 real-time push. Behind the auth gate: the upgrade
 		// request carries the session cookie, validated by authGate

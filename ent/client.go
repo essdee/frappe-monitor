@@ -12,6 +12,7 @@ import (
 	"frappe-monitor/ent/migrate"
 
 	"frappe-monitor/ent/alertstate"
+	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/server"
 	"frappe-monitor/ent/systemsnapshot"
@@ -29,6 +30,8 @@ type Client struct {
 	Schema *migrate.Schema
 	// AlertState is the client for interacting with the AlertState builders.
 	AlertState *AlertStateClient
+	// DBTarget is the client for interacting with the DBTarget builders.
+	DBTarget *DBTargetClient
 	// LogCursor is the client for interacting with the LogCursor builders.
 	LogCursor *LogCursorClient
 	// Server is the client for interacting with the Server builders.
@@ -47,6 +50,7 @@ func NewClient(opts ...Option) *Client {
 func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.AlertState = NewAlertStateClient(c.config)
+	c.DBTarget = NewDBTargetClient(c.config)
 	c.LogCursor = NewLogCursorClient(c.config)
 	c.Server = NewServerClient(c.config)
 	c.SystemSnapshot = NewSystemSnapshotClient(c.config)
@@ -143,6 +147,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ctx:            ctx,
 		config:         cfg,
 		AlertState:     NewAlertStateClient(cfg),
+		DBTarget:       NewDBTargetClient(cfg),
 		LogCursor:      NewLogCursorClient(cfg),
 		Server:         NewServerClient(cfg),
 		SystemSnapshot: NewSystemSnapshotClient(cfg),
@@ -166,6 +171,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ctx:            ctx,
 		config:         cfg,
 		AlertState:     NewAlertStateClient(cfg),
+		DBTarget:       NewDBTargetClient(cfg),
 		LogCursor:      NewLogCursorClient(cfg),
 		Server:         NewServerClient(cfg),
 		SystemSnapshot: NewSystemSnapshotClient(cfg),
@@ -198,6 +204,7 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	c.AlertState.Use(hooks...)
+	c.DBTarget.Use(hooks...)
 	c.LogCursor.Use(hooks...)
 	c.Server.Use(hooks...)
 	c.SystemSnapshot.Use(hooks...)
@@ -207,6 +214,7 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	c.AlertState.Intercept(interceptors...)
+	c.DBTarget.Intercept(interceptors...)
 	c.LogCursor.Intercept(interceptors...)
 	c.Server.Intercept(interceptors...)
 	c.SystemSnapshot.Intercept(interceptors...)
@@ -217,6 +225,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 	switch m := m.(type) {
 	case *AlertStateMutation:
 		return c.AlertState.mutate(ctx, m)
+	case *DBTargetMutation:
+		return c.DBTarget.mutate(ctx, m)
 	case *LogCursorMutation:
 		return c.LogCursor.mutate(ctx, m)
 	case *ServerMutation:
@@ -358,6 +368,155 @@ func (c *AlertStateClient) mutate(ctx context.Context, m *AlertStateMutation) (V
 		return (&AlertStateDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown AlertState mutation op: %q", m.Op())
+	}
+}
+
+// DBTargetClient is a client for the DBTarget schema.
+type DBTargetClient struct {
+	config
+}
+
+// NewDBTargetClient returns a client for the DBTarget from the given config.
+func NewDBTargetClient(c config) *DBTargetClient {
+	return &DBTargetClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `dbtarget.Hooks(f(g(h())))`.
+func (c *DBTargetClient) Use(hooks ...Hook) {
+	c.hooks.DBTarget = append(c.hooks.DBTarget, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `dbtarget.Intercept(f(g(h())))`.
+func (c *DBTargetClient) Intercept(interceptors ...Interceptor) {
+	c.inters.DBTarget = append(c.inters.DBTarget, interceptors...)
+}
+
+// Create returns a builder for creating a DBTarget entity.
+func (c *DBTargetClient) Create() *DBTargetCreate {
+	mutation := newDBTargetMutation(c.config, OpCreate)
+	return &DBTargetCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of DBTarget entities.
+func (c *DBTargetClient) CreateBulk(builders ...*DBTargetCreate) *DBTargetCreateBulk {
+	return &DBTargetCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *DBTargetClient) MapCreateBulk(slice any, setFunc func(*DBTargetCreate, int)) *DBTargetCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &DBTargetCreateBulk{err: fmt.Errorf("calling to DBTargetClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*DBTargetCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &DBTargetCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for DBTarget.
+func (c *DBTargetClient) Update() *DBTargetUpdate {
+	mutation := newDBTargetMutation(c.config, OpUpdate)
+	return &DBTargetUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *DBTargetClient) UpdateOne(_m *DBTarget) *DBTargetUpdateOne {
+	mutation := newDBTargetMutation(c.config, OpUpdateOne, withDBTarget(_m))
+	return &DBTargetUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *DBTargetClient) UpdateOneID(id int) *DBTargetUpdateOne {
+	mutation := newDBTargetMutation(c.config, OpUpdateOne, withDBTargetID(id))
+	return &DBTargetUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for DBTarget.
+func (c *DBTargetClient) Delete() *DBTargetDelete {
+	mutation := newDBTargetMutation(c.config, OpDelete)
+	return &DBTargetDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *DBTargetClient) DeleteOne(_m *DBTarget) *DBTargetDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *DBTargetClient) DeleteOneID(id int) *DBTargetDeleteOne {
+	builder := c.Delete().Where(dbtarget.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &DBTargetDeleteOne{builder}
+}
+
+// Query returns a query builder for DBTarget.
+func (c *DBTargetClient) Query() *DBTargetQuery {
+	return &DBTargetQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeDBTarget},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a DBTarget entity by its id.
+func (c *DBTargetClient) Get(ctx context.Context, id int) (*DBTarget, error) {
+	return c.Query().Where(dbtarget.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *DBTargetClient) GetX(ctx context.Context, id int) *DBTarget {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryServer queries the server edge of a DBTarget.
+func (c *DBTargetClient) QueryServer(_m *DBTarget) *ServerQuery {
+	query := (&ServerClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(dbtarget.Table, dbtarget.FieldID, id),
+			sqlgraph.To(server.Table, server.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, dbtarget.ServerTable, dbtarget.ServerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *DBTargetClient) Hooks() []Hook {
+	return c.hooks.DBTarget
+}
+
+// Interceptors returns the client interceptors.
+func (c *DBTargetClient) Interceptors() []Interceptor {
+	return c.inters.DBTarget
+}
+
+func (c *DBTargetClient) mutate(ctx context.Context, m *DBTargetMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&DBTargetCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&DBTargetUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&DBTargetUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&DBTargetDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown DBTarget mutation op: %q", m.Op())
 	}
 }
 
@@ -650,6 +809,22 @@ func (c *ServerClient) QuerySystemSnapshot(_m *Server) *SystemSnapshotQuery {
 	return query
 }
 
+// QueryDbTargets queries the db_targets edge of a Server.
+func (c *ServerClient) QueryDbTargets(_m *Server) *DBTargetQuery {
+	query := (&DBTargetClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(server.Table, server.FieldID, id),
+			sqlgraph.To(dbtarget.Table, dbtarget.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, server.DbTargetsTable, server.DbTargetsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *ServerClient) Hooks() []Hook {
 	return c.hooks.Server
@@ -827,9 +1002,9 @@ func (c *SystemSnapshotClient) mutate(ctx context.Context, m *SystemSnapshotMuta
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AlertState, LogCursor, Server, SystemSnapshot []ent.Hook
+		AlertState, DBTarget, LogCursor, Server, SystemSnapshot []ent.Hook
 	}
 	inters struct {
-		AlertState, LogCursor, Server, SystemSnapshot []ent.Interceptor
+		AlertState, DBTarget, LogCursor, Server, SystemSnapshot []ent.Interceptor
 	}
 )

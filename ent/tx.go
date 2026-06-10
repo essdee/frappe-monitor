@@ -14,6 +14,8 @@ type Tx struct {
 	config
 	// AlertState is the client for interacting with the AlertState builders.
 	AlertState *AlertStateClient
+	// DBTarget is the client for interacting with the DBTarget builders.
+	DBTarget *DBTargetClient
 	// LogCursor is the client for interacting with the LogCursor builders.
 	LogCursor *LogCursorClient
 	// Server is the client for interacting with the Server builders.
@@ -152,6 +154,7 @@ func (tx *Tx) Client() *Client {
 
 func (tx *Tx) init() {
 	tx.AlertState = NewAlertStateClient(tx.config)
+	tx.DBTarget = NewDBTargetClient(tx.config)
 	tx.LogCursor = NewLogCursorClient(tx.config)
 	tx.Server = NewServerClient(tx.config)
 	tx.SystemSnapshot = NewSystemSnapshotClient(tx.config)

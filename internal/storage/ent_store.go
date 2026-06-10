@@ -14,6 +14,7 @@ import (
 
 	"frappe-monitor/ent"
 	entalertstate "frappe-monitor/ent/alertstate"
+	entdbtarget "frappe-monitor/ent/dbtarget"
 	entlogcursor "frappe-monitor/ent/logcursor"
 	entserver "frappe-monitor/ent/server"
 	entsystemsnapshot "frappe-monitor/ent/systemsnapshot"
@@ -162,6 +163,10 @@ func (s *EntStore) DeleteServer(ctx context.Context, id int) error {
 	if _, err := tx.SystemSnapshot.Delete().
 		Where(entsystemsnapshot.HasServerWith(entserver.ID(id))).Exec(ctx); err != nil {
 		return fmt.Errorf("delete system snapshot: %w", err)
+	}
+	if _, err := tx.DBTarget.Delete().
+		Where(entdbtarget.HasServerWith(entserver.ID(id))).Exec(ctx); err != nil {
+		return fmt.Errorf("delete db targets: %w", err)
 	}
 	if err := tx.Server.DeleteOneID(id).Exec(ctx); err != nil {
 		if ent.IsNotFound(err) {

@@ -47,5 +47,30 @@ func DefaultRules() []Rule {
 			FingerprintLabels: []string{"server", "bench", "queue"},
 			Message:           `Redis queue "{{.Labels.queue}}" on {{.Labels.server}}/{{.Labels.bench}} has {{.Value}} pending jobs.`,
 		},
+		// --- DB replication (Phase 9). Only fire when db_monitor targets
+		//     exist (the metrics are absent otherwise). ---
+		{
+			Name:              "db_replication_stopped",
+			Expr:              `frappe_db_replication_io_running == 0 or frappe_db_replication_sql_running == 0`,
+			Severity:          "critical",
+			FingerprintLabels: []string{"server", "db"},
+			Message:           `Replication on DB "{{.Labels.db}}" ({{.Labels.server}}) has STOPPED — an IO/SQL thread is not running.`,
+		},
+		{
+			// frappe_db_replication_lagging is 1 when lag exceeds that
+			// target's own configured threshold.
+			Name:              "db_replication_lag_high",
+			Expr:              `frappe_db_replication_lagging == 1`,
+			Severity:          "warning",
+			FingerprintLabels: []string{"server", "db"},
+			Message:           `Replication on DB "{{.Labels.db}}" ({{.Labels.server}}) is lagging past its threshold.`,
+		},
+		{
+			Name:              "db_unreachable",
+			Expr:              `frappe_db_up == 0`,
+			Severity:          "warning",
+			FingerprintLabels: []string{"server", "db"},
+			Message:           `Cannot reach DB "{{.Labels.db}}" ({{.Labels.server}}) to check replication.`,
+		},
 	}
 }

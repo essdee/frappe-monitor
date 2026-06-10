@@ -19,6 +19,7 @@ import (
 	"frappe-monitor/internal/api"
 	"frappe-monitor/internal/collector"
 	"frappe-monitor/internal/config"
+	"frappe-monitor/internal/dbmonitor"
 	"frappe-monitor/internal/logs"
 	"frappe-monitor/internal/metrics"
 	"frappe-monitor/internal/realtime"
@@ -212,6 +213,14 @@ func run(cfgPath string) error {
 			"script_path", cfg.Streaming.ScriptPath)
 	}
 
+	// Phase 9: DB replication monitor. Always runs (idle with no targets;
+	// targets are admin-managed via the dashboard). Reuses the SSH pool to
+	// read SHOW SLAVE/REPLICA STATUS, pushes replication metrics to VM, and
+	// pushes live status over WebSocket.
+	dbMon := dbmonitor.New(store, pool, vmClient, hub, logger)
+	dbMon.Start(ctx)
+	logger.Info("db monitor started")
+
 	// Lifecycle hooks: when a server is added/removed via the API,
 	// register/deregister its scheduler entry so it picks up (or
 	// stops) on the next tick — no process restart required.
@@ -320,6 +329,9 @@ func run(cfgPath string) error {
 			}
 			return nil
 		}(),
+
+		// Phase 9: on-demand DB replication checks.
+		DBChecker: dbMon,
 	})
 
 	srv := &http.Server{
@@ -364,6 +376,9 @@ func run(cfgPath string) error {
 	if alertsSvc != nil {
 		alertsSvc.Stop()
 	}
+	// DB monitor uses the store + SSH pool directly, so stop it before
+	// those close.
+	dbMon.Stop()
 	if streamMgr != nil {
 		// Stop the streamer BEFORE shutting down the store/pool —
 		// the manager's final flush touches both. 5s timeout matches

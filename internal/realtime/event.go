@@ -41,6 +41,10 @@ const (
 	TypeAlertResolved = "alert.resolved" // an alert cleared
 	TypeLogLine       = "log.line"       // a live log line from the streamer
 	TypeHello         = "hello"          // sent once on connect (server clock + version)
+	TypeDBStatus      = "db.status"      // a DB target's replication status changed
+	TypeDBCreated     = "db.created"     // a DB target was added
+	TypeDBUpdated     = "db.updated"     // a DB target was edited
+	TypeDBDeleted     = "db.deleted"     // a DB target was removed
 )
 
 // Client→server control actions (see ClientMessage.Action).
@@ -71,6 +75,9 @@ func TopicAlerts() string { return "alerts" }
 
 // TopicLogs is the room for a single server's live log lines.
 func TopicLogs(serverID int) string { return fmt.Sprintf("logs:%d", serverID) }
+
+// TopicDatabases is the room for the DB-target list + replication status.
+func TopicDatabases() string { return "databases" }
 
 // Broadcaster is the narrow interface producers depend on so they don't
 // import the whole hub. *Hub implements it. HasSubscribers lets a hot

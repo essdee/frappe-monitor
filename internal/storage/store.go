@@ -84,6 +84,67 @@ type AlertState struct {
 	UpdatedAt      time.Time
 }
 
+// DBTarget mirrors ent/schema/dbtarget.go — a database replica watched
+// for replication health. Reached via its server's SSH.
+type DBTarget struct {
+	ID                  int
+	ServerID            int
+	Name                string
+	Enabled             bool
+	LagThresholdSeconds int
+	MySQLCommand        string
+	DefaultsFile        string
+	Socket              string
+	HeartbeatEnabled    bool
+	HeartbeatQuery      string
+	// Last-check status.
+	Status              string // unknown|healthy|lagging|broken|unreachable
+	LastCheckedAt       *time.Time
+	LagSeconds          *int64
+	HeartbeatLagSeconds *float64
+	IORunning           bool
+	SQLRunning          bool
+	LastError           string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type NewDBTarget struct {
+	ServerID            int
+	Name                string
+	Enabled             bool
+	LagThresholdSeconds int
+	MySQLCommand        string
+	DefaultsFile        string
+	Socket              string
+	HeartbeatEnabled    bool
+	HeartbeatQuery      string
+}
+
+// UpdateDBTarget carries optional fields (nil = leave unchanged).
+type UpdateDBTarget struct {
+	ServerID            *int
+	Name                *string
+	Enabled             *bool
+	LagThresholdSeconds *int
+	MySQLCommand        *string
+	DefaultsFile        *string
+	Socket              *string
+	HeartbeatEnabled    *bool
+	HeartbeatQuery      *string
+}
+
+// DBTargetStatus is one replication-check result, persisted by the
+// dbmonitor service so the dashboard + alerts can read the latest state.
+type DBTargetStatus struct {
+	Status              string
+	LagSeconds          *int64
+	HeartbeatLagSeconds *float64
+	IORunning           bool
+	SQLRunning          bool
+	LastError           string
+}
+
 type Store interface {
 	CreateServer(ctx context.Context, in NewServer) (*Server, error)
 	GetServer(ctx context.Context, id int) (*Server, error)
@@ -105,6 +166,14 @@ type Store interface {
 	// System snapshot — operator-friendly inventory per server.
 	GetSystemSnapshot(ctx context.Context, serverID int) (*SystemSnapshot, error)
 	UpsertSystemSnapshot(ctx context.Context, in SystemSnapshot) error
+
+	// DB replication targets — Phase 9 (admin-managed).
+	CreateDBTarget(ctx context.Context, in NewDBTarget) (*DBTarget, error)
+	GetDBTarget(ctx context.Context, id int) (*DBTarget, error)
+	ListDBTargets(ctx context.Context) ([]*DBTarget, error)
+	UpdateDBTarget(ctx context.Context, id int, in UpdateDBTarget) (*DBTarget, error)
+	DeleteDBTarget(ctx context.Context, id int) error
+	SetDBTargetStatus(ctx context.Context, id int, st DBTargetStatus) error
 
 	Close() error
 }

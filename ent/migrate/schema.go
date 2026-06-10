@@ -33,6 +33,42 @@ var (
 			},
 		},
 	}
+	// DbTargetsColumns holds the columns for the "db_targets" table.
+	DbTargetsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "name", Type: field.TypeString},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "lag_threshold_seconds", Type: field.TypeInt, Default: 30},
+		{Name: "mysql_command", Type: field.TypeString, Default: "mysql"},
+		{Name: "defaults_file", Type: field.TypeString, Nullable: true},
+		{Name: "socket", Type: field.TypeString, Nullable: true},
+		{Name: "heartbeat_enabled", Type: field.TypeBool, Default: false},
+		{Name: "heartbeat_query", Type: field.TypeString, Nullable: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"unknown", "healthy", "lagging", "broken", "unreachable"}, Default: "unknown"},
+		{Name: "last_checked_at", Type: field.TypeTime, Nullable: true},
+		{Name: "lag_seconds", Type: field.TypeInt64, Nullable: true},
+		{Name: "heartbeat_lag_seconds", Type: field.TypeFloat64, Nullable: true},
+		{Name: "io_running", Type: field.TypeBool, Default: false},
+		{Name: "sql_running", Type: field.TypeBool, Default: false},
+		{Name: "last_error", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "server_id", Type: field.TypeInt},
+	}
+	// DbTargetsTable holds the schema information for the "db_targets" table.
+	DbTargetsTable = &schema.Table{
+		Name:       "db_targets",
+		Columns:    DbTargetsColumns,
+		PrimaryKey: []*schema.Column{DbTargetsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "db_targets_servers_db_targets",
+				Columns:    []*schema.Column{DbTargetsColumns[18]},
+				RefColumns: []*schema.Column{ServersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+	}
 	// LogCursorsColumns holds the columns for the "log_cursors" table.
 	LogCursorsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -109,6 +145,7 @@ var (
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		AlertStatesTable,
+		DbTargetsTable,
 		LogCursorsTable,
 		ServersTable,
 		SystemSnapshotsTable,
@@ -116,6 +153,7 @@ var (
 )
 
 func init() {
+	DbTargetsTable.ForeignKeys[0].RefTable = ServersTable
 	LogCursorsTable.ForeignKeys[0].RefTable = ServersTable
 	SystemSnapshotsTable.ForeignKeys[0].RefTable = ServersTable
 }

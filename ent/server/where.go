@@ -691,6 +691,29 @@ func HasSystemSnapshotWith(preds ...predicate.SystemSnapshot) predicate.Server {
 	})
 }
 
+// HasDbTargets applies the HasEdge predicate on the "db_targets" edge.
+func HasDbTargets() predicate.Server {
+	return predicate.Server(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, DbTargetsTable, DbTargetsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasDbTargetsWith applies the HasEdge predicate on the "db_targets" edge with a given conditions (other predicates).
+func HasDbTargetsWith(preds ...predicate.DBTarget) predicate.Server {
+	return predicate.Server(func(s *sql.Selector) {
+		step := newDbTargetsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.Server) predicate.Server {
 	return predicate.Server(sql.AndPredicates(predicates...))

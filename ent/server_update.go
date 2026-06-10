@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
 	"frappe-monitor/ent/server"
@@ -232,6 +233,21 @@ func (_u *ServerUpdate) SetSystemSnapshot(v *SystemSnapshot) *ServerUpdate {
 	return _u.SetSystemSnapshotID(v.ID)
 }
 
+// AddDbTargetIDs adds the "db_targets" edge to the DBTarget entity by IDs.
+func (_u *ServerUpdate) AddDbTargetIDs(ids ...int) *ServerUpdate {
+	_u.mutation.AddDbTargetIDs(ids...)
+	return _u
+}
+
+// AddDbTargets adds the "db_targets" edges to the DBTarget entity.
+func (_u *ServerUpdate) AddDbTargets(v ...*DBTarget) *ServerUpdate {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDbTargetIDs(ids...)
+}
+
 // Mutation returns the ServerMutation object of the builder.
 func (_u *ServerUpdate) Mutation() *ServerMutation {
 	return _u.mutation
@@ -262,6 +278,27 @@ func (_u *ServerUpdate) RemoveLogCursors(v ...*LogCursor) *ServerUpdate {
 func (_u *ServerUpdate) ClearSystemSnapshot() *ServerUpdate {
 	_u.mutation.ClearSystemSnapshot()
 	return _u
+}
+
+// ClearDbTargets clears all "db_targets" edges to the DBTarget entity.
+func (_u *ServerUpdate) ClearDbTargets() *ServerUpdate {
+	_u.mutation.ClearDbTargets()
+	return _u
+}
+
+// RemoveDbTargetIDs removes the "db_targets" edge to DBTarget entities by IDs.
+func (_u *ServerUpdate) RemoveDbTargetIDs(ids ...int) *ServerUpdate {
+	_u.mutation.RemoveDbTargetIDs(ids...)
+	return _u
+}
+
+// RemoveDbTargets removes "db_targets" edges to DBTarget entities.
+func (_u *ServerUpdate) RemoveDbTargets(v ...*DBTarget) *ServerUpdate {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDbTargetIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -462,6 +499,51 @@ func (_u *ServerUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(systemsnapshot.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.DbTargetsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.DbTargetsTable,
+			Columns: []string{server.DbTargetsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dbtarget.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDbTargetsIDs(); len(nodes) > 0 && !_u.mutation.DbTargetsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.DbTargetsTable,
+			Columns: []string{server.DbTargetsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dbtarget.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DbTargetsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.DbTargetsTable,
+			Columns: []string{server.DbTargetsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dbtarget.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {
@@ -690,6 +772,21 @@ func (_u *ServerUpdateOne) SetSystemSnapshot(v *SystemSnapshot) *ServerUpdateOne
 	return _u.SetSystemSnapshotID(v.ID)
 }
 
+// AddDbTargetIDs adds the "db_targets" edge to the DBTarget entity by IDs.
+func (_u *ServerUpdateOne) AddDbTargetIDs(ids ...int) *ServerUpdateOne {
+	_u.mutation.AddDbTargetIDs(ids...)
+	return _u
+}
+
+// AddDbTargets adds the "db_targets" edges to the DBTarget entity.
+func (_u *ServerUpdateOne) AddDbTargets(v ...*DBTarget) *ServerUpdateOne {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDbTargetIDs(ids...)
+}
+
 // Mutation returns the ServerMutation object of the builder.
 func (_u *ServerUpdateOne) Mutation() *ServerMutation {
 	return _u.mutation
@@ -720,6 +817,27 @@ func (_u *ServerUpdateOne) RemoveLogCursors(v ...*LogCursor) *ServerUpdateOne {
 func (_u *ServerUpdateOne) ClearSystemSnapshot() *ServerUpdateOne {
 	_u.mutation.ClearSystemSnapshot()
 	return _u
+}
+
+// ClearDbTargets clears all "db_targets" edges to the DBTarget entity.
+func (_u *ServerUpdateOne) ClearDbTargets() *ServerUpdateOne {
+	_u.mutation.ClearDbTargets()
+	return _u
+}
+
+// RemoveDbTargetIDs removes the "db_targets" edge to DBTarget entities by IDs.
+func (_u *ServerUpdateOne) RemoveDbTargetIDs(ids ...int) *ServerUpdateOne {
+	_u.mutation.RemoveDbTargetIDs(ids...)
+	return _u
+}
+
+// RemoveDbTargets removes "db_targets" edges to DBTarget entities.
+func (_u *ServerUpdateOne) RemoveDbTargets(v ...*DBTarget) *ServerUpdateOne {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDbTargetIDs(ids...)
 }
 
 // Where appends a list predicates to the ServerUpdate builder.
@@ -950,6 +1068,51 @@ func (_u *ServerUpdateOne) sqlSave(ctx context.Context) (_node *Server, err erro
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(systemsnapshot.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.DbTargetsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.DbTargetsTable,
+			Columns: []string{server.DbTargetsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dbtarget.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDbTargetsIDs(); len(nodes) > 0 && !_u.mutation.DbTargetsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.DbTargetsTable,
+			Columns: []string{server.DbTargetsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dbtarget.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DbTargetsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.DbTargetsTable,
+			Columns: []string{server.DbTargetsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dbtarget.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

@@ -367,3 +367,88 @@ export function queryLogs(
   })
   return jsonGET<LogsQueryResponse>(`/api/v1/logs/query?${params.toString()}`)
 }
+
+// --- Phase 9 DB monitor (replication) ----------------------------------
+
+export interface DBTarget {
+  id: number
+  server_id: number
+  /** Resolved server name — only carried on db.status push events. */
+  server?: string
+  name: string
+  enabled: boolean
+  lag_threshold_seconds: number
+  mysql_command: string
+  defaults_file?: string
+  socket?: string
+  heartbeat_enabled: boolean
+  heartbeat_query?: string
+  status: string // unknown | healthy | lagging | broken | unreachable
+  last_checked_at?: string
+  lag_seconds?: number
+  heartbeat_lag_seconds?: number
+  io_running: boolean
+  sql_running: boolean
+  last_error?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface NewDBTargetInput {
+  server_id: number
+  name: string
+  enabled?: boolean
+  lag_threshold_seconds?: number
+  mysql_command?: string
+  defaults_file?: string
+  socket?: string
+  heartbeat_enabled?: boolean
+  heartbeat_query?: string
+}
+
+export function fetchDBTargets(): Promise<DBTarget[]> {
+  return jsonGET<DBTarget[]>('/api/v1/db-targets')
+}
+
+export async function createDBTarget(input: NewDBTargetInput): Promise<DBTarget> {
+  const resp = await apiFetch('/api/v1/db-targets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!resp.ok) {
+    const b = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${b.slice(0, 200)}`)
+  }
+  return (await resp.json()) as DBTarget
+}
+
+export async function patchDBTarget(id: number, patch: Partial<NewDBTargetInput>): Promise<DBTarget> {
+  const resp = await apiFetch(`/api/v1/db-targets/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  if (!resp.ok) {
+    const b = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${b.slice(0, 200)}`)
+  }
+  return (await resp.json()) as DBTarget
+}
+
+export async function deleteDBTarget(id: number): Promise<void> {
+  const resp = await apiFetch(`/api/v1/db-targets/${id}`, { method: 'DELETE' })
+  if (!resp.ok && resp.status !== 204) {
+    const b = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${b.slice(0, 200)}`)
+  }
+}
+
+export async function checkDBTarget(id: number): Promise<DBTarget> {
+  const resp = await apiFetch(`/api/v1/db-targets/${id}/check`, { method: 'POST' })
+  if (!resp.ok) {
+    const b = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${b.slice(0, 200)}`)
+  }
+  return (await resp.json()) as DBTarget
+}

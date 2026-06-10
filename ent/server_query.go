@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"fmt"
+	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
 	"frappe-monitor/ent/server"
@@ -27,6 +28,7 @@ type ServerQuery struct {
 	predicates         []predicate.Server
 	withLogCursors     *LogCursorQuery
 	withSystemSnapshot *SystemSnapshotQuery
+	withDbTargets      *DBTargetQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -100,6 +102,28 @@ func (_q *ServerQuery) QuerySystemSnapshot() *SystemSnapshotQuery {
 			sqlgraph.From(server.Table, server.FieldID, selector),
 			sqlgraph.To(systemsnapshot.Table, systemsnapshot.FieldID),
 			sqlgraph.Edge(sqlgraph.O2O, false, server.SystemSnapshotTable, server.SystemSnapshotColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryDbTargets chains the current query on the "db_targets" edge.
+func (_q *ServerQuery) QueryDbTargets() *DBTargetQuery {
+	query := (&DBTargetClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(server.Table, server.FieldID, selector),
+			sqlgraph.To(dbtarget.Table, dbtarget.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, server.DbTargetsTable, server.DbTargetsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -301,6 +325,7 @@ func (_q *ServerQuery) Clone() *ServerQuery {
 		predicates:         append([]predicate.Server{}, _q.predicates...),
 		withLogCursors:     _q.withLogCursors.Clone(),
 		withSystemSnapshot: _q.withSystemSnapshot.Clone(),
+		withDbTargets:      _q.withDbTargets.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -326,6 +351,17 @@ func (_q *ServerQuery) WithSystemSnapshot(opts ...func(*SystemSnapshotQuery)) *S
 		opt(query)
 	}
 	_q.withSystemSnapshot = query
+	return _q
+}
+
+// WithDbTargets tells the query-builder to eager-load the nodes that are connected to
+// the "db_targets" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *ServerQuery) WithDbTargets(opts ...func(*DBTargetQuery)) *ServerQuery {
+	query := (&DBTargetClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withDbTargets = query
 	return _q
 }
 
@@ -407,9 +443,10 @@ func (_q *ServerQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Serve
 	var (
 		nodes       = []*Server{}
 		_spec       = _q.querySpec()
-		loadedTypes = [2]bool{
+		loadedTypes = [3]bool{
 			_q.withLogCursors != nil,
 			_q.withSystemSnapshot != nil,
+			_q.withDbTargets != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -440,6 +477,13 @@ func (_q *ServerQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Serve
 	if query := _q.withSystemSnapshot; query != nil {
 		if err := _q.loadSystemSnapshot(ctx, query, nodes, nil,
 			func(n *Server, e *SystemSnapshot) { n.Edges.SystemSnapshot = e }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withDbTargets; query != nil {
+		if err := _q.loadDbTargets(ctx, query, nodes,
+			func(n *Server) { n.Edges.DbTargets = []*DBTarget{} },
+			func(n *Server, e *DBTarget) { n.Edges.DbTargets = append(n.Edges.DbTargets, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -500,6 +544,36 @@ func (_q *ServerQuery) loadSystemSnapshot(ctx context.Context, query *SystemSnap
 		node, ok := nodeids[*fk]
 		if !ok {
 			return fmt.Errorf(`unexpected referenced foreign-key "server_system_snapshot" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *ServerQuery) loadDbTargets(ctx context.Context, query *DBTargetQuery, nodes []*Server, init func(*Server), assign func(*Server, *DBTarget)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int]*Server)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(dbtarget.FieldServerID)
+	}
+	query.Where(predicate.DBTarget(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(server.DbTargetsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ServerID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "server_id" returned %v for node %v`, fk, n.ID)
 		}
 		assign(node, n)
 	}

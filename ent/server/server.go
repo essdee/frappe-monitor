@@ -43,6 +43,8 @@ const (
 	EdgeLogCursors = "log_cursors"
 	// EdgeSystemSnapshot holds the string denoting the system_snapshot edge name in mutations.
 	EdgeSystemSnapshot = "system_snapshot"
+	// EdgeDbTargets holds the string denoting the db_targets edge name in mutations.
+	EdgeDbTargets = "db_targets"
 	// Table holds the table name of the server in the database.
 	Table = "servers"
 	// LogCursorsTable is the table that holds the log_cursors relation/edge.
@@ -59,6 +61,13 @@ const (
 	SystemSnapshotInverseTable = "system_snapshots"
 	// SystemSnapshotColumn is the table column denoting the system_snapshot relation/edge.
 	SystemSnapshotColumn = "server_system_snapshot"
+	// DbTargetsTable is the table that holds the db_targets relation/edge.
+	DbTargetsTable = "db_targets"
+	// DbTargetsInverseTable is the table name for the DBTarget entity.
+	// It exists in this package in order to avoid circular dependency with the "dbtarget" package.
+	DbTargetsInverseTable = "db_targets"
+	// DbTargetsColumn is the table column denoting the db_targets relation/edge.
+	DbTargetsColumn = "server_id"
 )
 
 // Columns holds all SQL columns for server fields.
@@ -214,6 +223,20 @@ func BySystemSnapshotField(field string, opts ...sql.OrderTermOption) OrderOptio
 		sqlgraph.OrderByNeighborTerms(s, newSystemSnapshotStep(), sql.OrderByField(field, opts...))
 	}
 }
+
+// ByDbTargetsCount orders the results by db_targets count.
+func ByDbTargetsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newDbTargetsStep(), opts...)
+	}
+}
+
+// ByDbTargets orders the results by db_targets terms.
+func ByDbTargets(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newDbTargetsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newLogCursorsStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -226,5 +249,12 @@ func newSystemSnapshotStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(SystemSnapshotInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2O, false, SystemSnapshotTable, SystemSnapshotColumn),
+	)
+}
+func newDbTargetsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(DbTargetsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, DbTargetsTable, DbTargetsColumn),
 	)
 }

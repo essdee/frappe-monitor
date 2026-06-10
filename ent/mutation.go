@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"frappe-monitor/ent/alertstate"
+	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
 	"frappe-monitor/ent/server"
@@ -28,6 +29,7 @@ const (
 
 	// Node types.
 	TypeAlertState     = "AlertState"
+	TypeDBTarget       = "DBTarget"
 	TypeLogCursor      = "LogCursor"
 	TypeServer         = "Server"
 	TypeSystemSnapshot = "SystemSnapshot"
@@ -795,6 +797,1544 @@ func (m *AlertStateMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown AlertState edge %s", name)
 }
 
+// DBTargetMutation represents an operation that mutates the DBTarget nodes in the graph.
+type DBTargetMutation struct {
+	config
+	op                       Op
+	typ                      string
+	id                       *int
+	name                     *string
+	enabled                  *bool
+	lag_threshold_seconds    *int
+	addlag_threshold_seconds *int
+	mysql_command            *string
+	defaults_file            *string
+	socket                   *string
+	heartbeat_enabled        *bool
+	heartbeat_query          *string
+	status                   *dbtarget.Status
+	last_checked_at          *time.Time
+	lag_seconds              *int64
+	addlag_seconds           *int64
+	heartbeat_lag_seconds    *float64
+	addheartbeat_lag_seconds *float64
+	io_running               *bool
+	sql_running              *bool
+	last_error               *string
+	created_at               *time.Time
+	updated_at               *time.Time
+	clearedFields            map[string]struct{}
+	server                   *int
+	clearedserver            bool
+	done                     bool
+	oldValue                 func(context.Context) (*DBTarget, error)
+	predicates               []predicate.DBTarget
+}
+
+var _ ent.Mutation = (*DBTargetMutation)(nil)
+
+// dbtargetOption allows management of the mutation configuration using functional options.
+type dbtargetOption func(*DBTargetMutation)
+
+// newDBTargetMutation creates new mutation for the DBTarget entity.
+func newDBTargetMutation(c config, op Op, opts ...dbtargetOption) *DBTargetMutation {
+	m := &DBTargetMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeDBTarget,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withDBTargetID sets the ID field of the mutation.
+func withDBTargetID(id int) dbtargetOption {
+	return func(m *DBTargetMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *DBTarget
+		)
+		m.oldValue = func(ctx context.Context) (*DBTarget, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().DBTarget.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withDBTarget sets the old DBTarget of the mutation.
+func withDBTarget(node *DBTarget) dbtargetOption {
+	return func(m *DBTargetMutation) {
+		m.oldValue = func(context.Context) (*DBTarget, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m DBTargetMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m DBTargetMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *DBTargetMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *DBTargetMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().DBTarget.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetServerID sets the "server_id" field.
+func (m *DBTargetMutation) SetServerID(i int) {
+	m.server = &i
+}
+
+// ServerID returns the value of the "server_id" field in the mutation.
+func (m *DBTargetMutation) ServerID() (r int, exists bool) {
+	v := m.server
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldServerID returns the old "server_id" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldServerID(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldServerID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldServerID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldServerID: %w", err)
+	}
+	return oldValue.ServerID, nil
+}
+
+// ResetServerID resets all changes to the "server_id" field.
+func (m *DBTargetMutation) ResetServerID() {
+	m.server = nil
+}
+
+// SetName sets the "name" field.
+func (m *DBTargetMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *DBTargetMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *DBTargetMutation) ResetName() {
+	m.name = nil
+}
+
+// SetEnabled sets the "enabled" field.
+func (m *DBTargetMutation) SetEnabled(b bool) {
+	m.enabled = &b
+}
+
+// Enabled returns the value of the "enabled" field in the mutation.
+func (m *DBTargetMutation) Enabled() (r bool, exists bool) {
+	v := m.enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnabled returns the old "enabled" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnabled: %w", err)
+	}
+	return oldValue.Enabled, nil
+}
+
+// ResetEnabled resets all changes to the "enabled" field.
+func (m *DBTargetMutation) ResetEnabled() {
+	m.enabled = nil
+}
+
+// SetLagThresholdSeconds sets the "lag_threshold_seconds" field.
+func (m *DBTargetMutation) SetLagThresholdSeconds(i int) {
+	m.lag_threshold_seconds = &i
+	m.addlag_threshold_seconds = nil
+}
+
+// LagThresholdSeconds returns the value of the "lag_threshold_seconds" field in the mutation.
+func (m *DBTargetMutation) LagThresholdSeconds() (r int, exists bool) {
+	v := m.lag_threshold_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLagThresholdSeconds returns the old "lag_threshold_seconds" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldLagThresholdSeconds(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLagThresholdSeconds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLagThresholdSeconds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLagThresholdSeconds: %w", err)
+	}
+	return oldValue.LagThresholdSeconds, nil
+}
+
+// AddLagThresholdSeconds adds i to the "lag_threshold_seconds" field.
+func (m *DBTargetMutation) AddLagThresholdSeconds(i int) {
+	if m.addlag_threshold_seconds != nil {
+		*m.addlag_threshold_seconds += i
+	} else {
+		m.addlag_threshold_seconds = &i
+	}
+}
+
+// AddedLagThresholdSeconds returns the value that was added to the "lag_threshold_seconds" field in this mutation.
+func (m *DBTargetMutation) AddedLagThresholdSeconds() (r int, exists bool) {
+	v := m.addlag_threshold_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetLagThresholdSeconds resets all changes to the "lag_threshold_seconds" field.
+func (m *DBTargetMutation) ResetLagThresholdSeconds() {
+	m.lag_threshold_seconds = nil
+	m.addlag_threshold_seconds = nil
+}
+
+// SetMysqlCommand sets the "mysql_command" field.
+func (m *DBTargetMutation) SetMysqlCommand(s string) {
+	m.mysql_command = &s
+}
+
+// MysqlCommand returns the value of the "mysql_command" field in the mutation.
+func (m *DBTargetMutation) MysqlCommand() (r string, exists bool) {
+	v := m.mysql_command
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMysqlCommand returns the old "mysql_command" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldMysqlCommand(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMysqlCommand is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMysqlCommand requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMysqlCommand: %w", err)
+	}
+	return oldValue.MysqlCommand, nil
+}
+
+// ResetMysqlCommand resets all changes to the "mysql_command" field.
+func (m *DBTargetMutation) ResetMysqlCommand() {
+	m.mysql_command = nil
+}
+
+// SetDefaultsFile sets the "defaults_file" field.
+func (m *DBTargetMutation) SetDefaultsFile(s string) {
+	m.defaults_file = &s
+}
+
+// DefaultsFile returns the value of the "defaults_file" field in the mutation.
+func (m *DBTargetMutation) DefaultsFile() (r string, exists bool) {
+	v := m.defaults_file
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDefaultsFile returns the old "defaults_file" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldDefaultsFile(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDefaultsFile is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDefaultsFile requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDefaultsFile: %w", err)
+	}
+	return oldValue.DefaultsFile, nil
+}
+
+// ClearDefaultsFile clears the value of the "defaults_file" field.
+func (m *DBTargetMutation) ClearDefaultsFile() {
+	m.defaults_file = nil
+	m.clearedFields[dbtarget.FieldDefaultsFile] = struct{}{}
+}
+
+// DefaultsFileCleared returns if the "defaults_file" field was cleared in this mutation.
+func (m *DBTargetMutation) DefaultsFileCleared() bool {
+	_, ok := m.clearedFields[dbtarget.FieldDefaultsFile]
+	return ok
+}
+
+// ResetDefaultsFile resets all changes to the "defaults_file" field.
+func (m *DBTargetMutation) ResetDefaultsFile() {
+	m.defaults_file = nil
+	delete(m.clearedFields, dbtarget.FieldDefaultsFile)
+}
+
+// SetSocket sets the "socket" field.
+func (m *DBTargetMutation) SetSocket(s string) {
+	m.socket = &s
+}
+
+// Socket returns the value of the "socket" field in the mutation.
+func (m *DBTargetMutation) Socket() (r string, exists bool) {
+	v := m.socket
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSocket returns the old "socket" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldSocket(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSocket is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSocket requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSocket: %w", err)
+	}
+	return oldValue.Socket, nil
+}
+
+// ClearSocket clears the value of the "socket" field.
+func (m *DBTargetMutation) ClearSocket() {
+	m.socket = nil
+	m.clearedFields[dbtarget.FieldSocket] = struct{}{}
+}
+
+// SocketCleared returns if the "socket" field was cleared in this mutation.
+func (m *DBTargetMutation) SocketCleared() bool {
+	_, ok := m.clearedFields[dbtarget.FieldSocket]
+	return ok
+}
+
+// ResetSocket resets all changes to the "socket" field.
+func (m *DBTargetMutation) ResetSocket() {
+	m.socket = nil
+	delete(m.clearedFields, dbtarget.FieldSocket)
+}
+
+// SetHeartbeatEnabled sets the "heartbeat_enabled" field.
+func (m *DBTargetMutation) SetHeartbeatEnabled(b bool) {
+	m.heartbeat_enabled = &b
+}
+
+// HeartbeatEnabled returns the value of the "heartbeat_enabled" field in the mutation.
+func (m *DBTargetMutation) HeartbeatEnabled() (r bool, exists bool) {
+	v := m.heartbeat_enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHeartbeatEnabled returns the old "heartbeat_enabled" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldHeartbeatEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHeartbeatEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHeartbeatEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHeartbeatEnabled: %w", err)
+	}
+	return oldValue.HeartbeatEnabled, nil
+}
+
+// ResetHeartbeatEnabled resets all changes to the "heartbeat_enabled" field.
+func (m *DBTargetMutation) ResetHeartbeatEnabled() {
+	m.heartbeat_enabled = nil
+}
+
+// SetHeartbeatQuery sets the "heartbeat_query" field.
+func (m *DBTargetMutation) SetHeartbeatQuery(s string) {
+	m.heartbeat_query = &s
+}
+
+// HeartbeatQuery returns the value of the "heartbeat_query" field in the mutation.
+func (m *DBTargetMutation) HeartbeatQuery() (r string, exists bool) {
+	v := m.heartbeat_query
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHeartbeatQuery returns the old "heartbeat_query" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldHeartbeatQuery(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHeartbeatQuery is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHeartbeatQuery requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHeartbeatQuery: %w", err)
+	}
+	return oldValue.HeartbeatQuery, nil
+}
+
+// ClearHeartbeatQuery clears the value of the "heartbeat_query" field.
+func (m *DBTargetMutation) ClearHeartbeatQuery() {
+	m.heartbeat_query = nil
+	m.clearedFields[dbtarget.FieldHeartbeatQuery] = struct{}{}
+}
+
+// HeartbeatQueryCleared returns if the "heartbeat_query" field was cleared in this mutation.
+func (m *DBTargetMutation) HeartbeatQueryCleared() bool {
+	_, ok := m.clearedFields[dbtarget.FieldHeartbeatQuery]
+	return ok
+}
+
+// ResetHeartbeatQuery resets all changes to the "heartbeat_query" field.
+func (m *DBTargetMutation) ResetHeartbeatQuery() {
+	m.heartbeat_query = nil
+	delete(m.clearedFields, dbtarget.FieldHeartbeatQuery)
+}
+
+// SetStatus sets the "status" field.
+func (m *DBTargetMutation) SetStatus(d dbtarget.Status) {
+	m.status = &d
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *DBTargetMutation) Status() (r dbtarget.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldStatus(ctx context.Context) (v dbtarget.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *DBTargetMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetLastCheckedAt sets the "last_checked_at" field.
+func (m *DBTargetMutation) SetLastCheckedAt(t time.Time) {
+	m.last_checked_at = &t
+}
+
+// LastCheckedAt returns the value of the "last_checked_at" field in the mutation.
+func (m *DBTargetMutation) LastCheckedAt() (r time.Time, exists bool) {
+	v := m.last_checked_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastCheckedAt returns the old "last_checked_at" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldLastCheckedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastCheckedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastCheckedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastCheckedAt: %w", err)
+	}
+	return oldValue.LastCheckedAt, nil
+}
+
+// ClearLastCheckedAt clears the value of the "last_checked_at" field.
+func (m *DBTargetMutation) ClearLastCheckedAt() {
+	m.last_checked_at = nil
+	m.clearedFields[dbtarget.FieldLastCheckedAt] = struct{}{}
+}
+
+// LastCheckedAtCleared returns if the "last_checked_at" field was cleared in this mutation.
+func (m *DBTargetMutation) LastCheckedAtCleared() bool {
+	_, ok := m.clearedFields[dbtarget.FieldLastCheckedAt]
+	return ok
+}
+
+// ResetLastCheckedAt resets all changes to the "last_checked_at" field.
+func (m *DBTargetMutation) ResetLastCheckedAt() {
+	m.last_checked_at = nil
+	delete(m.clearedFields, dbtarget.FieldLastCheckedAt)
+}
+
+// SetLagSeconds sets the "lag_seconds" field.
+func (m *DBTargetMutation) SetLagSeconds(i int64) {
+	m.lag_seconds = &i
+	m.addlag_seconds = nil
+}
+
+// LagSeconds returns the value of the "lag_seconds" field in the mutation.
+func (m *DBTargetMutation) LagSeconds() (r int64, exists bool) {
+	v := m.lag_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLagSeconds returns the old "lag_seconds" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldLagSeconds(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLagSeconds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLagSeconds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLagSeconds: %w", err)
+	}
+	return oldValue.LagSeconds, nil
+}
+
+// AddLagSeconds adds i to the "lag_seconds" field.
+func (m *DBTargetMutation) AddLagSeconds(i int64) {
+	if m.addlag_seconds != nil {
+		*m.addlag_seconds += i
+	} else {
+		m.addlag_seconds = &i
+	}
+}
+
+// AddedLagSeconds returns the value that was added to the "lag_seconds" field in this mutation.
+func (m *DBTargetMutation) AddedLagSeconds() (r int64, exists bool) {
+	v := m.addlag_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearLagSeconds clears the value of the "lag_seconds" field.
+func (m *DBTargetMutation) ClearLagSeconds() {
+	m.lag_seconds = nil
+	m.addlag_seconds = nil
+	m.clearedFields[dbtarget.FieldLagSeconds] = struct{}{}
+}
+
+// LagSecondsCleared returns if the "lag_seconds" field was cleared in this mutation.
+func (m *DBTargetMutation) LagSecondsCleared() bool {
+	_, ok := m.clearedFields[dbtarget.FieldLagSeconds]
+	return ok
+}
+
+// ResetLagSeconds resets all changes to the "lag_seconds" field.
+func (m *DBTargetMutation) ResetLagSeconds() {
+	m.lag_seconds = nil
+	m.addlag_seconds = nil
+	delete(m.clearedFields, dbtarget.FieldLagSeconds)
+}
+
+// SetHeartbeatLagSeconds sets the "heartbeat_lag_seconds" field.
+func (m *DBTargetMutation) SetHeartbeatLagSeconds(f float64) {
+	m.heartbeat_lag_seconds = &f
+	m.addheartbeat_lag_seconds = nil
+}
+
+// HeartbeatLagSeconds returns the value of the "heartbeat_lag_seconds" field in the mutation.
+func (m *DBTargetMutation) HeartbeatLagSeconds() (r float64, exists bool) {
+	v := m.heartbeat_lag_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHeartbeatLagSeconds returns the old "heartbeat_lag_seconds" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldHeartbeatLagSeconds(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHeartbeatLagSeconds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHeartbeatLagSeconds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHeartbeatLagSeconds: %w", err)
+	}
+	return oldValue.HeartbeatLagSeconds, nil
+}
+
+// AddHeartbeatLagSeconds adds f to the "heartbeat_lag_seconds" field.
+func (m *DBTargetMutation) AddHeartbeatLagSeconds(f float64) {
+	if m.addheartbeat_lag_seconds != nil {
+		*m.addheartbeat_lag_seconds += f
+	} else {
+		m.addheartbeat_lag_seconds = &f
+	}
+}
+
+// AddedHeartbeatLagSeconds returns the value that was added to the "heartbeat_lag_seconds" field in this mutation.
+func (m *DBTargetMutation) AddedHeartbeatLagSeconds() (r float64, exists bool) {
+	v := m.addheartbeat_lag_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearHeartbeatLagSeconds clears the value of the "heartbeat_lag_seconds" field.
+func (m *DBTargetMutation) ClearHeartbeatLagSeconds() {
+	m.heartbeat_lag_seconds = nil
+	m.addheartbeat_lag_seconds = nil
+	m.clearedFields[dbtarget.FieldHeartbeatLagSeconds] = struct{}{}
+}
+
+// HeartbeatLagSecondsCleared returns if the "heartbeat_lag_seconds" field was cleared in this mutation.
+func (m *DBTargetMutation) HeartbeatLagSecondsCleared() bool {
+	_, ok := m.clearedFields[dbtarget.FieldHeartbeatLagSeconds]
+	return ok
+}
+
+// ResetHeartbeatLagSeconds resets all changes to the "heartbeat_lag_seconds" field.
+func (m *DBTargetMutation) ResetHeartbeatLagSeconds() {
+	m.heartbeat_lag_seconds = nil
+	m.addheartbeat_lag_seconds = nil
+	delete(m.clearedFields, dbtarget.FieldHeartbeatLagSeconds)
+}
+
+// SetIoRunning sets the "io_running" field.
+func (m *DBTargetMutation) SetIoRunning(b bool) {
+	m.io_running = &b
+}
+
+// IoRunning returns the value of the "io_running" field in the mutation.
+func (m *DBTargetMutation) IoRunning() (r bool, exists bool) {
+	v := m.io_running
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIoRunning returns the old "io_running" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldIoRunning(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIoRunning is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIoRunning requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIoRunning: %w", err)
+	}
+	return oldValue.IoRunning, nil
+}
+
+// ResetIoRunning resets all changes to the "io_running" field.
+func (m *DBTargetMutation) ResetIoRunning() {
+	m.io_running = nil
+}
+
+// SetSQLRunning sets the "sql_running" field.
+func (m *DBTargetMutation) SetSQLRunning(b bool) {
+	m.sql_running = &b
+}
+
+// SQLRunning returns the value of the "sql_running" field in the mutation.
+func (m *DBTargetMutation) SQLRunning() (r bool, exists bool) {
+	v := m.sql_running
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSQLRunning returns the old "sql_running" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldSQLRunning(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSQLRunning is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSQLRunning requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSQLRunning: %w", err)
+	}
+	return oldValue.SQLRunning, nil
+}
+
+// ResetSQLRunning resets all changes to the "sql_running" field.
+func (m *DBTargetMutation) ResetSQLRunning() {
+	m.sql_running = nil
+}
+
+// SetLastError sets the "last_error" field.
+func (m *DBTargetMutation) SetLastError(s string) {
+	m.last_error = &s
+}
+
+// LastError returns the value of the "last_error" field in the mutation.
+func (m *DBTargetMutation) LastError() (r string, exists bool) {
+	v := m.last_error
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastError returns the old "last_error" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldLastError(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastError is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastError requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastError: %w", err)
+	}
+	return oldValue.LastError, nil
+}
+
+// ClearLastError clears the value of the "last_error" field.
+func (m *DBTargetMutation) ClearLastError() {
+	m.last_error = nil
+	m.clearedFields[dbtarget.FieldLastError] = struct{}{}
+}
+
+// LastErrorCleared returns if the "last_error" field was cleared in this mutation.
+func (m *DBTargetMutation) LastErrorCleared() bool {
+	_, ok := m.clearedFields[dbtarget.FieldLastError]
+	return ok
+}
+
+// ResetLastError resets all changes to the "last_error" field.
+func (m *DBTargetMutation) ResetLastError() {
+	m.last_error = nil
+	delete(m.clearedFields, dbtarget.FieldLastError)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *DBTargetMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *DBTargetMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *DBTargetMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *DBTargetMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *DBTargetMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the DBTarget entity.
+// If the DBTarget object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DBTargetMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *DBTargetMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// ClearServer clears the "server" edge to the Server entity.
+func (m *DBTargetMutation) ClearServer() {
+	m.clearedserver = true
+	m.clearedFields[dbtarget.FieldServerID] = struct{}{}
+}
+
+// ServerCleared reports if the "server" edge to the Server entity was cleared.
+func (m *DBTargetMutation) ServerCleared() bool {
+	return m.clearedserver
+}
+
+// ServerIDs returns the "server" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ServerID instead. It exists only for internal usage by the builders.
+func (m *DBTargetMutation) ServerIDs() (ids []int) {
+	if id := m.server; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetServer resets all changes to the "server" edge.
+func (m *DBTargetMutation) ResetServer() {
+	m.server = nil
+	m.clearedserver = false
+}
+
+// Where appends a list predicates to the DBTargetMutation builder.
+func (m *DBTargetMutation) Where(ps ...predicate.DBTarget) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the DBTargetMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *DBTargetMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.DBTarget, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *DBTargetMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *DBTargetMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (DBTarget).
+func (m *DBTargetMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *DBTargetMutation) Fields() []string {
+	fields := make([]string, 0, 18)
+	if m.server != nil {
+		fields = append(fields, dbtarget.FieldServerID)
+	}
+	if m.name != nil {
+		fields = append(fields, dbtarget.FieldName)
+	}
+	if m.enabled != nil {
+		fields = append(fields, dbtarget.FieldEnabled)
+	}
+	if m.lag_threshold_seconds != nil {
+		fields = append(fields, dbtarget.FieldLagThresholdSeconds)
+	}
+	if m.mysql_command != nil {
+		fields = append(fields, dbtarget.FieldMysqlCommand)
+	}
+	if m.defaults_file != nil {
+		fields = append(fields, dbtarget.FieldDefaultsFile)
+	}
+	if m.socket != nil {
+		fields = append(fields, dbtarget.FieldSocket)
+	}
+	if m.heartbeat_enabled != nil {
+		fields = append(fields, dbtarget.FieldHeartbeatEnabled)
+	}
+	if m.heartbeat_query != nil {
+		fields = append(fields, dbtarget.FieldHeartbeatQuery)
+	}
+	if m.status != nil {
+		fields = append(fields, dbtarget.FieldStatus)
+	}
+	if m.last_checked_at != nil {
+		fields = append(fields, dbtarget.FieldLastCheckedAt)
+	}
+	if m.lag_seconds != nil {
+		fields = append(fields, dbtarget.FieldLagSeconds)
+	}
+	if m.heartbeat_lag_seconds != nil {
+		fields = append(fields, dbtarget.FieldHeartbeatLagSeconds)
+	}
+	if m.io_running != nil {
+		fields = append(fields, dbtarget.FieldIoRunning)
+	}
+	if m.sql_running != nil {
+		fields = append(fields, dbtarget.FieldSQLRunning)
+	}
+	if m.last_error != nil {
+		fields = append(fields, dbtarget.FieldLastError)
+	}
+	if m.created_at != nil {
+		fields = append(fields, dbtarget.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, dbtarget.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *DBTargetMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case dbtarget.FieldServerID:
+		return m.ServerID()
+	case dbtarget.FieldName:
+		return m.Name()
+	case dbtarget.FieldEnabled:
+		return m.Enabled()
+	case dbtarget.FieldLagThresholdSeconds:
+		return m.LagThresholdSeconds()
+	case dbtarget.FieldMysqlCommand:
+		return m.MysqlCommand()
+	case dbtarget.FieldDefaultsFile:
+		return m.DefaultsFile()
+	case dbtarget.FieldSocket:
+		return m.Socket()
+	case dbtarget.FieldHeartbeatEnabled:
+		return m.HeartbeatEnabled()
+	case dbtarget.FieldHeartbeatQuery:
+		return m.HeartbeatQuery()
+	case dbtarget.FieldStatus:
+		return m.Status()
+	case dbtarget.FieldLastCheckedAt:
+		return m.LastCheckedAt()
+	case dbtarget.FieldLagSeconds:
+		return m.LagSeconds()
+	case dbtarget.FieldHeartbeatLagSeconds:
+		return m.HeartbeatLagSeconds()
+	case dbtarget.FieldIoRunning:
+		return m.IoRunning()
+	case dbtarget.FieldSQLRunning:
+		return m.SQLRunning()
+	case dbtarget.FieldLastError:
+		return m.LastError()
+	case dbtarget.FieldCreatedAt:
+		return m.CreatedAt()
+	case dbtarget.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *DBTargetMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case dbtarget.FieldServerID:
+		return m.OldServerID(ctx)
+	case dbtarget.FieldName:
+		return m.OldName(ctx)
+	case dbtarget.FieldEnabled:
+		return m.OldEnabled(ctx)
+	case dbtarget.FieldLagThresholdSeconds:
+		return m.OldLagThresholdSeconds(ctx)
+	case dbtarget.FieldMysqlCommand:
+		return m.OldMysqlCommand(ctx)
+	case dbtarget.FieldDefaultsFile:
+		return m.OldDefaultsFile(ctx)
+	case dbtarget.FieldSocket:
+		return m.OldSocket(ctx)
+	case dbtarget.FieldHeartbeatEnabled:
+		return m.OldHeartbeatEnabled(ctx)
+	case dbtarget.FieldHeartbeatQuery:
+		return m.OldHeartbeatQuery(ctx)
+	case dbtarget.FieldStatus:
+		return m.OldStatus(ctx)
+	case dbtarget.FieldLastCheckedAt:
+		return m.OldLastCheckedAt(ctx)
+	case dbtarget.FieldLagSeconds:
+		return m.OldLagSeconds(ctx)
+	case dbtarget.FieldHeartbeatLagSeconds:
+		return m.OldHeartbeatLagSeconds(ctx)
+	case dbtarget.FieldIoRunning:
+		return m.OldIoRunning(ctx)
+	case dbtarget.FieldSQLRunning:
+		return m.OldSQLRunning(ctx)
+	case dbtarget.FieldLastError:
+		return m.OldLastError(ctx)
+	case dbtarget.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case dbtarget.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown DBTarget field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *DBTargetMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case dbtarget.FieldServerID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetServerID(v)
+		return nil
+	case dbtarget.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
+	case dbtarget.FieldEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnabled(v)
+		return nil
+	case dbtarget.FieldLagThresholdSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLagThresholdSeconds(v)
+		return nil
+	case dbtarget.FieldMysqlCommand:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMysqlCommand(v)
+		return nil
+	case dbtarget.FieldDefaultsFile:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDefaultsFile(v)
+		return nil
+	case dbtarget.FieldSocket:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSocket(v)
+		return nil
+	case dbtarget.FieldHeartbeatEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHeartbeatEnabled(v)
+		return nil
+	case dbtarget.FieldHeartbeatQuery:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHeartbeatQuery(v)
+		return nil
+	case dbtarget.FieldStatus:
+		v, ok := value.(dbtarget.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case dbtarget.FieldLastCheckedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastCheckedAt(v)
+		return nil
+	case dbtarget.FieldLagSeconds:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLagSeconds(v)
+		return nil
+	case dbtarget.FieldHeartbeatLagSeconds:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHeartbeatLagSeconds(v)
+		return nil
+	case dbtarget.FieldIoRunning:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIoRunning(v)
+		return nil
+	case dbtarget.FieldSQLRunning:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSQLRunning(v)
+		return nil
+	case dbtarget.FieldLastError:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastError(v)
+		return nil
+	case dbtarget.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case dbtarget.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown DBTarget field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *DBTargetMutation) AddedFields() []string {
+	var fields []string
+	if m.addlag_threshold_seconds != nil {
+		fields = append(fields, dbtarget.FieldLagThresholdSeconds)
+	}
+	if m.addlag_seconds != nil {
+		fields = append(fields, dbtarget.FieldLagSeconds)
+	}
+	if m.addheartbeat_lag_seconds != nil {
+		fields = append(fields, dbtarget.FieldHeartbeatLagSeconds)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *DBTargetMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case dbtarget.FieldLagThresholdSeconds:
+		return m.AddedLagThresholdSeconds()
+	case dbtarget.FieldLagSeconds:
+		return m.AddedLagSeconds()
+	case dbtarget.FieldHeartbeatLagSeconds:
+		return m.AddedHeartbeatLagSeconds()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *DBTargetMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case dbtarget.FieldLagThresholdSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddLagThresholdSeconds(v)
+		return nil
+	case dbtarget.FieldLagSeconds:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddLagSeconds(v)
+		return nil
+	case dbtarget.FieldHeartbeatLagSeconds:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHeartbeatLagSeconds(v)
+		return nil
+	}
+	return fmt.Errorf("unknown DBTarget numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *DBTargetMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(dbtarget.FieldDefaultsFile) {
+		fields = append(fields, dbtarget.FieldDefaultsFile)
+	}
+	if m.FieldCleared(dbtarget.FieldSocket) {
+		fields = append(fields, dbtarget.FieldSocket)
+	}
+	if m.FieldCleared(dbtarget.FieldHeartbeatQuery) {
+		fields = append(fields, dbtarget.FieldHeartbeatQuery)
+	}
+	if m.FieldCleared(dbtarget.FieldLastCheckedAt) {
+		fields = append(fields, dbtarget.FieldLastCheckedAt)
+	}
+	if m.FieldCleared(dbtarget.FieldLagSeconds) {
+		fields = append(fields, dbtarget.FieldLagSeconds)
+	}
+	if m.FieldCleared(dbtarget.FieldHeartbeatLagSeconds) {
+		fields = append(fields, dbtarget.FieldHeartbeatLagSeconds)
+	}
+	if m.FieldCleared(dbtarget.FieldLastError) {
+		fields = append(fields, dbtarget.FieldLastError)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *DBTargetMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *DBTargetMutation) ClearField(name string) error {
+	switch name {
+	case dbtarget.FieldDefaultsFile:
+		m.ClearDefaultsFile()
+		return nil
+	case dbtarget.FieldSocket:
+		m.ClearSocket()
+		return nil
+	case dbtarget.FieldHeartbeatQuery:
+		m.ClearHeartbeatQuery()
+		return nil
+	case dbtarget.FieldLastCheckedAt:
+		m.ClearLastCheckedAt()
+		return nil
+	case dbtarget.FieldLagSeconds:
+		m.ClearLagSeconds()
+		return nil
+	case dbtarget.FieldHeartbeatLagSeconds:
+		m.ClearHeartbeatLagSeconds()
+		return nil
+	case dbtarget.FieldLastError:
+		m.ClearLastError()
+		return nil
+	}
+	return fmt.Errorf("unknown DBTarget nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *DBTargetMutation) ResetField(name string) error {
+	switch name {
+	case dbtarget.FieldServerID:
+		m.ResetServerID()
+		return nil
+	case dbtarget.FieldName:
+		m.ResetName()
+		return nil
+	case dbtarget.FieldEnabled:
+		m.ResetEnabled()
+		return nil
+	case dbtarget.FieldLagThresholdSeconds:
+		m.ResetLagThresholdSeconds()
+		return nil
+	case dbtarget.FieldMysqlCommand:
+		m.ResetMysqlCommand()
+		return nil
+	case dbtarget.FieldDefaultsFile:
+		m.ResetDefaultsFile()
+		return nil
+	case dbtarget.FieldSocket:
+		m.ResetSocket()
+		return nil
+	case dbtarget.FieldHeartbeatEnabled:
+		m.ResetHeartbeatEnabled()
+		return nil
+	case dbtarget.FieldHeartbeatQuery:
+		m.ResetHeartbeatQuery()
+		return nil
+	case dbtarget.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case dbtarget.FieldLastCheckedAt:
+		m.ResetLastCheckedAt()
+		return nil
+	case dbtarget.FieldLagSeconds:
+		m.ResetLagSeconds()
+		return nil
+	case dbtarget.FieldHeartbeatLagSeconds:
+		m.ResetHeartbeatLagSeconds()
+		return nil
+	case dbtarget.FieldIoRunning:
+		m.ResetIoRunning()
+		return nil
+	case dbtarget.FieldSQLRunning:
+		m.ResetSQLRunning()
+		return nil
+	case dbtarget.FieldLastError:
+		m.ResetLastError()
+		return nil
+	case dbtarget.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case dbtarget.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown DBTarget field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *DBTargetMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.server != nil {
+		edges = append(edges, dbtarget.EdgeServer)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *DBTargetMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case dbtarget.EdgeServer:
+		if id := m.server; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *DBTargetMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *DBTargetMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *DBTargetMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedserver {
+		edges = append(edges, dbtarget.EdgeServer)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *DBTargetMutation) EdgeCleared(name string) bool {
+	switch name {
+	case dbtarget.EdgeServer:
+		return m.clearedserver
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *DBTargetMutation) ClearEdge(name string) error {
+	switch name {
+	case dbtarget.EdgeServer:
+		m.ClearServer()
+		return nil
+	}
+	return fmt.Errorf("unknown DBTarget unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *DBTargetMutation) ResetEdge(name string) error {
+	switch name {
+	case dbtarget.EdgeServer:
+		m.ResetServer()
+		return nil
+	}
+	return fmt.Errorf("unknown DBTarget edge %s", name)
+}
+
 // LogCursorMutation represents an operation that mutates the LogCursor nodes in the graph.
 type LogCursorMutation struct {
 	config
@@ -1358,6 +2898,9 @@ type ServerMutation struct {
 	clearedlog_cursors     bool
 	system_snapshot        *int
 	clearedsystem_snapshot bool
+	db_targets             map[int]struct{}
+	removeddb_targets      map[int]struct{}
+	cleareddb_targets      bool
 	done                   bool
 	oldValue               func(context.Context) (*Server, error)
 	predicates             []predicate.Server
@@ -2074,6 +3617,60 @@ func (m *ServerMutation) ResetSystemSnapshot() {
 	m.clearedsystem_snapshot = false
 }
 
+// AddDbTargetIDs adds the "db_targets" edge to the DBTarget entity by ids.
+func (m *ServerMutation) AddDbTargetIDs(ids ...int) {
+	if m.db_targets == nil {
+		m.db_targets = make(map[int]struct{})
+	}
+	for i := range ids {
+		m.db_targets[ids[i]] = struct{}{}
+	}
+}
+
+// ClearDbTargets clears the "db_targets" edge to the DBTarget entity.
+func (m *ServerMutation) ClearDbTargets() {
+	m.cleareddb_targets = true
+}
+
+// DbTargetsCleared reports if the "db_targets" edge to the DBTarget entity was cleared.
+func (m *ServerMutation) DbTargetsCleared() bool {
+	return m.cleareddb_targets
+}
+
+// RemoveDbTargetIDs removes the "db_targets" edge to the DBTarget entity by IDs.
+func (m *ServerMutation) RemoveDbTargetIDs(ids ...int) {
+	if m.removeddb_targets == nil {
+		m.removeddb_targets = make(map[int]struct{})
+	}
+	for i := range ids {
+		delete(m.db_targets, ids[i])
+		m.removeddb_targets[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedDbTargets returns the removed IDs of the "db_targets" edge to the DBTarget entity.
+func (m *ServerMutation) RemovedDbTargetsIDs() (ids []int) {
+	for id := range m.removeddb_targets {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// DbTargetsIDs returns the "db_targets" edge IDs in the mutation.
+func (m *ServerMutation) DbTargetsIDs() (ids []int) {
+	for id := range m.db_targets {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetDbTargets resets all changes to the "db_targets" edge.
+func (m *ServerMutation) ResetDbTargets() {
+	m.db_targets = nil
+	m.cleareddb_targets = false
+	m.removeddb_targets = nil
+}
+
 // Where appends a list predicates to the ServerMutation builder.
 func (m *ServerMutation) Where(ps ...predicate.Server) {
 	m.predicates = append(m.predicates, ps...)
@@ -2436,12 +4033,15 @@ func (m *ServerMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ServerMutation) AddedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.log_cursors != nil {
 		edges = append(edges, server.EdgeLogCursors)
 	}
 	if m.system_snapshot != nil {
 		edges = append(edges, server.EdgeSystemSnapshot)
+	}
+	if m.db_targets != nil {
+		edges = append(edges, server.EdgeDbTargets)
 	}
 	return edges
 }
@@ -2460,15 +4060,24 @@ func (m *ServerMutation) AddedIDs(name string) []ent.Value {
 		if id := m.system_snapshot; id != nil {
 			return []ent.Value{*id}
 		}
+	case server.EdgeDbTargets:
+		ids := make([]ent.Value, 0, len(m.db_targets))
+		for id := range m.db_targets {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ServerMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.removedlog_cursors != nil {
 		edges = append(edges, server.EdgeLogCursors)
+	}
+	if m.removeddb_targets != nil {
+		edges = append(edges, server.EdgeDbTargets)
 	}
 	return edges
 }
@@ -2483,18 +4092,27 @@ func (m *ServerMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case server.EdgeDbTargets:
+		ids := make([]ent.Value, 0, len(m.removeddb_targets))
+		for id := range m.removeddb_targets {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ServerMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.clearedlog_cursors {
 		edges = append(edges, server.EdgeLogCursors)
 	}
 	if m.clearedsystem_snapshot {
 		edges = append(edges, server.EdgeSystemSnapshot)
+	}
+	if m.cleareddb_targets {
+		edges = append(edges, server.EdgeDbTargets)
 	}
 	return edges
 }
@@ -2507,6 +4125,8 @@ func (m *ServerMutation) EdgeCleared(name string) bool {
 		return m.clearedlog_cursors
 	case server.EdgeSystemSnapshot:
 		return m.clearedsystem_snapshot
+	case server.EdgeDbTargets:
+		return m.cleareddb_targets
 	}
 	return false
 }
@@ -2531,6 +4151,9 @@ func (m *ServerMutation) ResetEdge(name string) error {
 		return nil
 	case server.EdgeSystemSnapshot:
 		m.ResetSystemSnapshot()
+		return nil
+	case server.EdgeDbTargets:
+		m.ResetDbTargets()
 		return nil
 	}
 	return fmt.Errorf("unknown Server edge %s", name)

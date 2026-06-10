@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"frappe-monitor/ent/alertstate"
+	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/server"
 	"frappe-monitor/ent/systemsnapshot"
@@ -77,6 +78,7 @@ func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
 			alertstate.Table:     alertstate.ValidColumn,
+			dbtarget.Table:       dbtarget.ValidColumn,
 			logcursor.Table:      logcursor.ValidColumn,
 			server.Table:         server.ValidColumn,
 			systemsnapshot.Table: systemsnapshot.ValidColumn,

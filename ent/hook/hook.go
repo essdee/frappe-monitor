@@ -20,6 +20,18 @@ func (f AlertStateFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, 
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.AlertStateMutation", m)
 }
 
+// The DBTargetFunc type is an adapter to allow the use of ordinary
+// function as DBTarget mutator.
+type DBTargetFunc func(context.Context, *ent.DBTargetMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f DBTargetFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.DBTargetMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DBTargetMutation", m)
+}
+
 // The LogCursorFunc type is an adapter to allow the use of ordinary
 // function as LogCursor mutator.
 type LogCursorFunc func(context.Context, *ent.LogCursorMutation) (ent.Value, error)

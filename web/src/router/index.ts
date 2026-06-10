@@ -45,6 +45,11 @@ export const router = createRouter({
       }),
     },
     {
+      path: '/databases',
+      name: 'databases',
+      component: () => import('../views/Databases.vue'),
+    },
+    {
       path: '/alerts',
       name: 'alerts',
       component: () => import('../views/Alerts.vue'),

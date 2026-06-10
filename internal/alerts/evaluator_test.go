@@ -131,7 +131,19 @@ func (m *memStore) GetLogCursor(context.Context, int, string) (*storage.LogCurso
 	panic("unused")
 }
 func (m *memStore) UpsertLogCursor(context.Context, storage.LogCursor) error { panic("unused") }
-func (m *memStore) Close() error                                             { return nil }
+func (m *memStore) CreateDBTarget(context.Context, storage.NewDBTarget) (*storage.DBTarget, error) {
+	panic("unused")
+}
+func (m *memStore) GetDBTarget(context.Context, int) (*storage.DBTarget, error) { panic("unused") }
+func (m *memStore) ListDBTargets(context.Context) ([]*storage.DBTarget, error)  { panic("unused") }
+func (m *memStore) UpdateDBTarget(context.Context, int, storage.UpdateDBTarget) (*storage.DBTarget, error) {
+	panic("unused")
+}
+func (m *memStore) DeleteDBTarget(context.Context, int) error                  { panic("unused") }
+func (m *memStore) SetDBTargetStatus(context.Context, int, storage.DBTargetStatus) error {
+	panic("unused")
+}
+func (m *memStore) Close() error { return nil }
 
 // recordedNotifier captures every Notify call.
 type recordedNotifier struct {

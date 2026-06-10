@@ -9,6 +9,9 @@ import (
 // AlertState is the predicate function for alertstate builders.
 type AlertState func(*sql.Selector)
 
+// DBTarget is the predicate function for dbtarget builders.
+type DBTarget func(*sql.Selector)
+
 // LogCursor is the predicate function for logcursor builders.
 type LogCursor func(*sql.Selector)
 
