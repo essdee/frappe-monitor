@@ -142,17 +142,35 @@ func (s *EntStore) UpdateServer(ctx context.Context, id int, in UpdateServer) (*
 	return entToServer(row), nil
 }
 
-// DeleteServer removes the server. The schema's edge cascade removes
-// associated log cursors. Alert states (Phase 6) are not edge-tied;
-// they age out on the next reconciliation cycle when their series
-// disappears from the rule's result.
+// DeleteServer removes the server and its child rows (log cursors and
+// system snapshot) in a single transaction. The generated foreign keys
+// are ON DELETE NO ACTION, so with foreign_keys=on a plain server
+// delete fails the moment any child row exists — we delete the children
+// explicitly first. Alert states (Phase 6) are not edge-tied; they age
+// out on the next reconciliation cycle when their series disappears.
 func (s *EntStore) DeleteServer(ctx context.Context, id int) error {
-	err := s.client.Server.DeleteOneID(id).Exec(ctx)
+	tx, err := s.client.Tx(ctx)
 	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	if _, err := tx.LogCursor.Delete().
+		Where(entlogcursor.HasServerWith(entserver.ID(id))).Exec(ctx); err != nil {
+		return fmt.Errorf("delete log cursors: %w", err)
+	}
+	if _, err := tx.SystemSnapshot.Delete().
+		Where(entsystemsnapshot.HasServerWith(entserver.ID(id))).Exec(ctx); err != nil {
+		return fmt.Errorf("delete system snapshot: %w", err)
+	}
+	if err := tx.Server.DeleteOneID(id).Exec(ctx); err != nil {
 		if ent.IsNotFound(err) {
 			return ErrNotFound
 		}
 		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete: %w", err)
 	}
 	return nil
 }
@@ -253,27 +271,42 @@ func (s *EntStore) GetSystemSnapshot(ctx context.Context, serverID int) (*System
 // good snapshot. To explicitly clear payload, callers must pass a
 // non-nil zero-byte slice (no current caller does).
 func (s *EntStore) UpsertSystemSnapshot(ctx context.Context, in SystemSnapshot) error {
-	existing, err := s.client.SystemSnapshot.Query().
+	// Run the read-modify-write in a transaction. With SetMaxOpenConns(1)
+	// the tx pins the single connection, so a concurrent upsert for the
+	// same server (e.g. the create-time bootstrap racing a dashboard
+	// "refresh system details") serializes behind it instead of both
+	// seeing NotFound and racing two Creates into a UNIQUE violation.
+	tx, err := s.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	existing, err := tx.SystemSnapshot.Query().
 		Where(entsystemsnapshot.HasServerWith(entserver.ID(in.ServerID))).
 		Only(ctx)
 	if err != nil && !ent.IsNotFound(err) {
 		return err
 	}
 	if ent.IsNotFound(err) {
-		_, err = s.client.SystemSnapshot.Create().
+		if _, err = tx.SystemSnapshot.Create().
 			SetPayload(in.Payload).
 			SetLastError(in.LastError).
 			SetServerID(in.ServerID).
-			Save(ctx)
-		return err
+			Save(ctx); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
-	upd := s.client.SystemSnapshot.UpdateOneID(existing.ID).
+	upd := tx.SystemSnapshot.UpdateOneID(existing.ID).
 		SetLastError(in.LastError)
 	if len(in.Payload) > 0 {
 		upd = upd.SetPayload(in.Payload)
 	}
-	_, err = upd.Save(ctx)
-	return err
+	if _, err = upd.Save(ctx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // --- Alert state (Phase 6) -----------------------------------------------

@@ -97,8 +97,12 @@ for pair in "${_PAIRS[@]}"; do
   PATHS+=("$fpath")
 done
 
-# Build an associative resume map from --resume=id:offset,id:offset.
-declare -A RESUME=()
+# Parse --resume=id:offset,id:offset into parallel arrays. bash 3.2 (the
+# default /bin/bash on macOS dev machines) has no associative arrays, so
+# we keep a flat lookup and resolve each file's offset by id below. Using
+# `declare -A` here previously crashed the whole streamer on bash 3.2.
+declare -a RIDS=()
+declare -a ROFFS=()
 if [[ -n "$RESUME_ARG" ]]; then
   IFS=',' read -ra _RPAIRS <<< "$RESUME_ARG"
   for pair in "${_RPAIRS[@]}"; do
@@ -112,9 +116,22 @@ if [[ -n "$RESUME_ARG" ]]; then
       printf 'frappe-monitor-stream: --resume offset %q for %q must be a non-negative integer\n' "$off" "$fid" >&2
       exit 2
     fi
-    RESUME[$fid]="$off"
+    RIDS+=("$fid")
+    ROFFS+=("$off")
   done
 fi
+
+# resume_for echoes the resume offset for a file id, or nothing if the
+# id has no --resume entry (the caller then tails from end-of-file).
+resume_for() {
+  local want="$1" i
+  for i in "${!RIDS[@]}"; do
+    if [[ "${RIDS[$i]}" == "$want" ]]; then
+      printf '%s' "${ROFFS[$i]}"
+      return 0
+    fi
+  done
+}
 
 # ---------------------------------------------------------------------------
 # Header. The monitor reads this before launching its parser so it can
@@ -158,7 +175,7 @@ trap cleanup EXIT TERM INT
 stream_one() {
   local fid="$1"
   local fpath="$2"
-  local offset="${RESUME[$fid]:-}"
+  local offset="$3"
 
   # File missing at startup? Emit an error sentinel and exit; the
   # monitor will see ##F=fid ##E=MISSING and decide whether to retry
@@ -210,7 +227,7 @@ stream_one() {
 # ---------------------------------------------------------------------------
 
 for i in "${!IDS[@]}"; do
-  stream_one "${IDS[$i]}" "${PATHS[$i]}" &
+  stream_one "${IDS[$i]}" "${PATHS[$i]}" "$(resume_for "${IDS[$i]}")" &
   CHILDREN+=("$!")
 done
 

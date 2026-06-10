@@ -44,6 +44,14 @@ type SessionConfig struct {
 	// into RemoteCommand via --resume=<id>:<offset>,...
 	ResumeOffsets map[string]int64
 
+	// BuildCommand, when non-nil, is invoked before EVERY connection
+	// attempt to produce a fresh remote command — re-reading the latest
+	// resume offsets from the cursor store so a reconnect resumes from
+	// where the sink last flushed, instead of replaying every line
+	// ingested since the session first started. When nil, RemoteCommand
+	// is used as-is (the static path, used by tests).
+	BuildCommand func(ctx context.Context) (string, error)
+
 	// MinBackoff / MaxBackoff govern reconnect cadence. Defaults
 	// applied by NewSession when zero.
 	MinBackoff time.Duration
@@ -125,7 +133,9 @@ func (s *Session) loop(ctx context.Context) {
 		default:
 		}
 
+		start := time.Now()
 		err := s.runOnce(ctx)
+		connectedFor := time.Since(start)
 		if err == nil {
 			// Clean EOF — remote command exited normally. Treat as a
 			// reconnect-worthy event since the streamer is supposed
@@ -145,6 +155,16 @@ func (s *Session) loop(ctx context.Context) {
 
 		s.handler.OnSessionState(ctx, s.cfg.ServerID, false, fmt.Sprintf("reconnect after: %v", err))
 
+		// If the just-ended attempt stayed connected for a meaningful
+		// stretch (>= MaxBackoff), treat it as a healthy connection and
+		// reset the backoff, so a server that was up for hours and then
+		// drops reconnects fast instead of waiting the full MaxBackoff.
+		// A rapidly crash-looping stream stays below the threshold and
+		// keeps backing off.
+		if connectedFor >= s.cfg.MaxBackoff {
+			backoff = s.cfg.MinBackoff
+		}
+
 		// Sleep with jitter, but wake on stop/ctx so shutdown is
 		// snappy even when we'd otherwise be backing off for 60s.
 		select {
@@ -163,6 +183,15 @@ func (s *Session) loop(ctx context.Context) {
 // advancement is the caller's job.
 func (s *Session) runOnce(ctx context.Context) error {
 	cmd := s.cfg.RemoteCommand
+	if s.cfg.BuildCommand != nil {
+		// Rebuild with fresh resume offsets so a reconnect doesn't
+		// replay everything since session boot (see cursor store).
+		built, err := s.cfg.BuildCommand(ctx)
+		if err != nil {
+			return fmt.Errorf("streamer: build resume command: %w", err)
+		}
+		cmd = built
+	}
 	if cmd == "" {
 		return errors.New("streamer: empty remote command")
 	}
@@ -237,12 +266,18 @@ func nextBackoff(cur, max time.Duration) time.Duration {
 	return cur
 }
 
-// truncate caps a string at n runes (approximately) for log output.
+// truncate caps a string at n runes for log output, slicing on a rune
+// boundary so a multi-byte rune is never cut in half (which would emit
+// invalid UTF-8 into the structured log).
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if len(s) <= n { // byte len <= n ⇒ rune count <= n; fast path
 		return s
 	}
-	return s[:n] + "…"
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // BuildRemoteCommand assembles the bash invocation that runs the

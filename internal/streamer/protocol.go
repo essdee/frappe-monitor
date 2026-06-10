@@ -105,10 +105,14 @@ func ParseLine(line string) Event {
 	// any '|' after that belongs to the content. We split on the first
 	// pipe, not on every pipe.
 	rest := line[len(filePrefix):]
+	pipeIdx := strings.IndexByte(rest, contentSeparator)
 
-	// "##F=<id> ##E=<token>" form (no pipe). Detect by the literal
-	// " ##E=" between id and the error token.
-	if idx := strings.Index(rest, " "+errorMarker); idx >= 0 {
+	// "##F=<id> ##E=<token>" error form: the literal " ##E=" sits
+	// between the id and the token. It only counts as an error sentinel
+	// when there is NO pipe before it — otherwise the " ##E=" is part of
+	// a content line (e.g. an access log line that literally contains
+	// " ##E=") and must be treated as content, not silently dropped.
+	if idx := strings.Index(rest, " "+errorMarker); idx >= 0 && (pipeIdx < 0 || idx < pipeIdx) {
 		fid := rest[:idx]
 		token := rest[idx+len(" "+errorMarker):]
 		return Event{
@@ -118,7 +122,6 @@ func ParseLine(line string) Event {
 		}
 	}
 
-	pipeIdx := strings.IndexByte(rest, contentSeparator)
 	if pipeIdx < 0 {
 		// "##F=<id>" with no separator and no error marker — not a
 		// shape this protocol version emits. Log + skip upstream.

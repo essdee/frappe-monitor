@@ -102,6 +102,15 @@ func (t *LogTailer) TailFile(
 	}
 
 	// Compute new offset.
+	//
+	// LIMITATION: rotation is detected by size alone (size < prevOffset).
+	// If a file is rotated AND its replacement has already grown past
+	// prevOffset by the next poll (busy logs at a coarse interval), this
+	// misses the rotation and skips the new file's first prevOffset bytes.
+	// A robust fix tracks the file's inode (stat -c %i) in the cursor and
+	// resets on inode change regardless of size — that needs an inode
+	// column on LogCursor. Deferred: this path is not yet wired into the
+	// scheduler (the streamer is the live log path).
 	var newOffset int64
 	if size < prevOffset {
 		// Rotation. Caller starts from 0; we read at most maxBytes worth.

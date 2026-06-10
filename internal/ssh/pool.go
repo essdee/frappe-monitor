@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -12,6 +13,28 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+// syncBuffer is a bytes.Buffer guarded by a mutex. crypto/ssh writes
+// stdout/stderr from internal goroutines that keep running after a
+// timeout/cancel select branch returns; reading the buffer on that
+// branch would otherwise race those writes. The lock makes concurrent
+// Write (from ssh) and String (our snapshot) safe.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 type PoolConfig struct {
 	DialTimeout    time.Duration
@@ -67,9 +90,9 @@ func (p *Pool) RunWithInput(ctx context.Context, tgt Target, cmd, stdin string) 
 	}
 	defer sess.Close()
 
-	var out bytes.Buffer
-	sess.Stdout = &out
-	sess.Stderr = &out
+	out := &syncBuffer{}
+	sess.Stdout = out
+	sess.Stderr = out
 	if stdin != "" {
 		sess.Stdin = strings.NewReader(stdin)
 	}
@@ -194,7 +217,7 @@ func poolKey(tgt Target) string {
 	return fmt.Sprintf("%s|%s|%s", tgt.addr(), tgt.User, tgt.KeyPath)
 }
 
-func (p *Pool) getOrDial(_ context.Context, tgt Target) (*ssh.Client, error) {
+func (p *Pool) getOrDial(ctx context.Context, tgt Target) (*ssh.Client, error) {
 	k := poolKey(tgt)
 	p.mu.Lock()
 	if c, ok := p.conn[k]; ok {
@@ -213,10 +236,29 @@ func (p *Pool) getOrDial(_ context.Context, tgt Target) (*ssh.Client, error) {
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // Phase 7 will add a known_hosts check.
 		Timeout:         p.cfg.DialTimeout,
 	}
-	c, err := ssh.Dial("tcp", tgt.addr(), cfg)
+
+	// Dial with the caller's context so a per-job timeout can interrupt
+	// an in-progress TCP connect, instead of blocking for the full
+	// DialTimeout while holding a scheduler semaphore slot.
+	d := net.Dialer{Timeout: p.cfg.DialTimeout}
+	conn, err := d.DialContext(ctx, "tcp", tgt.addr())
 	if err != nil {
 		return nil, classifyDialError(tgt.addr(), err)
 	}
+	// Bound the SSH handshake by the smaller of the ctx deadline and
+	// DialTimeout, then clear it (per-session I/O manages its own).
+	hsDeadline := time.Now().Add(p.cfg.DialTimeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(hsDeadline) {
+		hsDeadline = dl
+	}
+	_ = conn.SetDeadline(hsDeadline)
+	sc, chans, reqs, err := ssh.NewClientConn(conn, tgt.addr(), cfg)
+	if err != nil {
+		_ = conn.Close()
+		return nil, classifyDialError(tgt.addr(), err)
+	}
+	_ = conn.SetDeadline(time.Time{})
+	c := ssh.NewClient(sc, chans, reqs)
 
 	p.mu.Lock()
 	// Someone may have raced ahead of us; prefer whatever is stored.

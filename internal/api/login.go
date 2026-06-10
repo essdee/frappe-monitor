@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -39,9 +40,14 @@ const sessionTTL = 7 * 24 * time.Hour
 var loginThrottle = newLoginThrottle(5, time.Minute)
 
 type ipBucket struct {
-	count    int
-	resetAt  time.Time
+	count   int
+	resetAt time.Time
 }
+
+// maxThrottleBuckets bounds the throttle map so a flood of distinct
+// keys can't exhaust memory. Expired buckets are swept on every record,
+// so under normal load the map stays far below this.
+const maxThrottleBuckets = 8192
 
 type throttle struct {
 	mu      sync.Mutex
@@ -66,8 +72,15 @@ func (t *throttle) recordFailure(ip string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := time.Now()
+	t.sweepLocked(now)
 	b, ok := t.buckets[ip]
 	if !ok || now.After(b.resetAt) {
+		// Cap total tracked IPs so a key-flood can't grow the map
+		// without bound. Once saturated we stop tracking new IPs; live
+		// buckets keep working and the map drains as windows expire.
+		if !ok && len(t.buckets) >= maxThrottleBuckets {
+			return false
+		}
 		b = &ipBucket{count: 0, resetAt: now.Add(t.window)}
 		t.buckets[ip] = b
 	}
@@ -75,7 +88,19 @@ func (t *throttle) recordFailure(ip string) bool {
 	return b.count <= t.limit
 }
 
-// blocked returns true if this IP is currently over the limit.
+// sweepLocked drops buckets whose window has elapsed. Called under the
+// lock on every record so the map can't accumulate stale entries.
+func (t *throttle) sweepLocked(now time.Time) {
+	for ip, b := range t.buckets {
+		if now.After(b.resetAt) {
+			delete(t.buckets, ip)
+		}
+	}
+}
+
+// blocked returns true if this IP is currently at/over the limit. Uses
+// >= so exactly `limit` attempts are allowed before lockout (the check
+// runs before the attempt is counted).
 func (t *throttle) blocked(ip string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -83,7 +108,7 @@ func (t *throttle) blocked(ip string) bool {
 	if !ok || time.Now().After(b.resetAt) {
 		return false
 	}
-	return b.count > t.limit
+	return b.count >= t.limit
 }
 
 // deriveSessionKey returns the HMAC key used to sign session cookies.
@@ -123,18 +148,28 @@ func validateSession(cookie, password string) bool {
 	return subtle.ConstantTimeCompare([]byte(want), []byte(sig)) == 1
 }
 
-// clientIP extracts a best-effort client IP for throttling. Honors
-// X-Forwarded-For when the request came through a reverse proxy.
+// clientIP extracts a best-effort client IP for throttling.
+//
+// RemoteAddr (the immediate peer) is the only address we can trust. We
+// consult X-Forwarded-For ONLY when that peer is a local/private hop —
+// i.e. a reverse proxy on the same host or network (e.g. Caddy). For a
+// direct client, honoring XFF would let an attacker send a fresh header
+// per request to dodge the brute-force throttle and mint unbounded
+// throttle buckets. When trusted, we take the RIGHTMOST hop — the address
+// the proxy actually observed — which a client can't forge by prepending
+// its own XFF value.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if comma := strings.IndexByte(xff, ','); comma > 0 {
-			return strings.TrimSpace(xff[:comma])
-		}
-		return strings.TrimSpace(xff)
-	}
 	host := r.RemoteAddr
-	if colon := strings.LastIndexByte(host, ':'); colon > 0 {
-		host = host[:colon]
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if cand := strings.TrimSpace(parts[len(parts)-1]); cand != "" {
+				return cand
+			}
+		}
 	}
 	return host
 }

@@ -63,36 +63,31 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule Rule, now time.Time) 
 		prevByFP[p.Fingerprint] = p
 	}
 
-	// 1. Anything currently firing → upsert + notify if new or cooldown elapsed.
+	// 1. Anything currently firing → notify (if new or cooldown elapsed),
+	//    then upsert. We notify BEFORE persisting LastNotifiedAt so a failed
+	//    page never advances the cooldown clock and suppresses the retry.
 	for fp, sample := range firing {
 		previous, isResume := prevByFP[fp]
+		// NotifyRepeatTime <= 0 means "never repeat": page only on the first
+		// fire (or a status change) and on the eventual resolution.
 		shouldNotify := !isResume ||
 			previous.Status != "firing" ||
-			now.Sub(previous.LastNotifiedAt) >= e.NotifyRepeatTime
+			(e.NotifyRepeatTime > 0 && now.Sub(previous.LastNotifiedAt) >= e.NotifyRepeatTime)
 
-		state := storage.AlertState{
-			RuleName:    rule.Name,
-			Fingerprint: fp,
-			Labels:      sample.Labels,
-			Status:      "firing",
-			Value:       sample.Value,
+		// Carry forward the last *successful* notify time. For a brand-new
+		// alert we use an epoch sentinel ("never paged") rather than zero,
+		// because the store treats a zero time as "use the now() default" —
+		// which would wrongly start the cooldown for a page that never went out.
+		lastNotified := time.Unix(0, 0).UTC()
+		if isResume {
+			lastNotified = previous.LastNotifiedAt
 		}
+
 		if shouldNotify {
-			state.LastNotifiedAt = now
-		} else if isResume {
-			state.LastNotifiedAt = previous.LastNotifiedAt
-		}
-		if _, err := e.Store.UpsertAlertState(ctx, state); err != nil {
-			e.Logger.Warn("alerts: upsert state failed",
-				"rule", rule.Name, "fp", fp, "err", err)
-			continue
-		}
-		if shouldNotify {
-			msg := renderMessage(rule, sample)
 			notif := Notification{
 				Severity: rule.Severity,
 				RuleName: rule.Name,
-				Body:     msg,
+				Body:     renderMessage(rule, sample),
 				Labels:   sample.Labels,
 				Resolved: false,
 				Time:     now,
@@ -100,25 +95,43 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule Rule, now time.Time) 
 			if err := e.Notifier.Notify(ctx, notif); err != nil {
 				e.Logger.Warn("alerts: notify failed",
 					"rule", rule.Name, "fp", fp, "err", err)
+				// leave lastNotified unchanged so the next tick retries
 			} else {
+				lastNotified = now
 				e.Logger.Info("alerts: fired",
 					"rule", rule.Name, "fp", fp,
 					"severity", rule.Severity, "value", sample.Value)
 			}
 		}
+
+		state := storage.AlertState{
+			RuleName:       rule.Name,
+			Fingerprint:    fp,
+			Labels:         sample.Labels,
+			Status:         "firing",
+			Value:          sample.Value,
+			LastNotifiedAt: lastNotified,
+		}
+		if _, err := e.Store.UpsertAlertState(ctx, state); err != nil {
+			e.Logger.Warn("alerts: upsert state failed",
+				"rule", rule.Name, "fp", fp, "err", err)
+			continue
+		}
 	}
 
-	// 2. Anything previously firing but absent now → resolve + notify, then delete.
+	// 2. Anything previously firing but absent now → notify resolved, then
+	//    delete. We only delete AFTER a successful resolve page; if the page
+	//    fails we keep the row so the next tick retries the resolution instead
+	//    of silently dropping it.
 	for fp, previous := range prevByFP {
 		if _, stillFiring := firing[fp]; stillFiring {
 			continue
 		}
 		if previous.Status == "firing" {
-			msg := renderResolvedMessage(rule, previous)
 			notif := Notification{
 				Severity: rule.Severity,
 				RuleName: rule.Name,
-				Body:     msg,
+				Body:     renderResolvedMessage(rule, previous),
 				Labels:   previous.Labels,
 				Resolved: true,
 				Time:     now,
@@ -126,10 +139,10 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule Rule, now time.Time) 
 			if err := e.Notifier.Notify(ctx, notif); err != nil {
 				e.Logger.Warn("alerts: resolve notify failed",
 					"rule", rule.Name, "fp", fp, "err", err)
-			} else {
-				e.Logger.Info("alerts: resolved",
-					"rule", rule.Name, "fp", fp)
+				continue // keep the row; retry the resolve next tick
 			}
+			e.Logger.Info("alerts: resolved",
+				"rule", rule.Name, "fp", fp)
 		}
 		if err := e.Store.DeleteAlertState(ctx, previous.ID); err != nil {
 			e.Logger.Warn("alerts: delete state failed",

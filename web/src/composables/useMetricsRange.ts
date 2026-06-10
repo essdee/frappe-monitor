@@ -20,16 +20,30 @@ export function useMetricsRange(
   const loading = ref(false)
   const error = ref<string | null>(null)
 
+  // Monotonic request id so an earlier poll that resolves late can't
+  // clobber a newer one (last-finisher-wins → last-started-wins).
+  let seq = 0
+
   async function refresh() {
     if (!query.value) return
+    const mySeq = ++seq
+    // Re-anchor the window to "now" on every poll, preserving the span,
+    // so a live (relative) range actually advances instead of re-querying
+    // the frozen window captured when the range computed first evaluated.
+    const base = range.value
+    const span = Math.max(1, base.to - base.from)
+    const now = Math.floor(Date.now() / 1000)
+    const live: TimeRange = { from: now - span, to: now, step: base.step }
+
     loading.value = true
     error.value = null
     try {
-      result.value = await queryMetrics(query.value, range.value)
+      const res = await queryMetrics(query.value, live)
+      if (mySeq === seq) result.value = res
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
+      if (mySeq === seq) error.value = e instanceof Error ? e.message : String(e)
     } finally {
-      loading.value = false
+      if (mySeq === seq) loading.value = false
     }
   }
 

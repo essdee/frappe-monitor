@@ -56,6 +56,16 @@ function handle401(resp: Response): Response {
   return resp
 }
 
+// apiFetch is the shared wrapper for non-GET / action calls: it sends
+// same-origin credentials and routes the response through handle401 so a
+// 401 on a write path (expired session mid-action) redirects to /login
+// instead of surfacing a raw "401 Unauthorized" error banner. Auth
+// endpoints (login/logout/whoami) deliberately do NOT use this — a 401
+// there is "wrong password", not "session expired".
+async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+  return handle401(await fetch(url, { credentials: 'same-origin', ...init }))
+}
+
 async function jsonGET<T>(url: string): Promise<T> {
   const resp = handle401(
     await fetch(url, {
@@ -118,7 +128,7 @@ export interface NewServerInput {
 }
 
 export async function createServer(input: NewServerInput): Promise<Server> {
-  const resp = await fetch('/api/v1/servers', {
+  const resp = await apiFetch('/api/v1/servers', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(input),
@@ -131,7 +141,7 @@ export async function createServer(input: NewServerInput): Promise<Server> {
 }
 
 export async function patchServer(id: number, patch: Partial<NewServerInput>): Promise<Server> {
-  const resp = await fetch(`/api/v1/servers/${id}`, {
+  const resp = await apiFetch(`/api/v1/servers/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(patch),
@@ -144,7 +154,7 @@ export async function patchServer(id: number, patch: Partial<NewServerInput>): P
 }
 
 export async function deleteServer(id: number): Promise<void> {
-  const resp = await fetch(`/api/v1/servers/${id}`, { method: 'DELETE' })
+  const resp = await apiFetch(`/api/v1/servers/${id}`, { method: 'DELETE' })
   if (!resp.ok && resp.status !== 204) {
     const body = await resp.text()
     throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
@@ -159,7 +169,7 @@ export interface TestConnectionResult {
 }
 
 export async function testServerConnection(id: number): Promise<TestConnectionResult> {
-  const resp = await fetch(`/api/v1/servers/${id}/test-connection`, { method: 'POST' })
+  const resp = await apiFetch(`/api/v1/servers/${id}/test-connection`, { method: 'POST' })
   if (!resp.ok) {
     const body = await resp.text()
     throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
@@ -168,7 +178,7 @@ export async function testServerConnection(id: number): Promise<TestConnectionRe
 }
 
 export async function deployCollector(id: number): Promise<{ deployed: boolean; version: string }> {
-  const resp = await fetch(`/api/v1/servers/${id}/deploy-collector`, { method: 'POST' })
+  const resp = await apiFetch(`/api/v1/servers/${id}/deploy-collector`, { method: 'POST' })
   if (!resp.ok) {
     const body = await resp.text()
     throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
@@ -213,7 +223,7 @@ export interface SystemSnapshotResp {
 }
 
 export async function fetchSystemSnapshot(id: number): Promise<SystemSnapshotResp | null> {
-  const resp = await fetch(`/api/v1/servers/${id}/system`)
+  const resp = await apiFetch(`/api/v1/servers/${id}/system`)
   if (resp.status === 404) return null
   if (!resp.ok) {
     const body = await resp.text()
@@ -223,7 +233,7 @@ export async function fetchSystemSnapshot(id: number): Promise<SystemSnapshotRes
 }
 
 export async function refreshSystemSnapshot(id: number): Promise<SystemSnapshotResp> {
-  const resp = await fetch(`/api/v1/servers/${id}/refresh-system`, { method: 'POST' })
+  const resp = await apiFetch(`/api/v1/servers/${id}/refresh-system`, { method: 'POST' })
   if (!resp.ok) {
     const body = await resp.text()
     throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)

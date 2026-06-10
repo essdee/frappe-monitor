@@ -78,6 +78,19 @@ func (h *hierarchyHandlers) queryInstant(ctx context.Context, promql string) (*v
 	return &out, nil
 }
 
+// escapePromQLLabel escapes a string for safe interpolation inside a
+// PromQL double-quoted label matcher. Backslash and double-quote are
+// escaped per the PromQL string grammar, and newlines/CRs are stripped,
+// so a path param can't break out of the matcher and inject arbitrary
+// PromQL (e.g. `x"} or on() frappe_bench_info{bench="`).
+func escapePromQLLabel(v string) string {
+	v = strings.ReplaceAll(v, `\`, `\\`)
+	v = strings.ReplaceAll(v, `"`, `\"`)
+	v = strings.ReplaceAll(v, "\n", "")
+	v = strings.ReplaceAll(v, "\r", "")
+	return v
+}
+
 // scalarValue extracts a float64 from a vmInstantResponse result's Value.
 // VM emits values as ["<ts_seconds>","<sample_string>"]; the second
 // element is what we parse.
@@ -143,9 +156,13 @@ func (h *hierarchyHandlers) getBench(w http.ResponseWriter, r *http.Request) {
 
 	out := benchDetail{Server: server, Bench: bench, RedisQueues: map[string]int64{}}
 
+	// Escape path params before interpolating into PromQL label matchers
+	// so a value containing a quote/brace can't break out and inject.
+	qs, qb := escapePromQLLabel(server), escapePromQLLabel(bench)
+
 	// info{frappe_version} — pick any series matching the labels.
 	if resp, err := h.queryInstant(r.Context(),
-		fmt.Sprintf(`frappe_bench_info{server="%s",bench="%s"}`, server, bench)); err == nil {
+		fmt.Sprintf(`frappe_bench_info{server="%s",bench="%s"}`, qs, qb)); err == nil {
 		for _, s := range resp.Data.Result {
 			if v, ok := s.Metric["frappe_version"]; ok {
 				out.FrappeVersion = v
@@ -162,7 +179,7 @@ func (h *hierarchyHandlers) getBench(w http.ResponseWriter, r *http.Request) {
 	}
 	for metric, dst := range intFields {
 		resp, err := h.queryInstant(r.Context(),
-			fmt.Sprintf(`%s{server="%s",bench="%s"}`, metric, server, bench))
+			fmt.Sprintf(`%s{server="%s",bench="%s"}`, metric, qs, qb))
 		if err != nil || len(resp.Data.Result) == 0 {
 			continue
 		}
@@ -174,7 +191,7 @@ func (h *hierarchyHandlers) getBench(w http.ResponseWriter, r *http.Request) {
 
 	// Per-queue depths.
 	if resp, err := h.queryInstant(r.Context(),
-		fmt.Sprintf(`frappe_bench_redis_queue_depth{server="%s",bench="%s"}`, server, bench)); err == nil {
+		fmt.Sprintf(`frappe_bench_redis_queue_depth{server="%s",bench="%s"}`, qs, qb)); err == nil {
 		for _, s := range resp.Data.Result {
 			q := s.Metric["queue"]
 			if q == "" {
@@ -243,7 +260,9 @@ func (h *hierarchyHandlers) getSite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := siteDetail{Server: server, Bench: bench, Site: site}
-	labels := fmt.Sprintf(`server="%s",bench="%s",site="%s"`, server, bench, site)
+	// Escape path params before interpolating into the PromQL matcher.
+	labels := fmt.Sprintf(`server="%s",bench="%s",site="%s"`,
+		escapePromQLLabel(server), escapePromQLLabel(bench), escapePromQLLabel(site))
 
 	intFields := map[string]*int64{
 		"frappe_site_http_status_code": &out.HTTPStatusCode,

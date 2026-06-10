@@ -161,6 +161,25 @@ func (r *recordedNotifier) Notify(_ context.Context, n Notification) error {
 	return nil
 }
 
+// flakyNotifier fails the Notify calls whose 1-based attempt number is
+// in failOn, succeeding otherwise. Used to assert the evaluator retries
+// rather than silently dropping a page when the notifier errors.
+type flakyNotifier struct {
+	mu       sync.Mutex
+	attempts int
+	failOn   map[int]bool
+}
+
+func (f *flakyNotifier) Notify(_ context.Context, _ Notification) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attempts++
+	if f.failOn[f.attempts] {
+		return errors.New("notify boom")
+	}
+	return nil
+}
+
 // silentLogger discards everything; tests assert via their own state.
 func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -336,4 +355,79 @@ func TestConfig_ValidateRejectsMissingTelegramWhenEnabled(t *testing.T) {
 
 	require.NoError(t, Config{Enabled: false}.Validate(),
 		"disabled config should validate without telegram fields")
+}
+
+// TestEvaluator_FirstFireNotifyFailureRetriesNextTick guards the fix for
+// the dropped first-fire page: when the notifier fails, LastNotifiedAt
+// must NOT be advanced, so the alert is retried on the next tick instead
+// of being suppressed for a full cooldown window.
+func TestEvaluator_FirstFireNotifyFailureRetriesNextTick(t *testing.T) {
+	rule := Rule{Name: "x", Expr: "y > 0", FingerprintLabels: []string{"server"}}
+	vm := &fakeVM{resp: map[string][]Sample{
+		"y > 0": {{Labels: map[string]string{"server": "a"}, Value: 1}},
+	}}
+	store := newMemStore()
+	fn := &flakyNotifier{failOn: map[int]bool{1: true}} // first page fails
+
+	// Realistic wall-clock: the "never paged" sentinel is the epoch, so
+	// `now` must be a real modern time for the cooldown math to treat a
+	// failed-and-never-paged alert as overdue (as it always is in prod).
+	now := time.Unix(1_700_000_000, 0)
+	ev := &Evaluator{
+		Rules:            []Rule{rule},
+		VM:               vm,
+		Store:            store,
+		Notifier:         fn,
+		NotifyRepeatTime: time.Hour,
+		Logger:           silentLogger(),
+		Now:              func() time.Time { return now },
+	}
+
+	ev.EvaluateOnce(context.Background()) // first fire — notify FAILS
+	require.Equal(t, 1, fn.attempts)
+	require.Len(t, store.rows, 1, "firing state persisted despite notify failure")
+
+	// Next tick, still well within the 1h cooldown. The failed page must
+	// be retried (not suppressed), and this time it succeeds.
+	now = now.Add(30 * time.Second)
+	ev.EvaluateOnce(context.Background())
+	require.Equal(t, 2, fn.attempts, "failed first page retried next tick, not suppressed")
+}
+
+// TestEvaluator_ResolveNotifyFailureKeepsRow guards the fix for the lost
+// resolve page: if the recovery notification fails, the state row must be
+// kept so the resolve is retried, not deleted-and-forgotten.
+func TestEvaluator_ResolveNotifyFailureKeepsRow(t *testing.T) {
+	rule := Rule{Name: "x", Expr: "y > 0", FingerprintLabels: []string{"server"}}
+	firing := &fakeVM{resp: map[string][]Sample{
+		"y > 0": {{Labels: map[string]string{"server": "a"}, Value: 1}},
+	}}
+	empty := &fakeVM{resp: map[string][]Sample{"y > 0": {}}}
+	store := newMemStore()
+	fn := &flakyNotifier{failOn: map[int]bool{2: true}} // fire ok, resolve #2 fails
+
+	now := time.Unix(1_700_000_000, 0)
+	ev := &Evaluator{
+		Rules:            []Rule{rule},
+		VM:               firing,
+		Store:            store,
+		Notifier:         fn,
+		NotifyRepeatTime: time.Hour,
+		Logger:           silentLogger(),
+		Now:              func() time.Time { return now },
+	}
+
+	ev.EvaluateOnce(context.Background()) // fire (notify #1 ok)
+	require.Len(t, store.rows, 1)
+
+	// Series gone; resolve page (#2) fails → row must be retained.
+	ev.VM = empty
+	now = now.Add(time.Minute)
+	ev.EvaluateOnce(context.Background())
+	require.Len(t, store.rows, 1, "row kept after failed resolve so it retries")
+
+	// Next tick, resolve (#3) succeeds → row finally deleted.
+	now = now.Add(time.Minute)
+	ev.EvaluateOnce(context.Background())
+	require.Len(t, store.rows, 0, "row deleted after resolve finally succeeds")
 }

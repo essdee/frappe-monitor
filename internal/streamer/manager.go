@@ -244,20 +244,24 @@ func (m *Manager) launchOne(ctx context.Context, serverID int, files []FileSpec)
 		return fmt.Errorf("get server: %w", err)
 	}
 
-	// Read existing cursors so the session resumes from the right
-	// byte offset on first connect. We do this once at launch; on
-	// reconnect, the session reads them again via the cursor store
-	// (cursors get bumped by the sink as we go).
-	resume := map[string]int64{}
-	for _, f := range files {
-		cur, err := m.store.GetLogCursor(ctx, serverID, f.Path)
-		if err == nil && cur != nil {
-			resume[f.ID] = cur.ByteOffset
+	// Resolve resume offsets fresh from the cursor store on EVERY
+	// connect attempt — including reconnects — so a flap doesn't replay
+	// every line ingested since the session first started. The sink
+	// advances these cursors as it flushes to Loki, so each reconnect
+	// resumes from the last durably-shipped byte.
+	buildCmd := func(ctx context.Context) (string, error) {
+		resume := map[string]int64{}
+		for _, f := range files {
+			if cur, err := m.store.GetLogCursor(ctx, serverID, f.Path); err == nil && cur != nil {
+				resume[f.ID] = cur.ByteOffset
+			}
 		}
+		return BuildRemoteCommand(m.cfg.ScriptPath, files, resume)
 	}
 
-	cmd, err := BuildRemoteCommand(m.cfg.ScriptPath, files, resume)
-	if err != nil {
+	// Build once up front to fail fast on bad config (script path /
+	// file ids) before we spawn the session goroutine.
+	if _, err := buildCmd(ctx); err != nil {
 		return fmt.Errorf("build remote command: %w", err)
 	}
 
@@ -267,11 +271,10 @@ func (m *Manager) launchOne(ctx context.Context, serverID int, files []FileSpec)
 			Host: srv.Hostname, Port: srv.SSHPort,
 			User: srv.SSHUser, KeyPath: srv.SSHKeyPath,
 		},
-		Files:         files,
-		RemoteCommand: cmd,
-		ResumeOffsets: resume,
-		MinBackoff:    time.Duration(m.cfg.MinBackoffSeconds) * time.Second,
-		MaxBackoff:    time.Duration(m.cfg.MaxBackoffSeconds) * time.Second,
+		Files:        files,
+		BuildCommand: buildCmd,
+		MinBackoff:   time.Duration(m.cfg.MinBackoffSeconds) * time.Second,
+		MaxBackoff:   time.Duration(m.cfg.MaxBackoffSeconds) * time.Second,
 	}
 
 	sess := NewSession(cfg, m.exec, m.sink, m.logger)

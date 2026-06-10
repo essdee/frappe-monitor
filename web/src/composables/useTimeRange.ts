@@ -60,7 +60,10 @@ export function useTimeRange(): {
     const r = Number(route.query.refresh)
     if (route.query.refresh === undefined) return DEFAULT_REFRESH
     if (!Number.isFinite(r) || r < 0) return DEFAULT_REFRESH
-    return r
+    if (r === 0) return 0 // explicit "off"
+    // Floor at 5s so a crafted/bookmarked ?refresh=0.001 can't turn the
+    // poller into a sub-millisecond request storm (one tab × N charts).
+    return Math.max(5, r)
   })
 
   function selectPreset(label: keyof typeof PRESETS) {

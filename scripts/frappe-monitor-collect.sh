@@ -93,23 +93,28 @@ emit_server() {
   read -r up _ < /proc/uptime
   echo "uptime_seconds=$up"
 
-  # Disk used/total per filesystem (skip pseudo).
+  # Disk used/total per filesystem (skip pseudo). The trailing `|| true`
+  # is load-bearing: under `set -euo pipefail` a failing `df` (stale NFS
+  # mount, unreadable fs) would otherwise trip the ERR trap and truncate
+  # the ENTIRE output mid-###SERVER — losing memory, load, disk, net, and
+  # every per-bench/site section for exactly the degraded hosts we most
+  # need data from. A disk read failure must not sink the whole payload.
   df -B1 --output=target,used,size -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null \
     | tail -n +2 \
     | while read -r mount used total; do
         [ -z "$mount" ] && continue
         echo "disk_used_bytes{mount=\"$mount\"}=$used"
         echo "disk_total_bytes{mount=\"$mount\"}=$total"
-      done
+      done || true
 
-  # Network RX/TX per iface (skip lo).
+  # Network RX/TX per iface (skip lo). Same `|| true` guard as disk.
   awk 'NR>2 {
         gsub(":", "", $1)
         if ($1 == "lo") next
         if ($1 == "") next
         printf "net_rx_bytes{iface=\"%s\"}=%s\n", $1, $2
         printf "net_tx_bytes{iface=\"%s\"}=%s\n", $1, $10
-       }' /proc/net/dev
+       }' /proc/net/dev || true
 
   echo
 }
@@ -150,8 +155,16 @@ read_frappe_version() {
 
 read_apps_count() {
   local bench="$1"
-  if [ -f "$bench/sites/apps.txt" ]; then
-    grep -cve '^[[:space:]]*$' "$bench/sites/apps.txt" 2>/dev/null || echo 0
+  local f="$bench/sites/apps.txt"
+  if [ -f "$f" ]; then
+    # Capture the count, THEN echo it. `grep -c` prints "0" AND exits 1
+    # when there are zero matches, so the old `grep ... || echo 0` printed
+    # TWO lines ("0\n0") on an empty/all-blank apps.txt — a torn metric
+    # that corrupted the ###BENCH section. Assigning first captures the
+    # "0" from stdout regardless of grep's exit code.
+    local n
+    n=$(grep -cve '^[[:space:]]*$' "$f" 2>/dev/null) || true
+    echo "${n:-0}"
   else
     echo 0
   fi

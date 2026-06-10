@@ -90,9 +90,10 @@ type Service struct {
 	evaluator *Evaluator
 	interval  time.Duration
 
-	logger *slog.Logger
-	stop   chan struct{}
-	wg     sync.WaitGroup
+	logger   *slog.Logger
+	stop     chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
 // New builds a Service from config + dependencies. Returns nil + nil
@@ -164,9 +165,10 @@ func (s *Service) Start(ctx context.Context) {
 	}()
 }
 
-// Stop signals the loop to exit and waits for it. Safe to call once.
+// Stop signals the loop to exit and waits for it. Idempotent — the
+// close is guarded so repeated calls don't panic on a closed channel.
 func (s *Service) Stop() {
-	close(s.stop)
+	s.stopOnce.Do(func() { close(s.stop) })
 	s.wg.Wait()
 }
 

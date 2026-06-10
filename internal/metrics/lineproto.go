@@ -152,11 +152,21 @@ func (m SiteMetrics) LineProtocol(serverLabel string) string {
 // tag-key/tag-value position: backslash (must be first so it doesn't
 // double-escape the others), comma, equals, space. Other characters
 // (including `/` in mount paths) are safe as-is.
+//
+// Newline and carriage return are also stripped/escaped: the line
+// protocol is newline-delimited, so a tag value containing a raw '\n'
+// (e.g. an operator-set server name posted through the API) would split
+// one metric line into a malformed second fragment and VM could reject
+// the whole batch. Collector-derived tags can't contain newlines (the
+// parser splits on them), but serverLabel comes from the server record,
+// so we defend here.
 var tagEscaper = strings.NewReplacer(
 	`\`, `\\`,
 	`,`, `\,`,
 	`=`, `\=`,
 	` `, `\ `,
+	"\n", `\n`,
+	"\r", `\r`,
 )
 
 func escapeTag(s string) string {

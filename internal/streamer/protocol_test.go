@@ -68,6 +68,19 @@ func TestParseLine(t *testing.T) {
 			want: Event{Type: EventUnknown},
 		},
 		{
+			// Regression: a content line that literally contains " ##E="
+			// must parse as a LINE (the pipe comes first), not be
+			// misclassified as a file-error sentinel and dropped.
+			name: "content containing ' ##E=' is a line, not a file error",
+			in:   "##F=web|GET /x ##E=trace",
+			want: Event{Type: EventLine, FileID: "web", Content: "GET /x ##E=trace"},
+		},
+		{
+			name: "genuine file-error sentinel (no pipe) still parses",
+			in:   "##F=web ##E=MISSING",
+			want: Event{Type: EventFileError, FileID: "web", ErrorToken: "MISSING"},
+		},
+		{
 			name: "free-form text is unknown",
 			in:   "just some text from somewhere",
 			want: Event{Type: EventUnknown},

@@ -112,9 +112,16 @@ func encodeStreams(streams []Stream) ([]byte, error) {
 			Values: make([]valuePair, 0, len(s.Entries)),
 		}
 		for _, e := range s.Entries {
+			// Coerce to valid UTF-8 explicitly. Loki's JSON push body is
+			// UTF-8, and json.Marshal would silently replace invalid bytes
+			// (binary blobs, latin-1 stack traces, a multibyte rune cut by
+			// the tail byte-cap) with U+FFFD anyway — doing it here makes
+			// the lossy behavior intentional and documented rather than
+			// incidental. Byte-exact fidelity would need the protobuf path.
+			line := strings.ToValidUTF8(e.Line, "�")
 			ws.Values = append(ws.Values, valuePair{
 				strconv.FormatInt(e.Time.UnixNano(), 10),
-				e.Line,
+				line,
 			})
 		}
 		wire.Streams = append(wire.Streams, ws)

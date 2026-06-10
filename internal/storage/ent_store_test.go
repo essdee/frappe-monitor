@@ -217,3 +217,42 @@ func TestUpsertSystemSnapshot_ErrorOnlyPreservesPayload(t *testing.T) {
 	require.Empty(t, got.LastError)
 	require.Equal(t, string(better), string(got.Payload))
 }
+
+// TestDeleteServer_CascadesChildren guards the fix for the
+// undeletable-server bug: with foreign_keys=on (as in production and the
+// test store), a server that has child rows (log cursors, system
+// snapshot) must still delete cleanly — the store removes the children
+// in the same transaction rather than tripping the ON DELETE NO ACTION
+// foreign key.
+func TestDeleteServer_CascadesChildren(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	srv, err := s.CreateServer(ctx, NewServer{
+		Name: "del-1", Hostname: "del1.example.com", SSHUser: "monitor",
+		SSHPort: 22, SSHKeyPath: "/tmp/k",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, s.UpsertLogCursor(ctx, LogCursor{
+		ServerID: srv.ID, LogPath: "/var/log/web.log", ByteOffset: 42,
+	}))
+	require.NoError(t, s.UpsertSystemSnapshot(ctx, SystemSnapshot{
+		ServerID: srv.ID, Payload: []byte(`{"ok":true}`),
+	}))
+
+	require.NoError(t, s.DeleteServer(ctx, srv.ID),
+		"delete must succeed despite child rows + foreign_keys=on")
+
+	_, err = s.GetServer(ctx, srv.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+	_, err = s.GetLogCursor(ctx, srv.ID, "/var/log/web.log")
+	require.ErrorIs(t, err, ErrNotFound, "child log cursor should be gone")
+	_, err = s.GetSystemSnapshot(ctx, srv.ID)
+	require.ErrorIs(t, err, ErrNotFound, "child system snapshot should be gone")
+}
+
+func TestDeleteServer_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	require.ErrorIs(t, s.DeleteServer(context.Background(), 99999), ErrNotFound)
+}
