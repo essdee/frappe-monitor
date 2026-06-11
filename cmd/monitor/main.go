@@ -55,11 +55,38 @@ func (n wsAlertNotifier) Notify(_ context.Context, notif alerts.Notification) er
 	return nil
 }
 
+// version is overridable at build time: -ldflags "-X main.version=1.2.3".
+var version = "dev"
+
 func main() {
+	// Subcommands: `install` / `uninstall` set up or remove a deployment;
+	// `version` prints the build; anything else (or no subcommand) runs the
+	// server. `--config` before a subcommand still routes to the server.
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "install":
+			fatalIf(installCmd(os.Args[2:]))
+			return
+		case "uninstall":
+			fatalIf(uninstallCmd(os.Args[2:]))
+			return
+		case "version", "--version", "-v":
+			fmt.Println("frappe-monitor", version)
+			return
+		}
+	}
+
 	cfgPath := flag.String("config", "./config/monitor.yaml", "path to config yaml")
 	flag.Parse()
 
 	if err := run(*cfgPath); err != nil {
+		fmt.Fprintln(os.Stderr, "fatal:", err)
+		os.Exit(1)
+	}
+}
+
+func fatalIf(err error) {
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
 		os.Exit(1)
 	}
