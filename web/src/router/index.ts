@@ -50,6 +50,11 @@ export const router = createRouter({
       component: () => import('../views/Databases.vue'),
     },
     {
+      path: '/control',
+      name: 'control',
+      component: () => import('../views/Control.vue'),
+    },
+    {
       path: '/alerts',
       name: 'alerts',
       component: () => import('../views/Alerts.vue'),

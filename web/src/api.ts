@@ -454,3 +454,90 @@ export async function checkDBTarget(id: number): Promise<DBTarget> {
   }
   return (await resp.json()) as DBTarget
 }
+
+// ---- Control panel --------------------------------------------------------
+
+// ControlActionDef is one allowlisted action from /control/actions.
+export interface ControlActionDef {
+  key: string
+  label: string
+  description: string
+  scope: 'server' | 'bench' | 'site' | string
+  dangerous: boolean
+}
+
+// ControlAction is one audit record (a run of an action or a config edit).
+export interface ControlAction {
+  id: number
+  server_id: number
+  server?: string
+  action: string
+  bench_path?: string
+  site?: string
+  command?: string
+  requested_by?: string
+  status: string // pending | running | success | failed
+  exit_ok: boolean
+  output?: string
+  error?: string
+  duration_ms: number
+  created_at: string
+  finished_at?: string
+}
+
+export interface RunActionInput {
+  server_id: number
+  action: string
+  bench_path?: string
+  site?: string
+}
+
+export function fetchControlActions(): Promise<ControlActionDef[]> {
+  return jsonGET<ControlActionDef[]>('/api/v1/control/actions')
+}
+
+export function fetchControlHistory(opts?: { serverId?: number; limit?: number }): Promise<ControlAction[]> {
+  const p = new URLSearchParams()
+  if (opts?.serverId) p.set('server_id', String(opts.serverId))
+  if (opts?.limit) p.set('limit', String(opts.limit))
+  const qs = p.toString()
+  return jsonGET<ControlAction[]>(`/api/v1/control/history${qs ? `?${qs}` : ''}`)
+}
+
+export async function runControlAction(input: RunActionInput): Promise<ControlAction> {
+  const resp = await apiFetch('/api/v1/control/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!resp.ok) {
+    const b = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${b.slice(0, 200)}`)
+  }
+  return (await resp.json()) as ControlAction
+}
+
+export async function fetchSiteConfig(serverId: number, bench: string, site: string): Promise<string> {
+  const p = new URLSearchParams({ server_id: String(serverId), bench, site })
+  const j = await jsonGET<{ content: string }>(`/api/v1/control/site-config?${p.toString()}`)
+  return j.content
+}
+
+export async function writeSiteConfig(input: {
+  server_id: number
+  bench_path: string
+  site: string
+  content: string
+  restart: boolean
+}): Promise<ControlAction> {
+  const resp = await apiFetch('/api/v1/control/site-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!resp.ok) {
+    const b = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${b.slice(0, 200)}`)
+  }
+  return (await resp.json()) as ControlAction
+}

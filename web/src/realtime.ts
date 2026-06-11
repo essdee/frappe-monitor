@@ -24,6 +24,7 @@ export const topics = {
   alerts: () => 'alerts',
   logs: (serverId: number) => `logs:${serverId}`,
   databases: () => 'databases',
+  control: () => 'control',
 }
 
 class RealtimeClient {
