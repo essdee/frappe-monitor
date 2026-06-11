@@ -47,5 +47,8 @@ func (Server) Edges() []ent.Edge {
 		edge.To("system_snapshot", SystemSnapshot.Type).Unique(),
 		// One server -> many DB replication targets. Cascading delete.
 		edge.To("db_targets", DBTarget.Type),
+		// One server -> many control-panel action runs (audit log).
+		// Cascading delete with the server.
+		edge.To("control_actions", ControlAction.Type),
 	}
 }

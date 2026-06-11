@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"frappe-monitor/ent/controlaction"
 	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
@@ -248,6 +249,21 @@ func (_u *ServerUpdate) AddDbTargets(v ...*DBTarget) *ServerUpdate {
 	return _u.AddDbTargetIDs(ids...)
 }
 
+// AddControlActionIDs adds the "control_actions" edge to the ControlAction entity by IDs.
+func (_u *ServerUpdate) AddControlActionIDs(ids ...int) *ServerUpdate {
+	_u.mutation.AddControlActionIDs(ids...)
+	return _u
+}
+
+// AddControlActions adds the "control_actions" edges to the ControlAction entity.
+func (_u *ServerUpdate) AddControlActions(v ...*ControlAction) *ServerUpdate {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddControlActionIDs(ids...)
+}
+
 // Mutation returns the ServerMutation object of the builder.
 func (_u *ServerUpdate) Mutation() *ServerMutation {
 	return _u.mutation
@@ -299,6 +315,27 @@ func (_u *ServerUpdate) RemoveDbTargets(v ...*DBTarget) *ServerUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveDbTargetIDs(ids...)
+}
+
+// ClearControlActions clears all "control_actions" edges to the ControlAction entity.
+func (_u *ServerUpdate) ClearControlActions() *ServerUpdate {
+	_u.mutation.ClearControlActions()
+	return _u
+}
+
+// RemoveControlActionIDs removes the "control_actions" edge to ControlAction entities by IDs.
+func (_u *ServerUpdate) RemoveControlActionIDs(ids ...int) *ServerUpdate {
+	_u.mutation.RemoveControlActionIDs(ids...)
+	return _u
+}
+
+// RemoveControlActions removes "control_actions" edges to ControlAction entities.
+func (_u *ServerUpdate) RemoveControlActions(v ...*ControlAction) *ServerUpdate {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveControlActionIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -551,6 +588,51 @@ func (_u *ServerUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.ControlActionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.ControlActionsTable,
+			Columns: []string{server.ControlActionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(controlaction.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedControlActionsIDs(); len(nodes) > 0 && !_u.mutation.ControlActionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.ControlActionsTable,
+			Columns: []string{server.ControlActionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(controlaction.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ControlActionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.ControlActionsTable,
+			Columns: []string{server.ControlActionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(controlaction.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{server.Label}
@@ -787,6 +869,21 @@ func (_u *ServerUpdateOne) AddDbTargets(v ...*DBTarget) *ServerUpdateOne {
 	return _u.AddDbTargetIDs(ids...)
 }
 
+// AddControlActionIDs adds the "control_actions" edge to the ControlAction entity by IDs.
+func (_u *ServerUpdateOne) AddControlActionIDs(ids ...int) *ServerUpdateOne {
+	_u.mutation.AddControlActionIDs(ids...)
+	return _u
+}
+
+// AddControlActions adds the "control_actions" edges to the ControlAction entity.
+func (_u *ServerUpdateOne) AddControlActions(v ...*ControlAction) *ServerUpdateOne {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddControlActionIDs(ids...)
+}
+
 // Mutation returns the ServerMutation object of the builder.
 func (_u *ServerUpdateOne) Mutation() *ServerMutation {
 	return _u.mutation
@@ -838,6 +935,27 @@ func (_u *ServerUpdateOne) RemoveDbTargets(v ...*DBTarget) *ServerUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveDbTargetIDs(ids...)
+}
+
+// ClearControlActions clears all "control_actions" edges to the ControlAction entity.
+func (_u *ServerUpdateOne) ClearControlActions() *ServerUpdateOne {
+	_u.mutation.ClearControlActions()
+	return _u
+}
+
+// RemoveControlActionIDs removes the "control_actions" edge to ControlAction entities by IDs.
+func (_u *ServerUpdateOne) RemoveControlActionIDs(ids ...int) *ServerUpdateOne {
+	_u.mutation.RemoveControlActionIDs(ids...)
+	return _u
+}
+
+// RemoveControlActions removes "control_actions" edges to ControlAction entities.
+func (_u *ServerUpdateOne) RemoveControlActions(v ...*ControlAction) *ServerUpdateOne {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveControlActionIDs(ids...)
 }
 
 // Where appends a list predicates to the ServerUpdate builder.
@@ -1113,6 +1231,51 @@ func (_u *ServerUpdateOne) sqlSave(ctx context.Context) (_node *Server, err erro
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(dbtarget.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ControlActionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.ControlActionsTable,
+			Columns: []string{server.ControlActionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(controlaction.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedControlActionsIDs(); len(nodes) > 0 && !_u.mutation.ControlActionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.ControlActionsTable,
+			Columns: []string{server.ControlActionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(controlaction.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ControlActionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.ControlActionsTable,
+			Columns: []string{server.ControlActionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(controlaction.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

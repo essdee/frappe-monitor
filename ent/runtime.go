@@ -4,6 +4,7 @@ package ent
 
 import (
 	"frappe-monitor/ent/alertstate"
+	"frappe-monitor/ent/controlaction"
 	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/schema"
@@ -44,6 +45,30 @@ func init() {
 	alertstate.DefaultUpdatedAt = alertstateDescUpdatedAt.Default.(func() time.Time)
 	// alertstate.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	alertstate.UpdateDefaultUpdatedAt = alertstateDescUpdatedAt.UpdateDefault.(func() time.Time)
+	controlactionFields := schema.ControlAction{}.Fields()
+	_ = controlactionFields
+	// controlactionDescAction is the schema descriptor for action field.
+	controlactionDescAction := controlactionFields[1].Descriptor()
+	// controlaction.ActionValidator is a validator for the "action" field. It is called by the builders before save.
+	controlaction.ActionValidator = controlactionDescAction.Validators[0].(func(string) error)
+	// controlactionDescRequestedBy is the schema descriptor for requested_by field.
+	controlactionDescRequestedBy := controlactionFields[5].Descriptor()
+	// controlaction.DefaultRequestedBy holds the default value on creation for the requested_by field.
+	controlaction.DefaultRequestedBy = controlactionDescRequestedBy.Default.(string)
+	// controlactionDescExitOk is the schema descriptor for exit_ok field.
+	controlactionDescExitOk := controlactionFields[7].Descriptor()
+	// controlaction.DefaultExitOk holds the default value on creation for the exit_ok field.
+	controlaction.DefaultExitOk = controlactionDescExitOk.Default.(bool)
+	// controlactionDescDurationMs is the schema descriptor for duration_ms field.
+	controlactionDescDurationMs := controlactionFields[10].Descriptor()
+	// controlaction.DefaultDurationMs holds the default value on creation for the duration_ms field.
+	controlaction.DefaultDurationMs = controlactionDescDurationMs.Default.(int)
+	// controlaction.DurationMsValidator is a validator for the "duration_ms" field. It is called by the builders before save.
+	controlaction.DurationMsValidator = controlactionDescDurationMs.Validators[0].(func(int) error)
+	// controlactionDescCreatedAt is the schema descriptor for created_at field.
+	controlactionDescCreatedAt := controlactionFields[11].Descriptor()
+	// controlaction.DefaultCreatedAt holds the default value on creation for the created_at field.
+	controlaction.DefaultCreatedAt = controlactionDescCreatedAt.Default.(func() time.Time)
 	dbtargetFields := schema.DBTarget{}.Fields()
 	_ = dbtargetFields
 	// dbtargetDescName is the schema descriptor for name field.

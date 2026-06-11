@@ -33,6 +33,37 @@ var (
 			},
 		},
 	}
+	// ControlActionsColumns holds the columns for the "control_actions" table.
+	ControlActionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "action", Type: field.TypeString},
+		{Name: "bench_path", Type: field.TypeString, Nullable: true},
+		{Name: "site", Type: field.TypeString, Nullable: true},
+		{Name: "command", Type: field.TypeString, Nullable: true},
+		{Name: "requested_by", Type: field.TypeString, Default: "operator"},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"pending", "running", "success", "failed"}, Default: "pending"},
+		{Name: "exit_ok", Type: field.TypeBool, Default: false},
+		{Name: "output", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "error", Type: field.TypeString, Nullable: true},
+		{Name: "duration_ms", Type: field.TypeInt, Default: 0},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
+		{Name: "server_id", Type: field.TypeInt},
+	}
+	// ControlActionsTable holds the schema information for the "control_actions" table.
+	ControlActionsTable = &schema.Table{
+		Name:       "control_actions",
+		Columns:    ControlActionsColumns,
+		PrimaryKey: []*schema.Column{ControlActionsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "control_actions_servers_control_actions",
+				Columns:    []*schema.Column{ControlActionsColumns[13]},
+				RefColumns: []*schema.Column{ServersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+	}
 	// DbTargetsColumns holds the columns for the "db_targets" table.
 	DbTargetsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -146,6 +177,7 @@ var (
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		AlertStatesTable,
+		ControlActionsTable,
 		DbTargetsTable,
 		LogCursorsTable,
 		ServersTable,
@@ -154,6 +186,7 @@ var (
 )
 
 func init() {
+	ControlActionsTable.ForeignKeys[0].RefTable = ServersTable
 	DbTargetsTable.ForeignKeys[0].RefTable = ServersTable
 	LogCursorsTable.ForeignKeys[0].RefTable = ServersTable
 	SystemSnapshotsTable.ForeignKeys[0].RefTable = ServersTable

@@ -59,6 +59,11 @@ type Deps struct {
 	// (*dbmonitor.Service). Nil = /db-targets/{id}/check returns 503,
 	// but the CRUD endpoints still work.
 	DBChecker DBChecker
+
+	// Phase 10 control panel: runs allowlisted bench/service commands and
+	// site-config edits (*control.Service). Nil = run/site-config return
+	// 503, but the catalog + history endpoints still work.
+	ControlRunner ControlRunner
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -140,6 +145,16 @@ func NewRouter(d Deps) http.Handler {
 			checker:     d.DBChecker,
 		}
 		dh.mount(api)
+
+		// Phase 10 control panel: allowlisted bench/service commands +
+		// site-config edits with a full audit trail. Always mounted; the
+		// mutating endpoints return 503 when the runner isn't wired.
+		ch := &controlHandlers{
+			store:  d.Store,
+			runner: d.ControlRunner,
+			logger: d.Logger,
+		}
+		ch.mount(api)
 
 		// Phase 8 real-time push. Behind the auth gate: the upgrade
 		// request carries the session cookie, validated by authGate

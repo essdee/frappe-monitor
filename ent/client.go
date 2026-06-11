@@ -12,6 +12,7 @@ import (
 	"frappe-monitor/ent/migrate"
 
 	"frappe-monitor/ent/alertstate"
+	"frappe-monitor/ent/controlaction"
 	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/server"
@@ -30,6 +31,8 @@ type Client struct {
 	Schema *migrate.Schema
 	// AlertState is the client for interacting with the AlertState builders.
 	AlertState *AlertStateClient
+	// ControlAction is the client for interacting with the ControlAction builders.
+	ControlAction *ControlActionClient
 	// DBTarget is the client for interacting with the DBTarget builders.
 	DBTarget *DBTargetClient
 	// LogCursor is the client for interacting with the LogCursor builders.
@@ -50,6 +53,7 @@ func NewClient(opts ...Option) *Client {
 func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.AlertState = NewAlertStateClient(c.config)
+	c.ControlAction = NewControlActionClient(c.config)
 	c.DBTarget = NewDBTargetClient(c.config)
 	c.LogCursor = NewLogCursorClient(c.config)
 	c.Server = NewServerClient(c.config)
@@ -147,6 +151,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ctx:            ctx,
 		config:         cfg,
 		AlertState:     NewAlertStateClient(cfg),
+		ControlAction:  NewControlActionClient(cfg),
 		DBTarget:       NewDBTargetClient(cfg),
 		LogCursor:      NewLogCursorClient(cfg),
 		Server:         NewServerClient(cfg),
@@ -171,6 +176,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ctx:            ctx,
 		config:         cfg,
 		AlertState:     NewAlertStateClient(cfg),
+		ControlAction:  NewControlActionClient(cfg),
 		DBTarget:       NewDBTargetClient(cfg),
 		LogCursor:      NewLogCursorClient(cfg),
 		Server:         NewServerClient(cfg),
@@ -203,21 +209,23 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
-	c.AlertState.Use(hooks...)
-	c.DBTarget.Use(hooks...)
-	c.LogCursor.Use(hooks...)
-	c.Server.Use(hooks...)
-	c.SystemSnapshot.Use(hooks...)
+	for _, n := range []interface{ Use(...Hook) }{
+		c.AlertState, c.ControlAction, c.DBTarget, c.LogCursor, c.Server,
+		c.SystemSnapshot,
+	} {
+		n.Use(hooks...)
+	}
 }
 
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
-	c.AlertState.Intercept(interceptors...)
-	c.DBTarget.Intercept(interceptors...)
-	c.LogCursor.Intercept(interceptors...)
-	c.Server.Intercept(interceptors...)
-	c.SystemSnapshot.Intercept(interceptors...)
+	for _, n := range []interface{ Intercept(...Interceptor) }{
+		c.AlertState, c.ControlAction, c.DBTarget, c.LogCursor, c.Server,
+		c.SystemSnapshot,
+	} {
+		n.Intercept(interceptors...)
+	}
 }
 
 // Mutate implements the ent.Mutator interface.
@@ -225,6 +233,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 	switch m := m.(type) {
 	case *AlertStateMutation:
 		return c.AlertState.mutate(ctx, m)
+	case *ControlActionMutation:
+		return c.ControlAction.mutate(ctx, m)
 	case *DBTargetMutation:
 		return c.DBTarget.mutate(ctx, m)
 	case *LogCursorMutation:
@@ -368,6 +378,155 @@ func (c *AlertStateClient) mutate(ctx context.Context, m *AlertStateMutation) (V
 		return (&AlertStateDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown AlertState mutation op: %q", m.Op())
+	}
+}
+
+// ControlActionClient is a client for the ControlAction schema.
+type ControlActionClient struct {
+	config
+}
+
+// NewControlActionClient returns a client for the ControlAction from the given config.
+func NewControlActionClient(c config) *ControlActionClient {
+	return &ControlActionClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `controlaction.Hooks(f(g(h())))`.
+func (c *ControlActionClient) Use(hooks ...Hook) {
+	c.hooks.ControlAction = append(c.hooks.ControlAction, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `controlaction.Intercept(f(g(h())))`.
+func (c *ControlActionClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ControlAction = append(c.inters.ControlAction, interceptors...)
+}
+
+// Create returns a builder for creating a ControlAction entity.
+func (c *ControlActionClient) Create() *ControlActionCreate {
+	mutation := newControlActionMutation(c.config, OpCreate)
+	return &ControlActionCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ControlAction entities.
+func (c *ControlActionClient) CreateBulk(builders ...*ControlActionCreate) *ControlActionCreateBulk {
+	return &ControlActionCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ControlActionClient) MapCreateBulk(slice any, setFunc func(*ControlActionCreate, int)) *ControlActionCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ControlActionCreateBulk{err: fmt.Errorf("calling to ControlActionClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ControlActionCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ControlActionCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ControlAction.
+func (c *ControlActionClient) Update() *ControlActionUpdate {
+	mutation := newControlActionMutation(c.config, OpUpdate)
+	return &ControlActionUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ControlActionClient) UpdateOne(_m *ControlAction) *ControlActionUpdateOne {
+	mutation := newControlActionMutation(c.config, OpUpdateOne, withControlAction(_m))
+	return &ControlActionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ControlActionClient) UpdateOneID(id int) *ControlActionUpdateOne {
+	mutation := newControlActionMutation(c.config, OpUpdateOne, withControlActionID(id))
+	return &ControlActionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ControlAction.
+func (c *ControlActionClient) Delete() *ControlActionDelete {
+	mutation := newControlActionMutation(c.config, OpDelete)
+	return &ControlActionDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ControlActionClient) DeleteOne(_m *ControlAction) *ControlActionDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ControlActionClient) DeleteOneID(id int) *ControlActionDeleteOne {
+	builder := c.Delete().Where(controlaction.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ControlActionDeleteOne{builder}
+}
+
+// Query returns a query builder for ControlAction.
+func (c *ControlActionClient) Query() *ControlActionQuery {
+	return &ControlActionQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeControlAction},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ControlAction entity by its id.
+func (c *ControlActionClient) Get(ctx context.Context, id int) (*ControlAction, error) {
+	return c.Query().Where(controlaction.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ControlActionClient) GetX(ctx context.Context, id int) *ControlAction {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryServer queries the server edge of a ControlAction.
+func (c *ControlActionClient) QueryServer(_m *ControlAction) *ServerQuery {
+	query := (&ServerClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(controlaction.Table, controlaction.FieldID, id),
+			sqlgraph.To(server.Table, server.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, controlaction.ServerTable, controlaction.ServerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ControlActionClient) Hooks() []Hook {
+	return c.hooks.ControlAction
+}
+
+// Interceptors returns the client interceptors.
+func (c *ControlActionClient) Interceptors() []Interceptor {
+	return c.inters.ControlAction
+}
+
+func (c *ControlActionClient) mutate(ctx context.Context, m *ControlActionMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ControlActionCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ControlActionUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ControlActionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ControlActionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ControlAction mutation op: %q", m.Op())
 	}
 }
 
@@ -825,6 +984,22 @@ func (c *ServerClient) QueryDbTargets(_m *Server) *DBTargetQuery {
 	return query
 }
 
+// QueryControlActions queries the control_actions edge of a Server.
+func (c *ServerClient) QueryControlActions(_m *Server) *ControlActionQuery {
+	query := (&ControlActionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(server.Table, server.FieldID, id),
+			sqlgraph.To(controlaction.Table, controlaction.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, server.ControlActionsTable, server.ControlActionsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *ServerClient) Hooks() []Hook {
 	return c.hooks.Server
@@ -1002,9 +1177,11 @@ func (c *SystemSnapshotClient) mutate(ctx context.Context, m *SystemSnapshotMuta
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AlertState, DBTarget, LogCursor, Server, SystemSnapshot []ent.Hook
+		AlertState, ControlAction, DBTarget, LogCursor, Server,
+		SystemSnapshot []ent.Hook
 	}
 	inters struct {
-		AlertState, DBTarget, LogCursor, Server, SystemSnapshot []ent.Interceptor
+		AlertState, ControlAction, DBTarget, LogCursor, Server,
+		SystemSnapshot []ent.Interceptor
 	}
 )

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"frappe-monitor/ent/controlaction"
 	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/server"
@@ -198,6 +199,21 @@ func (_c *ServerCreate) AddDbTargets(v ...*DBTarget) *ServerCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddDbTargetIDs(ids...)
+}
+
+// AddControlActionIDs adds the "control_actions" edge to the ControlAction entity by IDs.
+func (_c *ServerCreate) AddControlActionIDs(ids ...int) *ServerCreate {
+	_c.mutation.AddControlActionIDs(ids...)
+	return _c
+}
+
+// AddControlActions adds the "control_actions" edges to the ControlAction entity.
+func (_c *ServerCreate) AddControlActions(v ...*ControlAction) *ServerCreate {
+	ids := make([]int, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddControlActionIDs(ids...)
 }
 
 // Mutation returns the ServerMutation object of the builder.
@@ -423,6 +439,22 @@ func (_c *ServerCreate) createSpec() (*Server, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(dbtarget.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ControlActionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   server.ControlActionsTable,
+			Columns: []string{server.ControlActionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(controlaction.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

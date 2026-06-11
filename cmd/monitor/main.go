@@ -19,6 +19,7 @@ import (
 	"frappe-monitor/internal/api"
 	"frappe-monitor/internal/collector"
 	"frappe-monitor/internal/config"
+	"frappe-monitor/internal/control"
 	"frappe-monitor/internal/dbmonitor"
 	"frappe-monitor/internal/logs"
 	"frappe-monitor/internal/metrics"
@@ -221,6 +222,11 @@ func run(cfgPath string) error {
 	dbMon.Start(ctx)
 	logger.Info("db monitor started")
 
+	// Phase 10: control panel. Runs allowlisted bench/service commands and
+	// site-config edits over the same SSH pool, recording every run in the
+	// audit log and pushing lifecycle over WebSocket. Stateless — no Start.
+	ctrl := control.New(store, pool, hub, logger)
+
 	// Lifecycle hooks: when a server is added/removed via the API,
 	// register/deregister its scheduler entry so it picks up (or
 	// stops) on the next tick — no process restart required.
@@ -331,7 +337,8 @@ func run(cfgPath string) error {
 		}(),
 
 		// Phase 9: on-demand DB replication checks.
-		DBChecker: dbMon,
+		DBChecker:     dbMon,
+		ControlRunner: ctrl,
 	})
 
 	srv := &http.Server{

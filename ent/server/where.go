@@ -714,6 +714,29 @@ func HasDbTargetsWith(preds ...predicate.DBTarget) predicate.Server {
 	})
 }
 
+// HasControlActions applies the HasEdge predicate on the "control_actions" edge.
+func HasControlActions() predicate.Server {
+	return predicate.Server(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, ControlActionsTable, ControlActionsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasControlActionsWith applies the HasEdge predicate on the "control_actions" edge with a given conditions (other predicates).
+func HasControlActionsWith(preds ...predicate.ControlAction) predicate.Server {
+	return predicate.Server(func(s *sql.Selector) {
+		step := newControlActionsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.Server) predicate.Server {
 	return predicate.Server(sql.AndPredicates(predicates...))

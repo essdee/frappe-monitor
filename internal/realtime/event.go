@@ -32,19 +32,21 @@ type Event struct {
 
 // Server→client event types.
 const (
-	TypeServerStatus  = "server.status"  // a pull updated a server's reachability
-	TypeServerCreated = "server.created" // a server was added via the API
-	TypeServerUpdated = "server.updated" // a server's fields were edited
-	TypeServerDeleted = "server.deleted" // a server was removed
-	TypeMetrics       = "metrics"        // fresh metrics from a collection cycle
-	TypeAlertFiring   = "alert.firing"   // an alert started firing
-	TypeAlertResolved = "alert.resolved" // an alert cleared
-	TypeLogLine       = "log.line"       // a live log line from the streamer
-	TypeHello         = "hello"          // sent once on connect (server clock + version)
-	TypeDBStatus      = "db.status"      // a DB target's replication status changed
-	TypeDBCreated     = "db.created"     // a DB target was added
-	TypeDBUpdated     = "db.updated"     // a DB target was edited
-	TypeDBDeleted     = "db.deleted"     // a DB target was removed
+	TypeServerStatus   = "server.status"   // a pull updated a server's reachability
+	TypeServerCreated  = "server.created"  // a server was added via the API
+	TypeServerUpdated  = "server.updated"  // a server's fields were edited
+	TypeServerDeleted  = "server.deleted"  // a server was removed
+	TypeMetrics        = "metrics"         // fresh metrics from a collection cycle
+	TypeAlertFiring    = "alert.firing"    // an alert started firing
+	TypeAlertResolved  = "alert.resolved"  // an alert cleared
+	TypeLogLine        = "log.line"        // a live log line from the streamer
+	TypeHello          = "hello"           // sent once on connect (server clock + version)
+	TypeDBStatus       = "db.status"       // a DB target's replication status changed
+	TypeDBCreated      = "db.created"      // a DB target was added
+	TypeDBUpdated      = "db.updated"      // a DB target was edited
+	TypeDBDeleted      = "db.deleted"      // a DB target was removed
+	TypeControlStarted = "control.started" // a control-panel action was queued
+	TypeControlUpdated = "control.updated" // a control-panel action changed state
 )
 
 // Client→server control actions (see ClientMessage.Action).
@@ -78,6 +80,9 @@ func TopicLogs(serverID int) string { return fmt.Sprintf("logs:%d", serverID) }
 
 // TopicDatabases is the room for the DB-target list + replication status.
 func TopicDatabases() string { return "databases" }
+
+// TopicControl is the room for control-panel action lifecycle events.
+func TopicControl() string { return "control" }
 
 // Broadcaster is the narrow interface producers depend on so they don't
 // import the whole hub. *Hub implements it. HasSubscribers lets a hot

@@ -9,6 +9,9 @@ import (
 // AlertState is the predicate function for alertstate builders.
 type AlertState func(*sql.Selector)
 
+// ControlAction is the predicate function for controlaction builders.
+type ControlAction func(*sql.Selector)
+
 // DBTarget is the predicate function for dbtarget builders.
 type DBTarget func(*sql.Selector)
 

@@ -45,6 +45,8 @@ const (
 	EdgeSystemSnapshot = "system_snapshot"
 	// EdgeDbTargets holds the string denoting the db_targets edge name in mutations.
 	EdgeDbTargets = "db_targets"
+	// EdgeControlActions holds the string denoting the control_actions edge name in mutations.
+	EdgeControlActions = "control_actions"
 	// Table holds the table name of the server in the database.
 	Table = "servers"
 	// LogCursorsTable is the table that holds the log_cursors relation/edge.
@@ -68,6 +70,13 @@ const (
 	DbTargetsInverseTable = "db_targets"
 	// DbTargetsColumn is the table column denoting the db_targets relation/edge.
 	DbTargetsColumn = "server_id"
+	// ControlActionsTable is the table that holds the control_actions relation/edge.
+	ControlActionsTable = "control_actions"
+	// ControlActionsInverseTable is the table name for the ControlAction entity.
+	// It exists in this package in order to avoid circular dependency with the "controlaction" package.
+	ControlActionsInverseTable = "control_actions"
+	// ControlActionsColumn is the table column denoting the control_actions relation/edge.
+	ControlActionsColumn = "server_id"
 )
 
 // Columns holds all SQL columns for server fields.
@@ -237,6 +246,20 @@ func ByDbTargets(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newDbTargetsStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// ByControlActionsCount orders the results by control_actions count.
+func ByControlActionsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newControlActionsStep(), opts...)
+	}
+}
+
+// ByControlActions orders the results by control_actions terms.
+func ByControlActions(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newControlActionsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newLogCursorsStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -256,5 +279,12 @@ func newDbTargetsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(DbTargetsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, DbTargetsTable, DbTargetsColumn),
+	)
+}
+func newControlActionsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ControlActionsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, ControlActionsTable, ControlActionsColumn),
 	)
 }

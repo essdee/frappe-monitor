@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"frappe-monitor/ent/alertstate"
+	"frappe-monitor/ent/controlaction"
 	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
@@ -29,6 +30,7 @@ const (
 
 	// Node types.
 	TypeAlertState     = "AlertState"
+	TypeControlAction  = "ControlAction"
 	TypeDBTarget       = "DBTarget"
 	TypeLogCursor      = "LogCursor"
 	TypeServer         = "Server"
@@ -795,6 +797,1187 @@ func (m *AlertStateMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *AlertStateMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown AlertState edge %s", name)
+}
+
+// ControlActionMutation represents an operation that mutates the ControlAction nodes in the graph.
+type ControlActionMutation struct {
+	config
+	op             Op
+	typ            string
+	id             *int
+	action         *string
+	bench_path     *string
+	site           *string
+	command        *string
+	requested_by   *string
+	status         *controlaction.Status
+	exit_ok        *bool
+	output         *string
+	error          *string
+	duration_ms    *int
+	addduration_ms *int
+	created_at     *time.Time
+	finished_at    *time.Time
+	clearedFields  map[string]struct{}
+	server         *int
+	clearedserver  bool
+	done           bool
+	oldValue       func(context.Context) (*ControlAction, error)
+	predicates     []predicate.ControlAction
+}
+
+var _ ent.Mutation = (*ControlActionMutation)(nil)
+
+// controlactionOption allows management of the mutation configuration using functional options.
+type controlactionOption func(*ControlActionMutation)
+
+// newControlActionMutation creates new mutation for the ControlAction entity.
+func newControlActionMutation(c config, op Op, opts ...controlactionOption) *ControlActionMutation {
+	m := &ControlActionMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeControlAction,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withControlActionID sets the ID field of the mutation.
+func withControlActionID(id int) controlactionOption {
+	return func(m *ControlActionMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ControlAction
+		)
+		m.oldValue = func(ctx context.Context) (*ControlAction, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ControlAction.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withControlAction sets the old ControlAction of the mutation.
+func withControlAction(node *ControlAction) controlactionOption {
+	return func(m *ControlActionMutation) {
+		m.oldValue = func(context.Context) (*ControlAction, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ControlActionMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ControlActionMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ControlActionMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ControlActionMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ControlAction.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetServerID sets the "server_id" field.
+func (m *ControlActionMutation) SetServerID(i int) {
+	m.server = &i
+}
+
+// ServerID returns the value of the "server_id" field in the mutation.
+func (m *ControlActionMutation) ServerID() (r int, exists bool) {
+	v := m.server
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldServerID returns the old "server_id" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldServerID(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldServerID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldServerID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldServerID: %w", err)
+	}
+	return oldValue.ServerID, nil
+}
+
+// ResetServerID resets all changes to the "server_id" field.
+func (m *ControlActionMutation) ResetServerID() {
+	m.server = nil
+}
+
+// SetAction sets the "action" field.
+func (m *ControlActionMutation) SetAction(s string) {
+	m.action = &s
+}
+
+// Action returns the value of the "action" field in the mutation.
+func (m *ControlActionMutation) Action() (r string, exists bool) {
+	v := m.action
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAction returns the old "action" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldAction(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAction is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAction requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAction: %w", err)
+	}
+	return oldValue.Action, nil
+}
+
+// ResetAction resets all changes to the "action" field.
+func (m *ControlActionMutation) ResetAction() {
+	m.action = nil
+}
+
+// SetBenchPath sets the "bench_path" field.
+func (m *ControlActionMutation) SetBenchPath(s string) {
+	m.bench_path = &s
+}
+
+// BenchPath returns the value of the "bench_path" field in the mutation.
+func (m *ControlActionMutation) BenchPath() (r string, exists bool) {
+	v := m.bench_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBenchPath returns the old "bench_path" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldBenchPath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBenchPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBenchPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBenchPath: %w", err)
+	}
+	return oldValue.BenchPath, nil
+}
+
+// ClearBenchPath clears the value of the "bench_path" field.
+func (m *ControlActionMutation) ClearBenchPath() {
+	m.bench_path = nil
+	m.clearedFields[controlaction.FieldBenchPath] = struct{}{}
+}
+
+// BenchPathCleared returns if the "bench_path" field was cleared in this mutation.
+func (m *ControlActionMutation) BenchPathCleared() bool {
+	_, ok := m.clearedFields[controlaction.FieldBenchPath]
+	return ok
+}
+
+// ResetBenchPath resets all changes to the "bench_path" field.
+func (m *ControlActionMutation) ResetBenchPath() {
+	m.bench_path = nil
+	delete(m.clearedFields, controlaction.FieldBenchPath)
+}
+
+// SetSite sets the "site" field.
+func (m *ControlActionMutation) SetSite(s string) {
+	m.site = &s
+}
+
+// Site returns the value of the "site" field in the mutation.
+func (m *ControlActionMutation) Site() (r string, exists bool) {
+	v := m.site
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSite returns the old "site" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldSite(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSite is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSite requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSite: %w", err)
+	}
+	return oldValue.Site, nil
+}
+
+// ClearSite clears the value of the "site" field.
+func (m *ControlActionMutation) ClearSite() {
+	m.site = nil
+	m.clearedFields[controlaction.FieldSite] = struct{}{}
+}
+
+// SiteCleared returns if the "site" field was cleared in this mutation.
+func (m *ControlActionMutation) SiteCleared() bool {
+	_, ok := m.clearedFields[controlaction.FieldSite]
+	return ok
+}
+
+// ResetSite resets all changes to the "site" field.
+func (m *ControlActionMutation) ResetSite() {
+	m.site = nil
+	delete(m.clearedFields, controlaction.FieldSite)
+}
+
+// SetCommand sets the "command" field.
+func (m *ControlActionMutation) SetCommand(s string) {
+	m.command = &s
+}
+
+// Command returns the value of the "command" field in the mutation.
+func (m *ControlActionMutation) Command() (r string, exists bool) {
+	v := m.command
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCommand returns the old "command" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldCommand(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCommand is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCommand requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCommand: %w", err)
+	}
+	return oldValue.Command, nil
+}
+
+// ClearCommand clears the value of the "command" field.
+func (m *ControlActionMutation) ClearCommand() {
+	m.command = nil
+	m.clearedFields[controlaction.FieldCommand] = struct{}{}
+}
+
+// CommandCleared returns if the "command" field was cleared in this mutation.
+func (m *ControlActionMutation) CommandCleared() bool {
+	_, ok := m.clearedFields[controlaction.FieldCommand]
+	return ok
+}
+
+// ResetCommand resets all changes to the "command" field.
+func (m *ControlActionMutation) ResetCommand() {
+	m.command = nil
+	delete(m.clearedFields, controlaction.FieldCommand)
+}
+
+// SetRequestedBy sets the "requested_by" field.
+func (m *ControlActionMutation) SetRequestedBy(s string) {
+	m.requested_by = &s
+}
+
+// RequestedBy returns the value of the "requested_by" field in the mutation.
+func (m *ControlActionMutation) RequestedBy() (r string, exists bool) {
+	v := m.requested_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequestedBy returns the old "requested_by" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldRequestedBy(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequestedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequestedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequestedBy: %w", err)
+	}
+	return oldValue.RequestedBy, nil
+}
+
+// ResetRequestedBy resets all changes to the "requested_by" field.
+func (m *ControlActionMutation) ResetRequestedBy() {
+	m.requested_by = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *ControlActionMutation) SetStatus(c controlaction.Status) {
+	m.status = &c
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *ControlActionMutation) Status() (r controlaction.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldStatus(ctx context.Context) (v controlaction.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *ControlActionMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetExitOk sets the "exit_ok" field.
+func (m *ControlActionMutation) SetExitOk(b bool) {
+	m.exit_ok = &b
+}
+
+// ExitOk returns the value of the "exit_ok" field in the mutation.
+func (m *ControlActionMutation) ExitOk() (r bool, exists bool) {
+	v := m.exit_ok
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExitOk returns the old "exit_ok" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldExitOk(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExitOk is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExitOk requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExitOk: %w", err)
+	}
+	return oldValue.ExitOk, nil
+}
+
+// ResetExitOk resets all changes to the "exit_ok" field.
+func (m *ControlActionMutation) ResetExitOk() {
+	m.exit_ok = nil
+}
+
+// SetOutput sets the "output" field.
+func (m *ControlActionMutation) SetOutput(s string) {
+	m.output = &s
+}
+
+// Output returns the value of the "output" field in the mutation.
+func (m *ControlActionMutation) Output() (r string, exists bool) {
+	v := m.output
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOutput returns the old "output" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldOutput(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOutput is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOutput requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOutput: %w", err)
+	}
+	return oldValue.Output, nil
+}
+
+// ClearOutput clears the value of the "output" field.
+func (m *ControlActionMutation) ClearOutput() {
+	m.output = nil
+	m.clearedFields[controlaction.FieldOutput] = struct{}{}
+}
+
+// OutputCleared returns if the "output" field was cleared in this mutation.
+func (m *ControlActionMutation) OutputCleared() bool {
+	_, ok := m.clearedFields[controlaction.FieldOutput]
+	return ok
+}
+
+// ResetOutput resets all changes to the "output" field.
+func (m *ControlActionMutation) ResetOutput() {
+	m.output = nil
+	delete(m.clearedFields, controlaction.FieldOutput)
+}
+
+// SetError sets the "error" field.
+func (m *ControlActionMutation) SetError(s string) {
+	m.error = &s
+}
+
+// Error returns the value of the "error" field in the mutation.
+func (m *ControlActionMutation) Error() (r string, exists bool) {
+	v := m.error
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldError returns the old "error" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldError(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldError is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldError requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldError: %w", err)
+	}
+	return oldValue.Error, nil
+}
+
+// ClearError clears the value of the "error" field.
+func (m *ControlActionMutation) ClearError() {
+	m.error = nil
+	m.clearedFields[controlaction.FieldError] = struct{}{}
+}
+
+// ErrorCleared returns if the "error" field was cleared in this mutation.
+func (m *ControlActionMutation) ErrorCleared() bool {
+	_, ok := m.clearedFields[controlaction.FieldError]
+	return ok
+}
+
+// ResetError resets all changes to the "error" field.
+func (m *ControlActionMutation) ResetError() {
+	m.error = nil
+	delete(m.clearedFields, controlaction.FieldError)
+}
+
+// SetDurationMs sets the "duration_ms" field.
+func (m *ControlActionMutation) SetDurationMs(i int) {
+	m.duration_ms = &i
+	m.addduration_ms = nil
+}
+
+// DurationMs returns the value of the "duration_ms" field in the mutation.
+func (m *ControlActionMutation) DurationMs() (r int, exists bool) {
+	v := m.duration_ms
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDurationMs returns the old "duration_ms" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldDurationMs(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDurationMs is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDurationMs requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDurationMs: %w", err)
+	}
+	return oldValue.DurationMs, nil
+}
+
+// AddDurationMs adds i to the "duration_ms" field.
+func (m *ControlActionMutation) AddDurationMs(i int) {
+	if m.addduration_ms != nil {
+		*m.addduration_ms += i
+	} else {
+		m.addduration_ms = &i
+	}
+}
+
+// AddedDurationMs returns the value that was added to the "duration_ms" field in this mutation.
+func (m *ControlActionMutation) AddedDurationMs() (r int, exists bool) {
+	v := m.addduration_ms
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDurationMs resets all changes to the "duration_ms" field.
+func (m *ControlActionMutation) ResetDurationMs() {
+	m.duration_ms = nil
+	m.addduration_ms = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *ControlActionMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *ControlActionMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *ControlActionMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetFinishedAt sets the "finished_at" field.
+func (m *ControlActionMutation) SetFinishedAt(t time.Time) {
+	m.finished_at = &t
+}
+
+// FinishedAt returns the value of the "finished_at" field in the mutation.
+func (m *ControlActionMutation) FinishedAt() (r time.Time, exists bool) {
+	v := m.finished_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFinishedAt returns the old "finished_at" field's value of the ControlAction entity.
+// If the ControlAction object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ControlActionMutation) OldFinishedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFinishedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFinishedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFinishedAt: %w", err)
+	}
+	return oldValue.FinishedAt, nil
+}
+
+// ClearFinishedAt clears the value of the "finished_at" field.
+func (m *ControlActionMutation) ClearFinishedAt() {
+	m.finished_at = nil
+	m.clearedFields[controlaction.FieldFinishedAt] = struct{}{}
+}
+
+// FinishedAtCleared returns if the "finished_at" field was cleared in this mutation.
+func (m *ControlActionMutation) FinishedAtCleared() bool {
+	_, ok := m.clearedFields[controlaction.FieldFinishedAt]
+	return ok
+}
+
+// ResetFinishedAt resets all changes to the "finished_at" field.
+func (m *ControlActionMutation) ResetFinishedAt() {
+	m.finished_at = nil
+	delete(m.clearedFields, controlaction.FieldFinishedAt)
+}
+
+// ClearServer clears the "server" edge to the Server entity.
+func (m *ControlActionMutation) ClearServer() {
+	m.clearedserver = true
+	m.clearedFields[controlaction.FieldServerID] = struct{}{}
+}
+
+// ServerCleared reports if the "server" edge to the Server entity was cleared.
+func (m *ControlActionMutation) ServerCleared() bool {
+	return m.clearedserver
+}
+
+// ServerIDs returns the "server" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ServerID instead. It exists only for internal usage by the builders.
+func (m *ControlActionMutation) ServerIDs() (ids []int) {
+	if id := m.server; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetServer resets all changes to the "server" edge.
+func (m *ControlActionMutation) ResetServer() {
+	m.server = nil
+	m.clearedserver = false
+}
+
+// Where appends a list predicates to the ControlActionMutation builder.
+func (m *ControlActionMutation) Where(ps ...predicate.ControlAction) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ControlActionMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ControlActionMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ControlAction, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ControlActionMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ControlActionMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ControlAction).
+func (m *ControlActionMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ControlActionMutation) Fields() []string {
+	fields := make([]string, 0, 13)
+	if m.server != nil {
+		fields = append(fields, controlaction.FieldServerID)
+	}
+	if m.action != nil {
+		fields = append(fields, controlaction.FieldAction)
+	}
+	if m.bench_path != nil {
+		fields = append(fields, controlaction.FieldBenchPath)
+	}
+	if m.site != nil {
+		fields = append(fields, controlaction.FieldSite)
+	}
+	if m.command != nil {
+		fields = append(fields, controlaction.FieldCommand)
+	}
+	if m.requested_by != nil {
+		fields = append(fields, controlaction.FieldRequestedBy)
+	}
+	if m.status != nil {
+		fields = append(fields, controlaction.FieldStatus)
+	}
+	if m.exit_ok != nil {
+		fields = append(fields, controlaction.FieldExitOk)
+	}
+	if m.output != nil {
+		fields = append(fields, controlaction.FieldOutput)
+	}
+	if m.error != nil {
+		fields = append(fields, controlaction.FieldError)
+	}
+	if m.duration_ms != nil {
+		fields = append(fields, controlaction.FieldDurationMs)
+	}
+	if m.created_at != nil {
+		fields = append(fields, controlaction.FieldCreatedAt)
+	}
+	if m.finished_at != nil {
+		fields = append(fields, controlaction.FieldFinishedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ControlActionMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case controlaction.FieldServerID:
+		return m.ServerID()
+	case controlaction.FieldAction:
+		return m.Action()
+	case controlaction.FieldBenchPath:
+		return m.BenchPath()
+	case controlaction.FieldSite:
+		return m.Site()
+	case controlaction.FieldCommand:
+		return m.Command()
+	case controlaction.FieldRequestedBy:
+		return m.RequestedBy()
+	case controlaction.FieldStatus:
+		return m.Status()
+	case controlaction.FieldExitOk:
+		return m.ExitOk()
+	case controlaction.FieldOutput:
+		return m.Output()
+	case controlaction.FieldError:
+		return m.Error()
+	case controlaction.FieldDurationMs:
+		return m.DurationMs()
+	case controlaction.FieldCreatedAt:
+		return m.CreatedAt()
+	case controlaction.FieldFinishedAt:
+		return m.FinishedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ControlActionMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case controlaction.FieldServerID:
+		return m.OldServerID(ctx)
+	case controlaction.FieldAction:
+		return m.OldAction(ctx)
+	case controlaction.FieldBenchPath:
+		return m.OldBenchPath(ctx)
+	case controlaction.FieldSite:
+		return m.OldSite(ctx)
+	case controlaction.FieldCommand:
+		return m.OldCommand(ctx)
+	case controlaction.FieldRequestedBy:
+		return m.OldRequestedBy(ctx)
+	case controlaction.FieldStatus:
+		return m.OldStatus(ctx)
+	case controlaction.FieldExitOk:
+		return m.OldExitOk(ctx)
+	case controlaction.FieldOutput:
+		return m.OldOutput(ctx)
+	case controlaction.FieldError:
+		return m.OldError(ctx)
+	case controlaction.FieldDurationMs:
+		return m.OldDurationMs(ctx)
+	case controlaction.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case controlaction.FieldFinishedAt:
+		return m.OldFinishedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown ControlAction field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ControlActionMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case controlaction.FieldServerID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetServerID(v)
+		return nil
+	case controlaction.FieldAction:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAction(v)
+		return nil
+	case controlaction.FieldBenchPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBenchPath(v)
+		return nil
+	case controlaction.FieldSite:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSite(v)
+		return nil
+	case controlaction.FieldCommand:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCommand(v)
+		return nil
+	case controlaction.FieldRequestedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequestedBy(v)
+		return nil
+	case controlaction.FieldStatus:
+		v, ok := value.(controlaction.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case controlaction.FieldExitOk:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExitOk(v)
+		return nil
+	case controlaction.FieldOutput:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOutput(v)
+		return nil
+	case controlaction.FieldError:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetError(v)
+		return nil
+	case controlaction.FieldDurationMs:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDurationMs(v)
+		return nil
+	case controlaction.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case controlaction.FieldFinishedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFinishedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ControlAction field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ControlActionMutation) AddedFields() []string {
+	var fields []string
+	if m.addduration_ms != nil {
+		fields = append(fields, controlaction.FieldDurationMs)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ControlActionMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case controlaction.FieldDurationMs:
+		return m.AddedDurationMs()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ControlActionMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case controlaction.FieldDurationMs:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDurationMs(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ControlAction numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ControlActionMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(controlaction.FieldBenchPath) {
+		fields = append(fields, controlaction.FieldBenchPath)
+	}
+	if m.FieldCleared(controlaction.FieldSite) {
+		fields = append(fields, controlaction.FieldSite)
+	}
+	if m.FieldCleared(controlaction.FieldCommand) {
+		fields = append(fields, controlaction.FieldCommand)
+	}
+	if m.FieldCleared(controlaction.FieldOutput) {
+		fields = append(fields, controlaction.FieldOutput)
+	}
+	if m.FieldCleared(controlaction.FieldError) {
+		fields = append(fields, controlaction.FieldError)
+	}
+	if m.FieldCleared(controlaction.FieldFinishedAt) {
+		fields = append(fields, controlaction.FieldFinishedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ControlActionMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ControlActionMutation) ClearField(name string) error {
+	switch name {
+	case controlaction.FieldBenchPath:
+		m.ClearBenchPath()
+		return nil
+	case controlaction.FieldSite:
+		m.ClearSite()
+		return nil
+	case controlaction.FieldCommand:
+		m.ClearCommand()
+		return nil
+	case controlaction.FieldOutput:
+		m.ClearOutput()
+		return nil
+	case controlaction.FieldError:
+		m.ClearError()
+		return nil
+	case controlaction.FieldFinishedAt:
+		m.ClearFinishedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown ControlAction nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ControlActionMutation) ResetField(name string) error {
+	switch name {
+	case controlaction.FieldServerID:
+		m.ResetServerID()
+		return nil
+	case controlaction.FieldAction:
+		m.ResetAction()
+		return nil
+	case controlaction.FieldBenchPath:
+		m.ResetBenchPath()
+		return nil
+	case controlaction.FieldSite:
+		m.ResetSite()
+		return nil
+	case controlaction.FieldCommand:
+		m.ResetCommand()
+		return nil
+	case controlaction.FieldRequestedBy:
+		m.ResetRequestedBy()
+		return nil
+	case controlaction.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case controlaction.FieldExitOk:
+		m.ResetExitOk()
+		return nil
+	case controlaction.FieldOutput:
+		m.ResetOutput()
+		return nil
+	case controlaction.FieldError:
+		m.ResetError()
+		return nil
+	case controlaction.FieldDurationMs:
+		m.ResetDurationMs()
+		return nil
+	case controlaction.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case controlaction.FieldFinishedAt:
+		m.ResetFinishedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown ControlAction field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ControlActionMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.server != nil {
+		edges = append(edges, controlaction.EdgeServer)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ControlActionMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case controlaction.EdgeServer:
+		if id := m.server; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ControlActionMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ControlActionMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ControlActionMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedserver {
+		edges = append(edges, controlaction.EdgeServer)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ControlActionMutation) EdgeCleared(name string) bool {
+	switch name {
+	case controlaction.EdgeServer:
+		return m.clearedserver
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ControlActionMutation) ClearEdge(name string) error {
+	switch name {
+	case controlaction.EdgeServer:
+		m.ClearServer()
+		return nil
+	}
+	return fmt.Errorf("unknown ControlAction unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ControlActionMutation) ResetEdge(name string) error {
+	switch name {
+	case controlaction.EdgeServer:
+		m.ResetServer()
+		return nil
+	}
+	return fmt.Errorf("unknown ControlAction edge %s", name)
 }
 
 // DBTargetMutation represents an operation that mutates the DBTarget nodes in the graph.
@@ -2974,6 +4157,9 @@ type ServerMutation struct {
 	db_targets             map[int]struct{}
 	removeddb_targets      map[int]struct{}
 	cleareddb_targets      bool
+	control_actions        map[int]struct{}
+	removedcontrol_actions map[int]struct{}
+	clearedcontrol_actions bool
 	done                   bool
 	oldValue               func(context.Context) (*Server, error)
 	predicates             []predicate.Server
@@ -3744,6 +4930,60 @@ func (m *ServerMutation) ResetDbTargets() {
 	m.removeddb_targets = nil
 }
 
+// AddControlActionIDs adds the "control_actions" edge to the ControlAction entity by ids.
+func (m *ServerMutation) AddControlActionIDs(ids ...int) {
+	if m.control_actions == nil {
+		m.control_actions = make(map[int]struct{})
+	}
+	for i := range ids {
+		m.control_actions[ids[i]] = struct{}{}
+	}
+}
+
+// ClearControlActions clears the "control_actions" edge to the ControlAction entity.
+func (m *ServerMutation) ClearControlActions() {
+	m.clearedcontrol_actions = true
+}
+
+// ControlActionsCleared reports if the "control_actions" edge to the ControlAction entity was cleared.
+func (m *ServerMutation) ControlActionsCleared() bool {
+	return m.clearedcontrol_actions
+}
+
+// RemoveControlActionIDs removes the "control_actions" edge to the ControlAction entity by IDs.
+func (m *ServerMutation) RemoveControlActionIDs(ids ...int) {
+	if m.removedcontrol_actions == nil {
+		m.removedcontrol_actions = make(map[int]struct{})
+	}
+	for i := range ids {
+		delete(m.control_actions, ids[i])
+		m.removedcontrol_actions[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedControlActions returns the removed IDs of the "control_actions" edge to the ControlAction entity.
+func (m *ServerMutation) RemovedControlActionsIDs() (ids []int) {
+	for id := range m.removedcontrol_actions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ControlActionsIDs returns the "control_actions" edge IDs in the mutation.
+func (m *ServerMutation) ControlActionsIDs() (ids []int) {
+	for id := range m.control_actions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetControlActions resets all changes to the "control_actions" edge.
+func (m *ServerMutation) ResetControlActions() {
+	m.control_actions = nil
+	m.clearedcontrol_actions = false
+	m.removedcontrol_actions = nil
+}
+
 // Where appends a list predicates to the ServerMutation builder.
 func (m *ServerMutation) Where(ps ...predicate.Server) {
 	m.predicates = append(m.predicates, ps...)
@@ -4106,7 +5346,7 @@ func (m *ServerMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ServerMutation) AddedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.log_cursors != nil {
 		edges = append(edges, server.EdgeLogCursors)
 	}
@@ -4115,6 +5355,9 @@ func (m *ServerMutation) AddedEdges() []string {
 	}
 	if m.db_targets != nil {
 		edges = append(edges, server.EdgeDbTargets)
+	}
+	if m.control_actions != nil {
+		edges = append(edges, server.EdgeControlActions)
 	}
 	return edges
 }
@@ -4139,18 +5382,27 @@ func (m *ServerMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case server.EdgeControlActions:
+		ids := make([]ent.Value, 0, len(m.control_actions))
+		for id := range m.control_actions {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ServerMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.removedlog_cursors != nil {
 		edges = append(edges, server.EdgeLogCursors)
 	}
 	if m.removeddb_targets != nil {
 		edges = append(edges, server.EdgeDbTargets)
+	}
+	if m.removedcontrol_actions != nil {
+		edges = append(edges, server.EdgeControlActions)
 	}
 	return edges
 }
@@ -4171,13 +5423,19 @@ func (m *ServerMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case server.EdgeControlActions:
+		ids := make([]ent.Value, 0, len(m.removedcontrol_actions))
+		for id := range m.removedcontrol_actions {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ServerMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.clearedlog_cursors {
 		edges = append(edges, server.EdgeLogCursors)
 	}
@@ -4186,6 +5444,9 @@ func (m *ServerMutation) ClearedEdges() []string {
 	}
 	if m.cleareddb_targets {
 		edges = append(edges, server.EdgeDbTargets)
+	}
+	if m.clearedcontrol_actions {
+		edges = append(edges, server.EdgeControlActions)
 	}
 	return edges
 }
@@ -4200,6 +5461,8 @@ func (m *ServerMutation) EdgeCleared(name string) bool {
 		return m.clearedsystem_snapshot
 	case server.EdgeDbTargets:
 		return m.cleareddb_targets
+	case server.EdgeControlActions:
+		return m.clearedcontrol_actions
 	}
 	return false
 }
@@ -4227,6 +5490,9 @@ func (m *ServerMutation) ResetEdge(name string) error {
 		return nil
 	case server.EdgeDbTargets:
 		m.ResetDbTargets()
+		return nil
+	case server.EdgeControlActions:
+		m.ResetControlActions()
 		return nil
 	}
 	return fmt.Errorf("unknown Server edge %s", name)

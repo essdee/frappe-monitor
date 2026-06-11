@@ -20,6 +20,18 @@ func (f AlertStateFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, 
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.AlertStateMutation", m)
 }
 
+// The ControlActionFunc type is an adapter to allow the use of ordinary
+// function as ControlAction mutator.
+type ControlActionFunc func(context.Context, *ent.ControlActionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ControlActionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ControlActionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ControlActionMutation", m)
+}
+
 // The DBTargetFunc type is an adapter to allow the use of ordinary
 // function as DBTarget mutator.
 type DBTargetFunc func(context.Context, *ent.DBTargetMutation) (ent.Value, error)

@@ -143,6 +143,19 @@ func (m *memStore) DeleteDBTarget(context.Context, int) error                  {
 func (m *memStore) SetDBTargetStatus(context.Context, int, storage.DBTargetStatus) error {
 	panic("unused")
 }
+func (m *memStore) CreateControlAction(context.Context, storage.NewControlAction) (*storage.ControlAction, error) {
+	panic("unused")
+}
+func (m *memStore) GetControlAction(context.Context, int) (*storage.ControlAction, error) {
+	panic("unused")
+}
+func (m *memStore) ListControlActions(context.Context, storage.ListControlActions) ([]*storage.ControlAction, error) {
+	panic("unused")
+}
+func (m *memStore) MarkControlActionRunning(context.Context, int) error { panic("unused") }
+func (m *memStore) FinishControlAction(context.Context, int, storage.ControlActionResult) (*storage.ControlAction, error) {
+	panic("unused")
+}
 func (m *memStore) Close() error { return nil }
 
 // recordedNotifier captures every Notify call.

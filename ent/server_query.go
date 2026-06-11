@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"fmt"
+	"frappe-monitor/ent/controlaction"
 	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/predicate"
@@ -29,6 +30,7 @@ type ServerQuery struct {
 	withLogCursors     *LogCursorQuery
 	withSystemSnapshot *SystemSnapshotQuery
 	withDbTargets      *DBTargetQuery
+	withControlActions *ControlActionQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -124,6 +126,28 @@ func (_q *ServerQuery) QueryDbTargets() *DBTargetQuery {
 			sqlgraph.From(server.Table, server.FieldID, selector),
 			sqlgraph.To(dbtarget.Table, dbtarget.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, server.DbTargetsTable, server.DbTargetsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryControlActions chains the current query on the "control_actions" edge.
+func (_q *ServerQuery) QueryControlActions() *ControlActionQuery {
+	query := (&ControlActionClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(server.Table, server.FieldID, selector),
+			sqlgraph.To(controlaction.Table, controlaction.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, server.ControlActionsTable, server.ControlActionsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -326,6 +350,7 @@ func (_q *ServerQuery) Clone() *ServerQuery {
 		withLogCursors:     _q.withLogCursors.Clone(),
 		withSystemSnapshot: _q.withSystemSnapshot.Clone(),
 		withDbTargets:      _q.withDbTargets.Clone(),
+		withControlActions: _q.withControlActions.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -362,6 +387,17 @@ func (_q *ServerQuery) WithDbTargets(opts ...func(*DBTargetQuery)) *ServerQuery 
 		opt(query)
 	}
 	_q.withDbTargets = query
+	return _q
+}
+
+// WithControlActions tells the query-builder to eager-load the nodes that are connected to
+// the "control_actions" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *ServerQuery) WithControlActions(opts ...func(*ControlActionQuery)) *ServerQuery {
+	query := (&ControlActionClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withControlActions = query
 	return _q
 }
 
@@ -443,10 +479,11 @@ func (_q *ServerQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Serve
 	var (
 		nodes       = []*Server{}
 		_spec       = _q.querySpec()
-		loadedTypes = [3]bool{
+		loadedTypes = [4]bool{
 			_q.withLogCursors != nil,
 			_q.withSystemSnapshot != nil,
 			_q.withDbTargets != nil,
+			_q.withControlActions != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -484,6 +521,13 @@ func (_q *ServerQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Serve
 		if err := _q.loadDbTargets(ctx, query, nodes,
 			func(n *Server) { n.Edges.DbTargets = []*DBTarget{} },
 			func(n *Server, e *DBTarget) { n.Edges.DbTargets = append(n.Edges.DbTargets, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withControlActions; query != nil {
+		if err := _q.loadControlActions(ctx, query, nodes,
+			func(n *Server) { n.Edges.ControlActions = []*ControlAction{} },
+			func(n *Server, e *ControlAction) { n.Edges.ControlActions = append(n.Edges.ControlActions, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -564,6 +608,36 @@ func (_q *ServerQuery) loadDbTargets(ctx context.Context, query *DBTargetQuery, 
 	}
 	query.Where(predicate.DBTarget(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(server.DbTargetsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ServerID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "server_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *ServerQuery) loadControlActions(ctx context.Context, query *ControlActionQuery, nodes []*Server, init func(*Server), assign func(*Server, *ControlAction)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int]*Server)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(controlaction.FieldServerID)
+	}
+	query.Where(predicate.ControlAction(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(server.ControlActionsColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

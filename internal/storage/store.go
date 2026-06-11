@@ -137,6 +137,50 @@ type UpdateDBTarget struct {
 	HeartbeatQuery      *string
 }
 
+// ControlAction mirrors ent/schema/controlaction.go — one audit record of an
+// allowlisted control-panel command run against a server.
+type ControlAction struct {
+	ID          int
+	ServerID    int
+	Action      string
+	BenchPath   string
+	Site        string
+	Command     string
+	RequestedBy string
+	Status      string // pending|running|success|failed
+	ExitOK      bool
+	Output      string
+	Error       string
+	DurationMs  int
+	CreatedAt   time.Time
+	FinishedAt  *time.Time
+}
+
+type NewControlAction struct {
+	ServerID    int
+	Action      string
+	BenchPath   string
+	Site        string
+	Command     string
+	RequestedBy string
+}
+
+// ControlActionResult is the terminal outcome written when a run finishes.
+type ControlActionResult struct {
+	Status     string // success|failed
+	ExitOK     bool
+	Output     string
+	Error      string
+	DurationMs int
+}
+
+// ListControlActions filters the audit log. A zero ServerID lists across all
+// servers; Limit <= 0 applies a sane default.
+type ListControlActions struct {
+	ServerID int
+	Limit    int
+}
+
 // DBTargetStatus is one replication-check result, persisted by the
 // dbmonitor service so the dashboard + alerts can read the latest state.
 type DBTargetStatus struct {
@@ -177,6 +221,13 @@ type Store interface {
 	UpdateDBTarget(ctx context.Context, id int, in UpdateDBTarget) (*DBTarget, error)
 	DeleteDBTarget(ctx context.Context, id int) error
 	SetDBTargetStatus(ctx context.Context, id int, st DBTargetStatus) error
+
+	// Control-panel audit log — Phase 10.
+	CreateControlAction(ctx context.Context, in NewControlAction) (*ControlAction, error)
+	GetControlAction(ctx context.Context, id int) (*ControlAction, error)
+	ListControlActions(ctx context.Context, f ListControlActions) ([]*ControlAction, error)
+	MarkControlActionRunning(ctx context.Context, id int) error
+	FinishControlAction(ctx context.Context, id int, res ControlActionResult) (*ControlAction, error)
 
 	Close() error
 }

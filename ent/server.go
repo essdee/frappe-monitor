@@ -57,9 +57,11 @@ type ServerEdges struct {
 	SystemSnapshot *SystemSnapshot `json:"system_snapshot,omitempty"`
 	// DbTargets holds the value of the db_targets edge.
 	DbTargets []*DBTarget `json:"db_targets,omitempty"`
+	// ControlActions holds the value of the control_actions edge.
+	ControlActions []*ControlAction `json:"control_actions,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [3]bool
+	loadedTypes [4]bool
 }
 
 // LogCursorsOrErr returns the LogCursors value or an error if the edge
@@ -89,6 +91,15 @@ func (e ServerEdges) DbTargetsOrErr() ([]*DBTarget, error) {
 		return e.DbTargets, nil
 	}
 	return nil, &NotLoadedError{edge: "db_targets"}
+}
+
+// ControlActionsOrErr returns the ControlActions value or an error if the edge
+// was not loaded in eager-loading.
+func (e ServerEdges) ControlActionsOrErr() ([]*ControlAction, error) {
+	if e.loadedTypes[3] {
+		return e.ControlActions, nil
+	}
+	return nil, &NotLoadedError{edge: "control_actions"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -228,6 +239,11 @@ func (_m *Server) QuerySystemSnapshot() *SystemSnapshotQuery {
 // QueryDbTargets queries the "db_targets" edge of the Server entity.
 func (_m *Server) QueryDbTargets() *DBTargetQuery {
 	return NewServerClient(_m.config).QueryDbTargets(_m)
+}
+
+// QueryControlActions queries the "control_actions" edge of the Server entity.
+func (_m *Server) QueryControlActions() *ControlActionQuery {
+	return NewServerClient(_m.config).QueryControlActions(_m)
 }
 
 // Update returns a builder for updating this Server.
