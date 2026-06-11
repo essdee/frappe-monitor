@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"frappe-monitor/ent"
 )
 
 // These integration tests run against a REAL MariaDB / PostgreSQL when the
@@ -40,9 +42,24 @@ func runEngineSmoke(t *testing.T, driver, dsn string) {
 	require.NoError(t, err, "Open + auto-migrate must succeed on %s", driver)
 	t.Cleanup(func() { _ = s.Close() })
 
+	// Exercise the transactional patch system on the REAL engine: register a
+	// one-time patch, run migrations (applies + records it in one tx), then
+	// re-run to prove it isn't applied twice. Swap the global registry so this
+	// is isolated from other tests.
+	savedP, savedS := patchRegistry, seedRegistry
+	defer func() { patchRegistry, seedRegistry = savedP, savedS }()
+	patchRegistry, seedRegistry = nil, nil
+	patchRuns := 0
+	RegisterPatch(Patch{Name: "engine-it-patch", Run: func(context.Context, *ent.Client) error {
+		patchRuns++
+		return nil
+	}})
+
 	require.NoError(t, s.RunMigrations(ctx, nil), "patches/seeds on %s", driver)
-	// Re-run to prove idempotency on the real engine.
+	require.Equal(t, 1, patchRuns, "patch applied once on %s", driver)
+	// Re-run to prove idempotency / exactly-once on the real engine.
 	require.NoError(t, s.RunMigrations(ctx, nil))
+	require.Equal(t, 1, patchRuns, "patch must not re-apply on %s", driver)
 
 	hostname := "it-" + driver + ".example.com"
 	// Clean any leftover from a prior failed run (hostname is unique).
