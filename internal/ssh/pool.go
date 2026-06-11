@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -296,7 +297,7 @@ func (p *Pool) dropClient(tgt Target) {
 }
 
 func loadKey(path string) (ssh.AuthMethod, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(expandHomePath(path))
 	if err != nil {
 		return nil, fmt.Errorf("read key %q: %w", path, err)
 	}
@@ -305,4 +306,17 @@ func loadKey(path string) (ssh.AuthMethod, error) {
 		return nil, fmt.Errorf("parse key %q: %w", path, err)
 	}
 	return ssh.PublicKeys(signer), nil
+}
+
+// expandHomePath expands a leading "~" / "~/" to the home directory of the user
+// the monitor runs as. SSH key paths come from the dashboard/config where
+// operators reasonably write ~/.ssh/...; Go's os.ReadFile does NOT expand "~"
+// the way a shell does, so without this it looks for a literal "~" directory.
+func expandHomePath(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	return p
 }
