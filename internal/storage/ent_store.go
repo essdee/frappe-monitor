@@ -27,6 +27,7 @@ import (
 type EntStore struct {
 	client *ent.Client
 	sqlDB  *sql.DB
+	driver string // normalized: sqlite | mysql | postgres
 }
 
 // Open connects to the configured database engine, verifies connectivity, and
@@ -42,14 +43,15 @@ func Open(ctx context.Context, driver, dsn string) (*EntStore, error) {
 		sqlDriver string
 		dia       string
 		maxOpen   int
+		norm      string
 	)
 	switch driver {
 	case "", "sqlite":
-		sqlDriver, dia, maxOpen = "sqlite", dialect.SQLite, 1 // one writer; WAL allows concurrent readers
+		sqlDriver, dia, maxOpen, norm = "sqlite", dialect.SQLite, 1, "sqlite" // one writer; WAL allows concurrent readers
 	case "mysql", "mariadb":
-		sqlDriver, dia = "mysql", dialect.MySQL
+		sqlDriver, dia, norm = "mysql", dialect.MySQL, "mysql"
 	case "postgres", "postgresql":
-		sqlDriver, dia = "pgx", dialect.Postgres
+		sqlDriver, dia, norm = "pgx", dialect.Postgres, "postgres"
 	default:
 		return nil, fmt.Errorf("unsupported database driver %q (want sqlite|mysql|postgres)", driver)
 	}
@@ -76,7 +78,7 @@ func Open(ctx context.Context, driver, dsn string) (*EntStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate schema (%s): %w", driver, err)
 	}
-	return &EntStore{client: client, sqlDB: db}, nil
+	return &EntStore{client: client, sqlDB: db, driver: norm}, nil
 }
 
 // OpenEntStore opens a SQLite store with the recommended PRAGMAs in the DSN.
@@ -86,7 +88,13 @@ func OpenEntStore(ctx context.Context, dsn string) (*EntStore, error) {
 }
 
 // SetConnPool applies optional pool sizing (0 = leave the driver default).
+// SQLite is pinned to a single writer regardless of config: several
+// read-modify-write paths (e.g. UpsertSystemSnapshot) rely on that invariant
+// to serialize instead of racing two INSERTs into a UNIQUE violation.
 func (s *EntStore) SetConnPool(maxOpen, maxIdle int) {
+	if s.driver == "sqlite" {
+		return // keep SetMaxOpenConns(1) from Open
+	}
 	if maxOpen > 0 {
 		s.sqlDB.SetMaxOpenConns(maxOpen)
 	}

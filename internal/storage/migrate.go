@@ -65,11 +65,26 @@ func (s *EntStore) RunMigrations(ctx context.Context, logger *slog.Logger) error
 			continue
 		}
 		logger.Info("applying patch", "name", p.Name)
-		if err := p.Run(ctx, s.client); err != nil {
+		// Run the patch and record it in ONE transaction so application is
+		// atomic: a crash/error between the two can't leave a patch applied
+		// but unrecorded (which would re-run it next boot). This makes the
+		// "exactly once" guarantee real, not just a "keep Run idempotent"
+		// convention. (Data patches only — DDL belongs in the ent schema,
+		// since some engines auto-commit DDL and would break the tx.)
+		tx, err := s.client.Tx(ctx)
+		if err != nil {
+			return fmt.Errorf("begin patch tx %q: %w", p.Name, err)
+		}
+		if err := p.Run(ctx, tx.Client()); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("patch %q: %w", p.Name, err)
 		}
-		if err := s.client.PatchLog.Create().SetName(p.Name).Exec(ctx); err != nil {
+		if err := tx.Client().PatchLog.Create().SetName(p.Name).Exec(ctx); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("record patch %q: %w", p.Name, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit patch %q: %w", p.Name, err)
 		}
 		applied++
 	}

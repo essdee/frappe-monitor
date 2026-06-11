@@ -350,6 +350,12 @@ func (c *Config) validateDatabase() error {
 		if c.Database.Name == "" {
 			return fmt.Errorf("database.name is required for the %s driver", c.Database.Driver)
 		}
+		// A ':' in the MySQL/MariaDB user would corrupt the "user:pass@..."
+		// DSN split (go-sql-driver anchors on the first ':'). Postgres is
+		// safe (url.UserPassword escapes), so this only matters for mysql.
+		if drv == "mysql" && strings.Contains(c.Database.User, ":") {
+			return fmt.Errorf("database.user must not contain ':' for the %s driver", c.Database.Driver)
+		}
 	}
 	return nil
 }

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"frappe-monitor/internal/config"
 )
 
 func TestDefaultsPerOS(t *testing.T) {
@@ -135,6 +137,59 @@ func TestInstall(t *testing.T) {
 	// Guards.
 	require.Error(t, Install(Options{Root: "", AuthPassword: "x"}, &buf))
 	require.Error(t, Install(Options{Root: root, AuthPassword: ""}, &buf), "password required")
+}
+
+// The generated config must always be loadable by the real config loader, and
+// values (including control chars / YAML specials in a password) must round-trip
+// byte-for-byte — guards the yamlStr control-char escaping fix.
+func TestRenderConfig_LoadableAndRoundTrips(t *testing.T) {
+	tmp := t.TempDir()
+	pw := "p@ss:w/o\nrd\t#1*{}" // newline + tab + YAML specials — the real-world traps
+	o := Options{
+		Root: tmp, ListenAddr: ":8080", GOOS: "linux",
+		DBDriver: "mariadb", DBHost: "127.0.0.1", DBPort: 3306, DBUser: "monitor",
+		DBPassword: pw, DBName: "frappe_monitor", AuthPassword: pw,
+	}
+	path := filepath.Join(tmp, "monitor.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(RenderConfig(o)), 0o600))
+
+	cfg, err := config.Load(path)
+	require.NoError(t, err, "generated config must parse + validate")
+	require.Equal(t, pw, cfg.Auth.Password, "auth password round-trips byte-for-byte")
+	require.Equal(t, pw, cfg.Database.Password, "db password round-trips byte-for-byte")
+	require.Equal(t, "mariadb", cfg.Database.Driver)
+	require.Equal(t, "frappe_monitor", cfg.Database.Name)
+
+	// sqlite variant also loads.
+	sq := Options{Root: tmp, GOOS: "linux", DBDriver: "sqlite", AuthPassword: "x"}
+	p2 := filepath.Join(tmp, "sqlite.yaml")
+	require.NoError(t, os.WriteFile(p2, []byte(RenderConfig(sq)), 0o600))
+	_, err = config.Load(p2)
+	require.NoError(t, err)
+}
+
+func TestInstall_RejectsEmptyDBFields(t *testing.T) {
+	tmp := t.TempDir()
+	srcBin := filepath.Join(tmp, "b")
+	require.NoError(t, os.WriteFile(srcBin, []byte("x"), 0o755))
+	base := Options{
+		Root: filepath.Join(tmp, "fm"), AuthPassword: "secret", SourceBinary: srcBin, GOOS: "linux",
+		DBDriver: "mariadb", DBHost: "h", DBUser: "u", DBName: "n",
+	}
+	var buf bytes.Buffer
+
+	o := base
+	o.DBUser = ""
+	require.Error(t, Install(o, &buf), "empty mariadb user must be rejected before writing config")
+
+	o = base
+	o.DBName = ""
+	require.Error(t, Install(o, &buf), "empty mariadb name must be rejected")
+
+	// sqlite needs neither user nor name.
+	o = base
+	o.DBDriver, o.DBUser, o.DBName = "sqlite", "", ""
+	require.NoError(t, Install(o, &buf))
 }
 
 func TestJSStrEscaping(t *testing.T) {

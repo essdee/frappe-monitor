@@ -79,7 +79,11 @@ func installCmd(args []string) error {
 		o.AuthPassword = ask(in, true, "Dashboard password (blank = auto-generate)", "")
 	}
 	if o.AuthPassword == "" {
-		o.AuthPassword = randomPassword()
+		pw, err := randomPassword()
+		if err != nil {
+			return fmt.Errorf("could not generate a dashboard password (%w) — pass --password explicitly", err)
+		}
+		o.AuthPassword = pw
 		fmt.Printf("\n  Generated dashboard password: %s\n  ^^ save this — you need it to log in ^^\n\n", o.AuthPassword)
 	}
 
@@ -113,6 +117,9 @@ func uninstallCmd(args []string) error {
 		fmt.Printf("Config + data kept at %s (re-run with --purge to delete).\n", dir)
 		return nil
 	}
+	if err := safeToPurge(dir); err != nil {
+		return err
+	}
 	in := bufio.NewScanner(os.Stdin)
 	if !*yes && isTTY() {
 		if a := ask(in, true, fmt.Sprintf("Delete everything under %s? (y/N)", dir), "N"); !strings.EqualFold(a, "y") {
@@ -124,6 +131,29 @@ func uninstallCmd(args []string) error {
 		return fmt.Errorf("remove %s: %w", dir, err)
 	}
 	fmt.Printf("removed %s\n", dir)
+	return nil
+}
+
+// safeToPurge refuses obviously-dangerous --purge targets: empty paths, a
+// filesystem/volume root, the user's home directory, or any path that doesn't
+// actually look like a frappe-monitor install (no monitor.yaml and no bin/).
+func safeToPurge(dir string) error {
+	clean := filepath.Clean(dir)
+	if clean == "" || clean == "." {
+		return fmt.Errorf("refusing to purge an empty path")
+	}
+	sep := string(filepath.Separator)
+	if clean == sep || clean == filepath.VolumeName(clean)+sep {
+		return fmt.Errorf("refusing to purge a filesystem root: %q", clean)
+	}
+	if home, err := os.UserHomeDir(); err == nil && clean == filepath.Clean(home) {
+		return fmt.Errorf("refusing to purge your home directory: %q", clean)
+	}
+	_, errCfg := os.Stat(filepath.Join(clean, "monitor.yaml"))
+	_, errBin := os.Stat(filepath.Join(clean, "bin"))
+	if errCfg != nil && errBin != nil {
+		return fmt.Errorf("%s does not look like a frappe-monitor install (no monitor.yaml or bin/); refusing --purge", clean)
+	}
 	return nil
 }
 
@@ -195,10 +225,11 @@ func humanAddr(addr string) string {
 	return addr
 }
 
-func randomPassword() string {
+func randomPassword() (string, error) {
 	b := make([]byte, 18)
 	if _, err := rand.Read(b); err != nil {
-		return "change-me-" + strconv.Itoa(os.Getpid())
+		// Never silently fall back to a predictable credential.
+		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }

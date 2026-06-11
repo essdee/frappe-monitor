@@ -203,6 +203,17 @@ func Install(o Options, out io.Writer) error {
 	if o.AuthPassword == "" {
 		return fmt.Errorf("a dashboard password is required (auth.password)")
 	}
+	// Validate the DB block here (fail fast) so a non-interactive run with an
+	// empty user/name can't write an unloadable config and still report
+	// success — the failure would otherwise only surface at first boot.
+	if drv := normalizedDriver(o.DBDriver); drv == "mariadb" || drv == "postgres" {
+		if strings.TrimSpace(o.DBUser) == "" {
+			return fmt.Errorf("database user is required for the %s driver", drv)
+		}
+		if strings.TrimSpace(o.DBName) == "" {
+			return fmt.Errorf("database name is required for the %s driver", drv)
+		}
+	}
 
 	for _, d := range []string{
 		filepath.Join(o.Root, "bin"),
@@ -254,26 +265,58 @@ func Install(o Options, out io.Writer) error {
 	return nil
 }
 
-func copyFile(src, dst string, mode os.FileMode) error {
+func copyFile(src, dst string, mode os.FileMode) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+
 	tmp := dst + ".new"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
+	// Remove the temp file on any failure after creating it, so a failed
+	// copy never leaves an orphan .new behind.
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	}()
+
+	if _, cerr := io.Copy(out, in); cerr != nil {
 		out.Close()
-		return err
+		err = cerr
+		return
 	}
-	if err := out.Close(); err != nil {
-		return err
+	if cerr := out.Close(); cerr != nil {
+		err = cerr
+		return
 	}
-	// Atomic swap so a half-copied binary never runs.
-	return os.Rename(tmp, dst)
+
+	// Windows cannot rename over a running .exe (the dst may be the live
+	// service binary), so move the existing one aside first — Windows DOES
+	// allow renaming a running exe to a NEW name — then drop the new one in.
+	// POSIX rename-over-running-binary just swaps the inode, so it's a no-op
+	// there.
+	if runtime.GOOS == "windows" {
+		if _, serr := os.Stat(dst); serr == nil {
+			old := dst + ".old"
+			_ = os.Remove(old)
+			if rerr := os.Rename(dst, old); rerr != nil {
+				err = fmt.Errorf("replace %s (stop the running service first): %w", dst, rerr)
+				return
+			}
+			defer func() { _ = os.Remove(old) }() // best-effort; may stay until the old proc exits
+		}
+	}
+
+	if rerr := os.Rename(tmp, dst); rerr != nil {
+		err = rerr
+		return
+	}
+	return nil
 }
 
 func writeFile(path string, data []byte, mode os.FileMode) error {
@@ -287,9 +330,34 @@ func orStr(s, def string) string {
 	return s
 }
 
-// yamlStr renders a Go string as a safe double-quoted YAML scalar.
+// yamlStr renders a Go string as a safe double-quoted YAML scalar. It escapes
+// backslash, double-quote, AND control characters — a literal newline in a
+// double-quoted scalar folds to a space (silent corruption) and ESC/NUL make
+// the document unparseable, so control runes are emitted as \n / \r / \t /
+// \xNN escapes that round-trip byte-for-byte.
 func yamlStr(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return `"` + s + `"`
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }

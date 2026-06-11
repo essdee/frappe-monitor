@@ -69,4 +69,9 @@ func TestValidateDatabase(t *testing.T) {
 
 	// unknown driver
 	require.Error(t, cfg(DatabaseConfig{Driver: "oracle"}).validateDatabase())
+
+	// a ':' in the mysql user would corrupt the DSN split — reject it
+	require.Error(t, cfg(DatabaseConfig{Driver: "mariadb", Host: "h", User: "a:b", Name: "n"}).validateDatabase())
+	// postgres is safe (url-escaped), so a ':' there is allowed
+	require.NoError(t, cfg(DatabaseConfig{Driver: "postgres", Host: "h", User: "a:b", Name: "n"}).validateDatabase())
 }
