@@ -5,6 +5,24 @@ server:
   write_timeout_seconds: 15
 
 database:
+  # driver selects the backend:
+  #   mariadb / mysql  → production (recommended)
+  #   postgres         → production
+  #   sqlite           → local dev / single binary (no DB server needed)
+  driver: "mariadb"
+
+  # --- server engines (mariadb / postgres) ---
+  host: "127.0.0.1"
+  port: 3306              # 0 → engine default (3306 mysql / 5432 postgres)
+  user: "monitor"
+  password: ""
+  name: "frappe_monitor"  # the database must already exist; the app creates its tables
+  sslmode: "disable"      # postgres only: disable|require|verify-ca|verify-full
+  # params: ""            # extra DSN params appended verbatim (advanced)
+  max_open_conns: 20
+  max_idle_conns: 5
+
+  # --- sqlite only (ignored unless driver is "sqlite") ---
   path: "./data/monitor.db"
 
 ssh:
