@@ -15,6 +15,7 @@ import (
 	"frappe-monitor/ent/controlaction"
 	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
+	"frappe-monitor/ent/patchlog"
 	"frappe-monitor/ent/server"
 	"frappe-monitor/ent/systemsnapshot"
 
@@ -37,6 +38,8 @@ type Client struct {
 	DBTarget *DBTargetClient
 	// LogCursor is the client for interacting with the LogCursor builders.
 	LogCursor *LogCursorClient
+	// PatchLog is the client for interacting with the PatchLog builders.
+	PatchLog *PatchLogClient
 	// Server is the client for interacting with the Server builders.
 	Server *ServerClient
 	// SystemSnapshot is the client for interacting with the SystemSnapshot builders.
@@ -56,6 +59,7 @@ func (c *Client) init() {
 	c.ControlAction = NewControlActionClient(c.config)
 	c.DBTarget = NewDBTargetClient(c.config)
 	c.LogCursor = NewLogCursorClient(c.config)
+	c.PatchLog = NewPatchLogClient(c.config)
 	c.Server = NewServerClient(c.config)
 	c.SystemSnapshot = NewSystemSnapshotClient(c.config)
 }
@@ -154,6 +158,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ControlAction:  NewControlActionClient(cfg),
 		DBTarget:       NewDBTargetClient(cfg),
 		LogCursor:      NewLogCursorClient(cfg),
+		PatchLog:       NewPatchLogClient(cfg),
 		Server:         NewServerClient(cfg),
 		SystemSnapshot: NewSystemSnapshotClient(cfg),
 	}, nil
@@ -179,6 +184,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ControlAction:  NewControlActionClient(cfg),
 		DBTarget:       NewDBTargetClient(cfg),
 		LogCursor:      NewLogCursorClient(cfg),
+		PatchLog:       NewPatchLogClient(cfg),
 		Server:         NewServerClient(cfg),
 		SystemSnapshot: NewSystemSnapshotClient(cfg),
 	}, nil
@@ -210,7 +216,7 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.AlertState, c.ControlAction, c.DBTarget, c.LogCursor, c.Server,
+		c.AlertState, c.ControlAction, c.DBTarget, c.LogCursor, c.PatchLog, c.Server,
 		c.SystemSnapshot,
 	} {
 		n.Use(hooks...)
@@ -221,7 +227,7 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.AlertState, c.ControlAction, c.DBTarget, c.LogCursor, c.Server,
+		c.AlertState, c.ControlAction, c.DBTarget, c.LogCursor, c.PatchLog, c.Server,
 		c.SystemSnapshot,
 	} {
 		n.Intercept(interceptors...)
@@ -239,6 +245,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.DBTarget.mutate(ctx, m)
 	case *LogCursorMutation:
 		return c.LogCursor.mutate(ctx, m)
+	case *PatchLogMutation:
+		return c.PatchLog.mutate(ctx, m)
 	case *ServerMutation:
 		return c.Server.mutate(ctx, m)
 	case *SystemSnapshotMutation:
@@ -828,6 +836,139 @@ func (c *LogCursorClient) mutate(ctx context.Context, m *LogCursorMutation) (Val
 	}
 }
 
+// PatchLogClient is a client for the PatchLog schema.
+type PatchLogClient struct {
+	config
+}
+
+// NewPatchLogClient returns a client for the PatchLog from the given config.
+func NewPatchLogClient(c config) *PatchLogClient {
+	return &PatchLogClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `patchlog.Hooks(f(g(h())))`.
+func (c *PatchLogClient) Use(hooks ...Hook) {
+	c.hooks.PatchLog = append(c.hooks.PatchLog, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `patchlog.Intercept(f(g(h())))`.
+func (c *PatchLogClient) Intercept(interceptors ...Interceptor) {
+	c.inters.PatchLog = append(c.inters.PatchLog, interceptors...)
+}
+
+// Create returns a builder for creating a PatchLog entity.
+func (c *PatchLogClient) Create() *PatchLogCreate {
+	mutation := newPatchLogMutation(c.config, OpCreate)
+	return &PatchLogCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of PatchLog entities.
+func (c *PatchLogClient) CreateBulk(builders ...*PatchLogCreate) *PatchLogCreateBulk {
+	return &PatchLogCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *PatchLogClient) MapCreateBulk(slice any, setFunc func(*PatchLogCreate, int)) *PatchLogCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &PatchLogCreateBulk{err: fmt.Errorf("calling to PatchLogClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*PatchLogCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &PatchLogCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for PatchLog.
+func (c *PatchLogClient) Update() *PatchLogUpdate {
+	mutation := newPatchLogMutation(c.config, OpUpdate)
+	return &PatchLogUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *PatchLogClient) UpdateOne(_m *PatchLog) *PatchLogUpdateOne {
+	mutation := newPatchLogMutation(c.config, OpUpdateOne, withPatchLog(_m))
+	return &PatchLogUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *PatchLogClient) UpdateOneID(id int) *PatchLogUpdateOne {
+	mutation := newPatchLogMutation(c.config, OpUpdateOne, withPatchLogID(id))
+	return &PatchLogUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for PatchLog.
+func (c *PatchLogClient) Delete() *PatchLogDelete {
+	mutation := newPatchLogMutation(c.config, OpDelete)
+	return &PatchLogDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *PatchLogClient) DeleteOne(_m *PatchLog) *PatchLogDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *PatchLogClient) DeleteOneID(id int) *PatchLogDeleteOne {
+	builder := c.Delete().Where(patchlog.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &PatchLogDeleteOne{builder}
+}
+
+// Query returns a query builder for PatchLog.
+func (c *PatchLogClient) Query() *PatchLogQuery {
+	return &PatchLogQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypePatchLog},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a PatchLog entity by its id.
+func (c *PatchLogClient) Get(ctx context.Context, id int) (*PatchLog, error) {
+	return c.Query().Where(patchlog.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *PatchLogClient) GetX(ctx context.Context, id int) *PatchLog {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *PatchLogClient) Hooks() []Hook {
+	return c.hooks.PatchLog
+}
+
+// Interceptors returns the client interceptors.
+func (c *PatchLogClient) Interceptors() []Interceptor {
+	return c.inters.PatchLog
+}
+
+func (c *PatchLogClient) mutate(ctx context.Context, m *PatchLogMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&PatchLogCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&PatchLogUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&PatchLogUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&PatchLogDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown PatchLog mutation op: %q", m.Op())
+	}
+}
+
 // ServerClient is a client for the Server schema.
 type ServerClient struct {
 	config
@@ -1177,11 +1318,11 @@ func (c *SystemSnapshotClient) mutate(ctx context.Context, m *SystemSnapshotMuta
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AlertState, ControlAction, DBTarget, LogCursor, Server,
+		AlertState, ControlAction, DBTarget, LogCursor, PatchLog, Server,
 		SystemSnapshot []ent.Hook
 	}
 	inters struct {
-		AlertState, ControlAction, DBTarget, LogCursor, Server,
+		AlertState, ControlAction, DBTarget, LogCursor, PatchLog, Server,
 		SystemSnapshot []ent.Interceptor
 	}
 )

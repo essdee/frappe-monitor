@@ -130,6 +130,18 @@ var (
 			},
 		},
 	}
+	// PatchLogsColumns holds the columns for the "patch_logs" table.
+	PatchLogsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "name", Type: field.TypeString, Unique: true},
+		{Name: "applied_at", Type: field.TypeTime},
+	}
+	// PatchLogsTable holds the schema information for the "patch_logs" table.
+	PatchLogsTable = &schema.Table{
+		Name:       "patch_logs",
+		Columns:    PatchLogsColumns,
+		PrimaryKey: []*schema.Column{PatchLogsColumns[0]},
+	}
 	// ServersColumns holds the columns for the "servers" table.
 	ServersColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -180,6 +192,7 @@ var (
 		ControlActionsTable,
 		DbTargetsTable,
 		LogCursorsTable,
+		PatchLogsTable,
 		ServersTable,
 		SystemSnapshotsTable,
 	}

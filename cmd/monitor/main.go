@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -74,8 +73,16 @@ func run(cfgPath string) error {
 
 	logger := newLogger(cfg.Log.Level, cfg.Log.Format)
 
-	if err := os.MkdirAll(filepath.Dir(cfg.Database.Path), 0o750); err != nil {
-		return fmt.Errorf("mkdir data dir: %w", err)
+	driver, dsn, err := cfg.Database.DSN()
+	if err != nil {
+		return fmt.Errorf("database config: %w", err)
+	}
+	// SQLite is a local file — ensure its directory exists. Server engines
+	// (mariadb/postgres) are reached over the network; nothing to create.
+	if driver == "sqlite" {
+		if err := os.MkdirAll(filepath.Dir(cfg.Database.Path), 0o750); err != nil {
+			return fmt.Errorf("mkdir data dir: %w", err)
+		}
 	}
 
 	// Signal-aware root context: cancellation here propagates to the HTTP
@@ -86,15 +93,24 @@ func run(cfgPath string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	store, err := storage.OpenEntStore(ctx, buildSQLiteDSN(cfg.Database.Path))
+	// Open connects + auto-migrates the schema (create/alter tables).
+	store, err := storage.Open(ctx, driver, dsn)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return fmt.Errorf("open store (%s): %w", driver, err)
 	}
+	store.SetConnPool(cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns)
 	defer func() {
 		if err := store.Close(); err != nil {
 			logger.Error("store close", "err", err)
 		}
 	}()
+	logger.Info("database connected", "driver", driver)
+
+	// Frappe-style data migrations: run any pending one-time patches, then
+	// idempotent seeds. Schema DDL already ran in Open.
+	if err := store.RunMigrations(ctx, logger); err != nil {
+		return fmt.Errorf("run migrations: %w", err)
+	}
 
 	// Reconcile any control-panel runs left non-terminal by a previous crash
 	// (or a Finish-write failure) — they can never complete now, so mark them
@@ -471,21 +487,4 @@ func newLogger(level, format string) *slog.Logger {
 		h = slog.NewJSONHandler(os.Stdout, opts)
 	}
 	return slog.New(h)
-}
-
-// buildSQLiteDSN constructs the modernc.org/sqlite DSN with the PRAGMAs
-// recommended in master plan §4. Note foreign_keys(on) — required because
-// any future cascading deletes (servers → benches → sites) depend on
-// foreign-key enforcement, and the test setup in OpenEntStore uses
-// foreign_keys(1) which is equivalent.
-func buildSQLiteDSN(path string) string {
-	v := url.Values{}
-	v.Add("_pragma", "journal_mode(wal)")
-	v.Add("_pragma", "synchronous(normal)")
-	v.Add("_pragma", "busy_timeout(5000)")
-	v.Add("_pragma", "foreign_keys(on)")
-	v.Add("_pragma", "temp_store(memory)")
-	v.Add("_pragma", "mmap_size(134217728)")
-	v.Add("_pragma", "cache_size(-64000)")
-	return "file:" + path + "?" + v.Encode()
 }

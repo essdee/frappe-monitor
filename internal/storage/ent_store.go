@@ -10,7 +10,10 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
-	_ "modernc.org/sqlite"
+
+	_ "github.com/go-sql-driver/mysql" // mysql/mariadb driver
+	_ "github.com/jackc/pgx/v5/stdlib" // postgres driver (registers "pgx")
+	_ "modernc.org/sqlite"             // sqlite driver (CGO-free)
 
 	"frappe-monitor/ent"
 	entalertstate "frappe-monitor/ent/alertstate"
@@ -26,20 +29,70 @@ type EntStore struct {
 	sqlDB  *sql.DB
 }
 
-// OpenEntStore opens SQLite with recommended PRAGMAs via DSN and returns a Store.
-// dsn example: "file:./data/monitor.db?_pragma=journal_mode(wal)&_pragma=foreign_keys(1)&..."
-func OpenEntStore(ctx context.Context, dsn string) (*EntStore, error) {
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+// Open connects to the configured database engine, verifies connectivity, and
+// auto-migrates the schema (ent creates/alters tables additively to match the
+// entity definitions — the DDL half of "works like Frappe"). driver is the
+// normalized engine key from config: "sqlite" | "mysql" | "postgres".
+//
+// One-time data PATCHES and SEEDS are NOT run here — call RunMigrations after
+// Open for those, so the test suite (which opens many fresh stores) gets a
+// clean schema without side-effect data.
+func Open(ctx context.Context, driver, dsn string) (*EntStore, error) {
+	var (
+		sqlDriver string
+		dia       string
+		maxOpen   int
+	)
+	switch driver {
+	case "", "sqlite":
+		sqlDriver, dia, maxOpen = "sqlite", dialect.SQLite, 1 // one writer; WAL allows concurrent readers
+	case "mysql", "mariadb":
+		sqlDriver, dia = "mysql", dialect.MySQL
+	case "postgres", "postgresql":
+		sqlDriver, dia = "pgx", dialect.Postgres
+	default:
+		return nil, fmt.Errorf("unsupported database driver %q (want sqlite|mysql|postgres)", driver)
 	}
-	db.SetMaxOpenConns(1) // SQLite: one writer. WAL still allows concurrent readers via separate conn later.
-	drv := entsql.OpenDB(dialect.SQLite, db)
+
+	db, err := sql.Open(sqlDriver, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", driver, err)
+	}
+	if maxOpen > 0 {
+		db.SetMaxOpenConns(maxOpen)
+	}
+	// Fail fast at boot if the DB is unreachable / misconfigured, rather than
+	// surfacing a confusing error on the first query.
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := db.PingContext(pingCtx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("connect %s: %w", driver, err)
+	}
+
+	drv := entsql.OpenDB(dia, db)
 	client := ent.NewClient(ent.Driver(drv))
 	if err := client.Schema.Create(ctx); err != nil {
-		return nil, fmt.Errorf("create schema: %w", err)
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate schema (%s): %w", driver, err)
 	}
 	return &EntStore{client: client, sqlDB: db}, nil
+}
+
+// OpenEntStore opens a SQLite store with the recommended PRAGMAs in the DSN.
+// Retained for the test suite and the sqlite driver path.
+func OpenEntStore(ctx context.Context, dsn string) (*EntStore, error) {
+	return Open(ctx, "sqlite", dsn)
+}
+
+// SetConnPool applies optional pool sizing (0 = leave the driver default).
+func (s *EntStore) SetConnPool(maxOpen, maxIdle int) {
+	if maxOpen > 0 {
+		s.sqlDB.SetMaxOpenConns(maxOpen)
+	}
+	if maxIdle > 0 {
+		s.sqlDB.SetMaxIdleConns(maxIdle)
+	}
 }
 
 func (s *EntStore) Close() error {

@@ -7,6 +7,7 @@ import (
 	"frappe-monitor/ent/controlaction"
 	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
+	"frappe-monitor/ent/patchlog"
 	"frappe-monitor/ent/schema"
 	"frappe-monitor/ent/server"
 	"frappe-monitor/ent/systemsnapshot"
@@ -125,6 +126,16 @@ func init() {
 	logcursor.DefaultLastSeenAt = logcursorDescLastSeenAt.Default.(func() time.Time)
 	// logcursor.UpdateDefaultLastSeenAt holds the default value on update for the last_seen_at field.
 	logcursor.UpdateDefaultLastSeenAt = logcursorDescLastSeenAt.UpdateDefault.(func() time.Time)
+	patchlogFields := schema.PatchLog{}.Fields()
+	_ = patchlogFields
+	// patchlogDescName is the schema descriptor for name field.
+	patchlogDescName := patchlogFields[0].Descriptor()
+	// patchlog.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	patchlog.NameValidator = patchlogDescName.Validators[0].(func(string) error)
+	// patchlogDescAppliedAt is the schema descriptor for applied_at field.
+	patchlogDescAppliedAt := patchlogFields[1].Descriptor()
+	// patchlog.DefaultAppliedAt holds the default value on creation for the applied_at field.
+	patchlog.DefaultAppliedAt = patchlogDescAppliedAt.Default.(func() time.Time)
 	serverFields := schema.Server{}.Fields()
 	_ = serverFields
 	// serverDescName is the schema descriptor for name field.

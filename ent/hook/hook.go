@@ -56,6 +56,18 @@ func (f LogCursorFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, e
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.LogCursorMutation", m)
 }
 
+// The PatchLogFunc type is an adapter to allow the use of ordinary
+// function as PatchLog mutator.
+type PatchLogFunc func(context.Context, *ent.PatchLogMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PatchLogFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.PatchLogMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.PatchLogMutation", m)
+}
+
 // The ServerFunc type is an adapter to allow the use of ordinary
 // function as Server mutator.
 type ServerFunc func(context.Context, *ent.ServerMutation) (ent.Value, error)

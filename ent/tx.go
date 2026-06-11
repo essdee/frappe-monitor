@@ -20,6 +20,8 @@ type Tx struct {
 	DBTarget *DBTargetClient
 	// LogCursor is the client for interacting with the LogCursor builders.
 	LogCursor *LogCursorClient
+	// PatchLog is the client for interacting with the PatchLog builders.
+	PatchLog *PatchLogClient
 	// Server is the client for interacting with the Server builders.
 	Server *ServerClient
 	// SystemSnapshot is the client for interacting with the SystemSnapshot builders.
@@ -159,6 +161,7 @@ func (tx *Tx) init() {
 	tx.ControlAction = NewControlActionClient(tx.config)
 	tx.DBTarget = NewDBTargetClient(tx.config)
 	tx.LogCursor = NewLogCursorClient(tx.config)
+	tx.PatchLog = NewPatchLogClient(tx.config)
 	tx.Server = NewServerClient(tx.config)
 	tx.SystemSnapshot = NewSystemSnapshotClient(tx.config)
 }

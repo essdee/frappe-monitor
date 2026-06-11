@@ -10,6 +10,7 @@ import (
 	"frappe-monitor/ent/controlaction"
 	"frappe-monitor/ent/dbtarget"
 	"frappe-monitor/ent/logcursor"
+	"frappe-monitor/ent/patchlog"
 	"frappe-monitor/ent/server"
 	"frappe-monitor/ent/systemsnapshot"
 	"reflect"
@@ -82,6 +83,7 @@ func checkColumn(t, c string) error {
 			controlaction.Table:  controlaction.ValidColumn,
 			dbtarget.Table:       dbtarget.ValidColumn,
 			logcursor.Table:      logcursor.ValidColumn,
+			patchlog.Table:       patchlog.ValidColumn,
 			server.Table:         server.ValidColumn,
 			systemsnapshot.Table: systemsnapshot.ValidColumn,
 		})

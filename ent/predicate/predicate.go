@@ -18,6 +18,9 @@ type DBTarget func(*sql.Selector)
 // LogCursor is the predicate function for logcursor builders.
 type LogCursor func(*sql.Selector)
 
+// PatchLog is the predicate function for patchlog builders.
+type PatchLog func(*sql.Selector)
+
 // Server is the predicate function for server builders.
 type Server func(*sql.Selector)
 

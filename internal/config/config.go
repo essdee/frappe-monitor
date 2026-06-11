@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
@@ -31,8 +32,118 @@ type ServerConfig struct {
 	WriteTimeoutSeconds int    `koanf:"write_timeout_seconds"`
 }
 
+// DatabaseConfig selects and configures the persistent store. The production
+// backends are MariaDB/MySQL and PostgreSQL; SQLite remains the zero-config
+// default for local dev and the test suite. Every connection field is
+// configurable so an operator can point the monitor at an existing DB server.
 type DatabaseConfig struct {
+	// Driver: "mariadb"/"mysql", "postgres"/"postgresql", or "sqlite".
+	Driver string `koanf:"driver"`
+
+	// SQLite only: the database file path.
 	Path string `koanf:"path"`
+
+	// Server engines (mariadb / postgres).
+	Host     string `koanf:"host"`
+	Port     int    `koanf:"port"` // 0 → engine default (3306 / 5432)
+	User     string `koanf:"user"`
+	Password string `koanf:"password"`
+	Name     string `koanf:"name"` // database/schema name
+	// SSLMode applies to postgres (disable|require|verify-ca|verify-full);
+	// ignored for mysql/mariadb.
+	SSLMode string `koanf:"sslmode"`
+	// Params appends extra DSN parameters verbatim (advanced; optional).
+	Params string `koanf:"params"`
+
+	// Connection pool sizing (0 → driver/engine sensible default).
+	MaxOpenConns int `koanf:"max_open_conns"`
+	MaxIdleConns int `koanf:"max_idle_conns"`
+}
+
+// NormalizedDriver maps the configured driver name to the storage engine key
+// ("sqlite" | "mysql" | "postgres"). mariadb is an alias of mysql.
+func (d DatabaseConfig) NormalizedDriver() (string, error) {
+	switch strings.ToLower(strings.TrimSpace(d.Driver)) {
+	case "", "sqlite", "sqlite3":
+		return "sqlite", nil
+	case "mysql", "mariadb":
+		return "mysql", nil
+	case "postgres", "postgresql", "pgx", "pg":
+		return "postgres", nil
+	default:
+		return "", fmt.Errorf("unsupported database.driver %q (want mariadb|postgres|sqlite)", d.Driver)
+	}
+}
+
+// DSN resolves the config into a (driver, dsn) pair for storage.Open. driver is
+// the normalized engine key; dsn is the engine-specific connection string.
+func (d DatabaseConfig) DSN() (driver, dsn string, err error) {
+	drv, err := d.NormalizedDriver()
+	if err != nil {
+		return "", "", err
+	}
+	switch drv {
+	case "sqlite":
+		return drv, SQLiteDSN(d.Path), nil
+	case "mysql":
+		port := d.Port
+		if port == 0 {
+			port = 3306
+		}
+		params := "parseTime=true&loc=UTC&charset=utf8mb4"
+		if d.Params != "" {
+			params += "&" + d.Params
+		}
+		// go-sql-driver: user:pass@tcp(host:port)/db?params
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s",
+			d.User, d.Password, hostOr(d.Host), port, d.Name, params)
+		return drv, dsn, nil
+	case "postgres":
+		port := d.Port
+		if port == 0 {
+			port = 5432
+		}
+		ssl := d.SSLMode
+		if ssl == "" {
+			ssl = "disable"
+		}
+		u := url.URL{
+			Scheme: "postgres",
+			User:   url.UserPassword(d.User, d.Password),
+			Host:   fmt.Sprintf("%s:%d", hostOr(d.Host), port),
+			Path:   "/" + d.Name,
+		}
+		q := url.Values{}
+		q.Set("sslmode", ssl)
+		u.RawQuery = q.Encode()
+		dsn = u.String()
+		if d.Params != "" {
+			dsn += "&" + d.Params
+		}
+		return drv, dsn, nil
+	}
+	return "", "", fmt.Errorf("unreachable driver %q", drv)
+}
+
+func hostOr(h string) string {
+	if h == "" {
+		return "127.0.0.1"
+	}
+	return h
+}
+
+// SQLiteDSN builds the modernc.org/sqlite DSN with the recommended PRAGMAs
+// (WAL, foreign-key enforcement, sane busy timeout + caches).
+func SQLiteDSN(path string) string {
+	v := url.Values{}
+	v.Add("_pragma", "journal_mode(wal)")
+	v.Add("_pragma", "synchronous(normal)")
+	v.Add("_pragma", "busy_timeout(5000)")
+	v.Add("_pragma", "foreign_keys(on)")
+	v.Add("_pragma", "temp_store(memory)")
+	v.Add("_pragma", "mmap_size(134217728)")
+	v.Add("_pragma", "cache_size(-64000)")
+	return "file:" + path + "?" + v.Encode()
 }
 
 type SSHConfig struct {
@@ -80,13 +191,13 @@ type AuthConfig struct {
 // flat struct so koanf binds it from yaml; the alerts package's
 // Config has the canonical Validate().
 type AlertsConfig struct {
-	Enabled                   bool             `koanf:"enabled"`
-	EvaluationIntervalSeconds int              `koanf:"evaluation_interval_seconds"`
-	NotifyRepeatSeconds       int              `koanf:"notify_repeat_seconds"`
-	VMQueryTimeoutSeconds     int              `koanf:"vm_query_timeout_seconds"`
-	Telegram                  AlertsTelegram   `koanf:"telegram"`
-	Rules                     []AlertsRule     `koanf:"rules"`
-	DisableDefaults           bool             `koanf:"disable_defaults"`
+	Enabled                   bool           `koanf:"enabled"`
+	EvaluationIntervalSeconds int            `koanf:"evaluation_interval_seconds"`
+	NotifyRepeatSeconds       int            `koanf:"notify_repeat_seconds"`
+	VMQueryTimeoutSeconds     int            `koanf:"vm_query_timeout_seconds"`
+	Telegram                  AlertsTelegram `koanf:"telegram"`
+	Rules                     []AlertsRule   `koanf:"rules"`
+	DisableDefaults           bool           `koanf:"disable_defaults"`
 }
 
 type AlertsTelegram struct {
@@ -145,44 +256,45 @@ type RealtimeConfig struct {
 func defaults() *koanf.Koanf {
 	k := koanf.New(".")
 	if err := k.Load(confmap.Provider(map[string]any{
-		"server.listen_addr":                 ":8080",
-		"server.read_timeout_seconds":        15,
-		"server.write_timeout_seconds":       15,
-		"database.path":                      "./data/monitor.db",
-		"ssh.dial_timeout_seconds":           10,
-		"ssh.command_timeout_seconds":        30,
-		"ssh.max_connections_per_host":       2,
-		"log.level":                          "info",
-		"log.format":                         "json",
-		"metrics.vm_url":                     "http://127.0.0.1:8428",
-		"metrics.push_timeout_seconds":       5,
-		"metrics.query_timeout_seconds":      15,
-		"logs.loki_url":                      "http://127.0.0.1:3100",
-		"logs.push_timeout_seconds":          5,
-		"logs.query_timeout_seconds":         15,
-		"scheduler.default_interval_seconds": 900, // 15 min — master plan §5 default
-		"scheduler.max_parallel":             10,
-		"scheduler.per_job_timeout_seconds":  30,
-		"auth.password":                      "",
-		"auth.realm":                         "frappe-monitor",
-		"alerts.enabled":                     false,
-		"alerts.evaluation_interval_seconds": 60,
-		"alerts.notify_repeat_seconds":       3600,
-		"alerts.vm_query_timeout_seconds":    10,
+		"server.listen_addr":                   ":8080",
+		"server.read_timeout_seconds":          15,
+		"server.write_timeout_seconds":         15,
+		"database.driver":                      "sqlite",
+		"database.path":                        "./data/monitor.db",
+		"ssh.dial_timeout_seconds":             10,
+		"ssh.command_timeout_seconds":          30,
+		"ssh.max_connections_per_host":         2,
+		"log.level":                            "info",
+		"log.format":                           "json",
+		"metrics.vm_url":                       "http://127.0.0.1:8428",
+		"metrics.push_timeout_seconds":         5,
+		"metrics.query_timeout_seconds":        15,
+		"logs.loki_url":                        "http://127.0.0.1:3100",
+		"logs.push_timeout_seconds":            5,
+		"logs.query_timeout_seconds":           15,
+		"scheduler.default_interval_seconds":   900, // 15 min — master plan §5 default
+		"scheduler.max_parallel":               10,
+		"scheduler.per_job_timeout_seconds":    30,
+		"auth.password":                        "",
+		"auth.realm":                           "frappe-monitor",
+		"alerts.enabled":                       false,
+		"alerts.evaluation_interval_seconds":   60,
+		"alerts.notify_repeat_seconds":         3600,
+		"alerts.vm_query_timeout_seconds":      10,
 		"alerts.telegram.send_timeout_seconds": 5,
-		"alerts.disable_defaults":            false,
-		"streaming.enabled":                  false,
-		"streaming.script_path":              "",
-		"streaming.flush_interval_seconds":   1,
-		"streaming.max_batch_lines":          500,
-		"streaming.push_timeout_seconds":     10,
-		"streaming.min_backoff_seconds":      1,
-		"streaming.max_backoff_seconds":      60,
-		"realtime.enabled":                   true,
-		"realtime.ping_interval_seconds":     30,
-		"realtime.write_timeout_seconds":     10,
-		"realtime.send_buffer":               128,
-		"realtime.max_clients":               512,
+		"alerts.disable_defaults":              false,
+		"streaming.enabled":                    false,
+		"streaming.script_path":                "",
+		"streaming.flush_interval_seconds":     1,
+		"streaming.max_batch_lines":            500,
+		"streaming.push_timeout_seconds":       10,
+		"streaming.min_backoff_seconds":        1,
+		"streaming.max_backoff_seconds":        60,
+		"realtime.enabled":                     true,
+		"realtime.ping_interval_seconds":       30,
+		"realtime.write_timeout_seconds":       10,
+		"realtime.send_buffer":                 128,
+		"realtime.max_clients":                 512,
 	}, "."), nil); err != nil {
 		panic(fmt.Sprintf("config defaults: %v", err))
 	}
@@ -216,9 +328,35 @@ func Load(path string) (*Config, error) {
 // values for fields wired into long-lived runtime components like the
 // SSH pool and HTTP server. Absent keys fall back to defaults() and
 // never reach these checks.
+// validateDatabase checks the database block against the selected driver:
+// sqlite needs a path; the server engines need host/user/name.
+func (c *Config) validateDatabase() error {
+	drv, err := c.Database.NormalizedDriver()
+	if err != nil {
+		return err
+	}
+	switch drv {
+	case "sqlite":
+		if c.Database.Path == "" {
+			return fmt.Errorf("database.path is required for the sqlite driver")
+		}
+	case "mysql", "postgres":
+		if c.Database.Host == "" {
+			return fmt.Errorf("database.host is required for the %s driver", c.Database.Driver)
+		}
+		if c.Database.User == "" {
+			return fmt.Errorf("database.user is required for the %s driver", c.Database.Driver)
+		}
+		if c.Database.Name == "" {
+			return fmt.Errorf("database.name is required for the %s driver", c.Database.Driver)
+		}
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
-	if c.Database.Path == "" {
-		return fmt.Errorf("database.path is required")
+	if err := c.validateDatabase(); err != nil {
+		return err
 	}
 	if c.Server.ListenAddr == "" {
 		return fmt.Errorf("server.listen_addr is required")
