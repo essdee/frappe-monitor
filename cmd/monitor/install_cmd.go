@@ -44,38 +44,53 @@ func installCmd(args []string) error {
 		AuthPassword: *password, Service: *service,
 	}
 
+	// Only prompt for values the operator did NOT pass on the command line, so
+	// a fully-flagged invocation runs non-interactively.
+	provided := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+
 	in := bufio.NewScanner(os.Stdin)
 	interactive := !*yes && isTTY()
+	prompt := func(name string) bool { return interactive && !provided[name] }
 
-	if o.Root == "" {
-		o.Root = ask(in, interactive, "Install root directory", installer.DefaultRoot(runtime.GOOS))
+	if !provided["root"] {
+		o.Root = ask(in, interactive, "Install root directory",
+			orDefault(o.Root, installer.DefaultRoot(runtime.GOOS)))
 	}
 	o.Root = expandHome(o.Root)
 
-	if o.Service == "" {
+	if !provided["service"] {
 		o.Service = installer.DefaultService(runtime.GOOS)
-		if interactive {
+		if prompt("service") {
 			o.Service = ask(in, true, "Process manager (systemd|launchd|supervisor|pm2|none)", o.Service)
 		}
 	}
 
-	if interactive {
+	if prompt("db") {
 		o.DBDriver = ask(in, true, "Database driver (mariadb|postgres|sqlite)", orDefault(o.DBDriver, "mariadb"))
 	}
 	if normDriver(o.DBDriver) != "sqlite" {
-		if interactive {
+		if prompt("db-host") {
 			o.DBHost = ask(in, true, "DB host", orDefault(o.DBHost, "127.0.0.1"))
+		}
+		if prompt("db-port") {
 			o.DBPort = askInt(in, true, "DB port (0 = engine default)", o.DBPort)
+		}
+		if prompt("db-user") {
 			o.DBUser = ask(in, true, "DB user", orDefault(o.DBUser, "monitor"))
+		}
+		if prompt("db-password") {
 			o.DBPassword = ask(in, true, "DB password", o.DBPassword)
+		}
+		if prompt("db-name") {
 			o.DBName = ask(in, true, "DB name", orDefault(o.DBName, "frappe_monitor"))
-			if normDriver(o.DBDriver) == "postgres" {
-				o.DBSSLMode = ask(in, true, "Postgres sslmode", orDefault(o.DBSSLMode, "disable"))
-			}
+		}
+		if normDriver(o.DBDriver) == "postgres" && prompt("db-sslmode") {
+			o.DBSSLMode = ask(in, true, "Postgres sslmode", orDefault(o.DBSSLMode, "disable"))
 		}
 	}
 
-	if o.AuthPassword == "" && interactive {
+	if o.AuthPassword == "" && prompt("password") {
 		o.AuthPassword = ask(in, true, "Dashboard password (blank = auto-generate)", "")
 	}
 	if o.AuthPassword == "" {
