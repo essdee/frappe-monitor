@@ -44,6 +44,10 @@ type Options struct {
 	Service string // one of the Service* constants
 	GOOS    string // target OS; defaults to runtime.GOOS
 
+	// Overwrite regenerates monitor.yaml even if one already exists
+	// (--force-config). Default false = preserve an existing config.
+	Overwrite bool
+
 	// SourceBinary is the path to the binary to install (defaults to the
 	// running executable).
 	SourceBinary string
@@ -238,14 +242,23 @@ func Install(o Options, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "  installed binary  -> %s\n", o.BinaryPath())
 
-	// Config: never clobber an existing one (preserve operator edits on upgrade).
-	if _, err := os.Stat(o.ConfigPath()); os.IsNotExist(err) {
+	// Config: by default never clobber an existing one (preserve operator edits
+	// on upgrade). --force-config (o.Overwrite) regenerates it from the flags.
+	_, statErr := os.Stat(o.ConfigPath())
+	switch {
+	case o.Overwrite || os.IsNotExist(statErr):
 		if err := writeFile(o.ConfigPath(), []byte(RenderConfig(o)), 0o600); err != nil {
 			return fmt.Errorf("write config: %w", err)
 		}
 		fmt.Fprintf(out, "  wrote config      -> %s\n", o.ConfigPath())
-	} else {
-		fmt.Fprintf(out, "  kept existing config -> %s\n", o.ConfigPath())
+	default:
+		// A config already exists and we're NOT overwriting. Warn loudly,
+		// because the DB / password flags the operator just passed are being
+		// ignored — a silent "kept" here is exactly how a --db mysql install
+		// can end up still running the previous SQLite config.
+		fmt.Fprintf(out, "\n  !! KEPT EXISTING config (your --db/--password flags were NOT applied):\n")
+		fmt.Fprintf(out, "       %s\n", o.ConfigPath())
+		fmt.Fprintf(out, "     To apply the new settings, re-run with --force-config, or edit that file.\n\n")
 	}
 
 	if o.Service != "" && o.Service != ServiceNone {

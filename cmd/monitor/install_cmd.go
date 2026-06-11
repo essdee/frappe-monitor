@@ -32,6 +32,7 @@ func installCmd(args []string) error {
 	dbPath := fs.String("db-path", "", "sqlite file path (sqlite driver only)")
 	password := fs.String("password", "", "dashboard password (auto-generated if empty)")
 	service := fs.String("service", "", "process manager: systemd|launchd|supervisor|pm2|none (default: OS-native)")
+	forceConfig := fs.Bool("force-config", false, "overwrite an existing monitor.yaml (apply the DB/password flags)")
 	yes := fs.Bool("yes", false, "non-interactive: use flags + defaults, no prompts")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -41,7 +42,7 @@ func installCmd(args []string) error {
 		Root: *root, ListenAddr: *listen,
 		DBDriver: *db, DBHost: *dbHost, DBPort: *dbPort, DBUser: *dbUser,
 		DBPassword: *dbPass, DBName: *dbName, DBSSLMode: *dbSSL, DBPath: *dbPath,
-		AuthPassword: *password, Service: *service,
+		AuthPassword: *password, Service: *service, Overwrite: *forceConfig,
 	}
 
 	// Only prompt for values the operator did NOT pass on the command line, so
