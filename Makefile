@@ -56,17 +56,21 @@ loki-logs:
 	docker compose -f deploy/docker-compose.dev.yml logs -f loki
 
 # --- production install ---------------------------------------------------
-# `sudo make install` runs deploy/install.sh which: builds the binary,
-# creates the frappe-monitor system user, lays out /etc + /var/lib +
-# /opt, installs systemd units, brings up VM + Loki via prod compose,
-# and starts frappe-monitor.service. Idempotent — safe to re-run for
-# upgrades. See docs/guide/deployment.md for the full reference.
+# `make install` runs deploy/install.sh, which auto-detects the OS:
+#   Linux  → systemd units + a dedicated frappe-monitor system user under
+#            /etc + /var/lib + /opt (needs root, so we prepend sudo).
+#   macOS  → a launchd LaunchAgent under ~/.frappe-monitor (NO sudo — the
+#            script refuses to run as root there).
+# Either way it builds the binary, brings up VM + Loki via the prod
+# compose, writes config (auto-generating a dashboard password if you
+# don't pass one), starts the service, and health-checks it. Idempotent —
+# safe to re-run for upgrades. See docs/guide/deployment.md.
 
 install:
-	sudo deploy/install.sh
+	@if [ "$$(uname -s)" = "Darwin" ]; then deploy/install.sh; else sudo deploy/install.sh; fi
 
 uninstall:
-	sudo deploy/install.sh --uninstall
+	@if [ "$$(uname -s)" = "Darwin" ]; then deploy/install.sh --uninstall; else sudo deploy/install.sh --uninstall; fi
 
 # `make local-test` brings up the whole stack on a laptop with seeded
 # demo data so every page has something to show. No sudo, no systemd,
