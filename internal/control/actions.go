@@ -116,41 +116,58 @@ func Lookup(key string) (Action, bool) {
 
 // Resolve validates params for the action's scope and returns the concrete
 // shell command to execute. It is the single choke point where operator input
-// becomes a command.
+// becomes a command — it routes through the same ValidateBenchPath/ValidateSite
+// used by the site-config endpoints so traversal rules can't diverge.
 func (a Action) Resolve(p Params) (string, error) {
 	if a.Scope == ScopeBench || a.Scope == ScopeSite {
 		if p.BenchPath == "" {
 			return "", fmt.Errorf("bench path is required for %s", a.Key)
 		}
-		if !benchPathRe.MatchString(p.BenchPath) {
-			return "", fmt.Errorf("invalid bench path")
+		if err := ValidateBenchPath(p.BenchPath); err != nil {
+			return "", err
 		}
 	}
 	if a.Scope == ScopeSite {
 		if p.Site == "" {
 			return "", fmt.Errorf("site is required for %s", a.Key)
 		}
-		if !siteRe.MatchString(p.Site) {
-			return "", fmt.Errorf("invalid site name")
+		if err := ValidateSite(p.Site); err != nil {
+			return "", err
 		}
 	}
 	return a.build(p), nil
 }
 
-// ValidateBenchPath / ValidateSite are exposed for the site-config endpoints,
-// which build their own commands but must enforce the same input rules.
+// ValidateBenchPath / ValidateSite are the single source of truth for the only
+// shell-bound, operator-supplied values. Both the run path (Resolve) and the
+// site-config endpoints call them. Besides the charset regex they reject any
+// "." / ".." path segment: shell-quoting stops command injection, but the
+// remote filesystem still resolves "/sites/../" lexically, so without this a
+// crafted bench/site could read or overwrite a config file outside the
+// intended bench/site directory.
 func ValidateBenchPath(p string) error {
-	if p == "" || !benchPathRe.MatchString(p) {
+	if p == "" || !benchPathRe.MatchString(p) || hasDotSegment(p) {
 		return fmt.Errorf("invalid bench path")
 	}
 	return nil
 }
 
 func ValidateSite(s string) error {
-	if s == "" || !siteRe.MatchString(s) {
+	if s == "" || !siteRe.MatchString(s) || s == "." || s == ".." {
 		return fmt.Errorf("invalid site name")
 	}
 	return nil
+}
+
+// hasDotSegment reports whether any "/"-separated segment is "." or "..", i.e.
+// the path tries to stay-put or walk up a directory.
+func hasDotSegment(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // shellQuote wraps s in single quotes, escaping embedded single quotes, so it

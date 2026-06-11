@@ -228,6 +228,10 @@ type Store interface {
 	ListControlActions(ctx context.Context, f ListControlActions) ([]*ControlAction, error)
 	MarkControlActionRunning(ctx context.Context, id int) error
 	FinishControlAction(ctx context.Context, id int, res ControlActionResult) (*ControlAction, error)
+	// FailStaleControlActions marks any pending/running rows as failed —
+	// called at startup so a crash (or a Finish-write failure) mid-run can't
+	// leave an audit row stuck non-terminal forever. Returns the count fixed.
+	FailStaleControlActions(ctx context.Context, reason string) (int, error)
 
 	Close() error
 }

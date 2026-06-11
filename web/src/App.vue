@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterView, RouterLink, useRoute } from 'vue-router'
 import {
   Server,
@@ -39,6 +39,31 @@ watch(
   },
 )
 
+// When the drawer is off-canvas (mobile + closed) its links are visually
+// hidden by a CSS transform — but a transform doesn't remove them from the
+// tab order or the a11y tree. Track the mobile breakpoint so we can mark the
+// sidebar inert/aria-hidden in exactly that state (NOT on desktop, where the
+// sidebar is always interactive).
+const isMobile = ref(false)
+const drawerHidden = computed(() => isMobile.value && !drawerOpen.value)
+let mq: MediaQueryList | null = null
+function syncMobile(e: MediaQueryList | MediaQueryListEvent) {
+  isMobile.value = e.matches
+}
+function onKey(e: KeyboardEvent) {
+  if (e.key === 'Escape') drawerOpen.value = false
+}
+onMounted(() => {
+  mq = window.matchMedia('(max-width: 900px)')
+  syncMobile(mq)
+  mq.addEventListener('change', syncMobile)
+  window.addEventListener('keydown', onKey)
+})
+onUnmounted(() => {
+  mq?.removeEventListener('change', syncMobile)
+  window.removeEventListener('keydown', onKey)
+})
+
 async function handleLogout() {
   // Confirm so a misclick (especially on a phone) doesn't drop the
   // operator out of the dashboard mid-task.
@@ -65,7 +90,7 @@ async function handleLogout() {
     <!-- Backdrop: only visible/interactive when the mobile drawer is open. -->
     <div class="overlay" @click="drawerOpen = false" />
 
-    <aside class="sidebar">
+    <aside class="sidebar" :inert="drawerHidden || undefined" :aria-hidden="drawerHidden || undefined">
       <div class="brand">
         <span class="brand-mark"><Activity :size="18" :stroke-width="2.5" /></span>
         <div class="brand-text">

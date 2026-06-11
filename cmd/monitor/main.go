@@ -96,6 +96,15 @@ func run(cfgPath string) error {
 		}
 	}()
 
+	// Reconcile any control-panel runs left non-terminal by a previous crash
+	// (or a Finish-write failure) — they can never complete now, so mark them
+	// failed rather than leave them stuck "running" in the audit log/UI.
+	if n, rerr := store.FailStaleControlActions(ctx, "interrupted — monitor restarted"); rerr != nil {
+		logger.Error("reconcile stale control actions", "err", rerr)
+	} else if n > 0 {
+		logger.Info("reconciled stale control actions", "count", n)
+	}
+
 	pool := sshpkg.NewPool(sshpkg.PoolConfig{
 		DialTimeout:    time.Duration(cfg.SSH.DialTimeoutSeconds) * time.Second,
 		CommandTimeout: time.Duration(cfg.SSH.CommandTimeoutSeconds) * time.Second,

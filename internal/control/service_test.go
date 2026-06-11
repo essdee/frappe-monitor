@@ -177,6 +177,32 @@ func TestService_RunRejectsUnknownInjectionAndMissingServer(t *testing.T) {
 	require.ErrorIs(t, err, storage.ErrNotFound)
 }
 
+func TestService_RunRejectsUnregisteredBench(t *testing.T) {
+	ctx := context.Background()
+	store := newStore(t, "ctlbench")
+	srv, err := store.CreateServer(ctx, storage.NewServer{
+		Name: "s1", Hostname: "s1.example.com", SSHUser: "monitor", SSHPort: 22, SSHKeyPath: "/tmp/k",
+		BenchPaths: []string{"/home/frappe/frappe-bench"},
+	})
+	require.NoError(t, err)
+	svc := New(store, &fakeExec{out: "ok"}, &fakeHub{}, nil)
+
+	// A validation-clean path that is NOT one of the server's registered
+	// bench paths must be refused (defense-in-depth containment).
+	_, err = svc.Run(ctx, RunRequest{
+		ServerID: srv.ID, ActionKey: "bench.restart", BenchPath: "/home/frappe/other-bench",
+	})
+	require.ErrorIs(t, err, ErrInvalidParams)
+
+	// The registered path is accepted and runs.
+	act, err := svc.Run(ctx, RunRequest{
+		ServerID: srv.ID, ActionKey: "bench.restart", BenchPath: "/home/frappe/frappe-bench",
+	})
+	require.NoError(t, err)
+	final := waitFor(t, store, act.ID, "success")
+	require.True(t, final.ExitOK)
+}
+
 func TestService_WriteSiteConfigValidatesAndAudits(t *testing.T) {
 	ctx := context.Background()
 	store := newStore(t, "ctlcfg")

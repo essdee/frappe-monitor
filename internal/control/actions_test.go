@@ -95,6 +95,35 @@ func TestResolveRejectsInjection(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsTraversal(t *testing.T) {
+	// Site/bench names that pass the charset regex but try to walk the
+	// filesystem must still be rejected (containment, not just injection).
+	for _, s := range []string{"..", ".", "...."} {
+		if s == "...." {
+			continue // four dots is a legal name, not a traversal — keep it allowed
+		}
+		if err := ValidateSite(s); err == nil {
+			t.Fatalf("traversal site accepted: %q", s)
+		}
+	}
+	if err := ValidateSite("site1.local"); err != nil {
+		t.Fatalf("valid site rejected: %v", err)
+	}
+
+	for _, p := range []string{"/home/frappe/../../../etc", "/home/./frappe", "/home/frappe/.."} {
+		if err := ValidateBenchPath(p); err == nil {
+			t.Fatalf("traversal bench accepted: %q", p)
+		}
+	}
+	if err := ValidateBenchPath("/home/frappe/frappe-bench"); err != nil {
+		t.Fatalf("valid bench rejected: %v", err)
+	}
+	// A legal name that merely contains dots (not a "." or ".." segment) stays valid.
+	if err := ValidateSite("my.site.v2"); err != nil {
+		t.Fatalf("dotted-but-legal site rejected: %v", err)
+	}
+}
+
 func TestShellQuoteEscapesSingleQuote(t *testing.T) {
 	if got := shellQuote("a'b"); got != `'a'\''b'` {
 		t.Fatalf("got %q", got)

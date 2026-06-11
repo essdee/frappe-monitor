@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"frappe-monitor/internal/realtime"
 	sshpkg "frappe-monitor/internal/ssh"
@@ -109,6 +110,11 @@ func (s *Service) Run(ctx context.Context, req RunRequest) (*storage.ControlActi
 	if err != nil {
 		return nil, err
 	}
+	if action.Scope == ScopeBench || action.Scope == ScopeSite {
+		if !benchAllowed(srv, req.BenchPath) {
+			return nil, fmt.Errorf("%w: bench path is not registered on this server", ErrInvalidParams)
+		}
+	}
 	act, err := s.store.CreateControlAction(ctx, storage.NewControlAction{
 		ServerID: req.ServerID, Action: req.ActionKey,
 		BenchPath: req.BenchPath, Site: req.Site,
@@ -118,7 +124,11 @@ func (s *Service) Run(ctx context.Context, req RunRequest) (*storage.ControlActi
 		return nil, err
 	}
 	s.broadcast(realtime.TypeControlStarted, act, srv.Name)
-	go s.execAudited(act, srv, action.Dangerous, func(ctx context.Context, tgt sshpkg.Target) (string, error) {
+	// Hand the goroutine its OWN copy: Run returns `act` to the HTTP handler,
+	// which reads it via ViewOf; mutating the same pointer in execAudited
+	// would be a data race. The copy carries the same ID for the DB updates.
+	runCopy := *act
+	go s.execAudited(&runCopy, srv, action.Dangerous, func(ctx context.Context, tgt sshpkg.Target) (string, error) {
 		return s.exec.Run(ctx, tgt, cmd)
 	})
 	return act, nil
@@ -135,6 +145,9 @@ func (s *Service) ReadSiteConfig(ctx context.Context, serverID int, bench, site 
 	srv, err := s.store.GetServer(ctx, serverID)
 	if err != nil {
 		return "", err
+	}
+	if !benchAllowed(srv, bench) {
+		return "", fmt.Errorf("%w: bench path is not registered on this server", ErrInvalidParams)
 	}
 	cctx, cancel := context.WithTimeout(ctx, s.readTimeout)
 	defer cancel()
@@ -175,6 +188,9 @@ func (s *Service) WriteSiteConfig(ctx context.Context, req WriteConfigRequest) (
 	if err != nil {
 		return nil, err
 	}
+	if !benchAllowed(srv, req.BenchPath) {
+		return nil, fmt.Errorf("%w: bench path is not registered on this server", ErrInvalidParams)
+	}
 	desc := "edit " + req.Site + "/site_config.json"
 	if req.Restart {
 		desc += " + bench restart"
@@ -191,7 +207,8 @@ func (s *Service) WriteSiteConfig(ctx context.Context, req WriteConfigRequest) (
 
 	path := req.BenchPath + "/sites/" + req.Site + "/site_config.json"
 	content, restart, bench, site := req.Content, req.Restart, req.BenchPath, req.Site
-	go s.execAudited(act, srv, restart, func(ctx context.Context, tgt sshpkg.Target) (string, error) {
+	writeCopy := *act // goroutine-owned copy; see Run for the rationale
+	go s.execAudited(&writeCopy, srv, restart, func(ctx context.Context, tgt sshpkg.Target) (string, error) {
 		qp := shellQuote(path)
 		old, _ := s.exec.Run(ctx, tgt, "cat "+qp+" 2>/dev/null")
 		writeCmd := "cp -f " + qp + " " + qp + ".bak 2>/dev/null; cat > " + qp
@@ -254,9 +271,35 @@ func (s *Service) execAudited(act *storage.ControlAction, srv *storage.Server, d
 	final, err := s.store.FinishControlAction(bg, act.ID, res)
 	if err != nil {
 		s.logger.Error("control: finish", "id", act.ID, "err", err)
+		// The DB write failed, but the command DID run. Still broadcast a
+		// terminal state from the in-memory copy so a watching dashboard
+		// doesn't hang on "running" forever; the row itself is reconciled
+		// to failed on the next monitor restart (FailStaleControlActions).
+		act.Status = res.Status
+		act.ExitOK = res.ExitOK
+		act.Output = res.Output
+		act.Error = res.Error
+		act.DurationMs = res.DurationMs
+		s.broadcast(realtime.TypeControlUpdated, act, srv.Name)
 		return
 	}
 	s.broadcast(realtime.TypeControlUpdated, final, srv.Name)
+}
+
+// benchAllowed enforces, as defense-in-depth on top of the path validation,
+// that a bench-scoped operation targets one of the server's registered bench
+// paths. When the server has no explicit bench_paths (auto-discovery host)
+// there is nothing to check against, so any validated path is allowed.
+func benchAllowed(srv *storage.Server, bench string) bool {
+	if len(srv.BenchPaths) == 0 {
+		return true
+	}
+	for _, b := range srv.BenchPaths {
+		if b == bench {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) broadcast(typ string, a *storage.ControlAction, serverName string) {
@@ -267,16 +310,27 @@ func (s *Service) broadcast(typ string, a *storage.ControlAction, serverName str
 }
 
 func truncate(s string, max int) string {
-	if max > 0 && len(s) > max {
-		return s[:max] + "\n…(truncated)"
+	if max <= 0 || len(s) <= max {
+		return s
 	}
-	return s
+	return s[:runeBoundary(s, max)] + "\n…(truncated)"
 }
 
 func cleanErr(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) > 2000 {
-		s = s[:2000] + "…"
+	const lim = 2000
+	if len(s) > lim {
+		s = s[:runeBoundary(s, lim)] + "…"
 	}
 	return s
+}
+
+// runeBoundary returns the largest offset <= max that falls on a UTF-8 rune
+// start, so slicing s[:offset] never cuts a multi-byte rune in half (which
+// would corrupt the trailing character into U+FFFD once JSON-encoded).
+func runeBoundary(s string, max int) int {
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return max
 }

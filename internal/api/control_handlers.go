@@ -126,8 +126,8 @@ func (h *controlHandlers) readConfig(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "control panel is not enabled on this server")
 		return
 	}
-	serverID, _ := strconv.Atoi(r.URL.Query().Get("server_id"))
-	if serverID == 0 {
+	serverID, err := strconv.Atoi(r.URL.Query().Get("server_id"))
+	if err != nil || serverID == 0 {
 		writeErr(w, http.StatusBadRequest, "server_id is required")
 		return
 	}
@@ -163,6 +163,10 @@ func (h *controlHandlers) writeConfig(w http.ResponseWriter, r *http.Request) {
 	var req writeConfigReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.ServerID == 0 {
+		writeErr(w, http.StatusBadRequest, "server_id is required")
 		return
 	}
 	act, err := h.runner.WriteSiteConfig(r.Context(), control.WriteConfigRequest{

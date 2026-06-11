@@ -86,6 +86,16 @@ func (s *EntStore) MarkControlActionRunning(ctx context.Context, id int) error {
 	return nil
 }
 
+func (s *EntStore) FailStaleControlActions(ctx context.Context, reason string) (int, error) {
+	return s.client.ControlAction.Update().
+		Where(entcontrolaction.StatusIn(entcontrolaction.StatusPending, entcontrolaction.StatusRunning)).
+		SetStatus(entcontrolaction.StatusFailed).
+		SetExitOk(false).
+		SetError(reason).
+		SetFinishedAt(time.Now().UTC()).
+		Save(ctx)
+}
+
 func (s *EntStore) FinishControlAction(ctx context.Context, id int, res ControlActionResult) (*ControlAction, error) {
 	status := entcontrolaction.StatusSuccess
 	if res.Status == "failed" {

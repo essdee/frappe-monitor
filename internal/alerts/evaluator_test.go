@@ -118,12 +118,12 @@ func (m *memStore) ListAlertStates(_ context.Context) ([]*storage.AlertState, er
 func (m *memStore) CreateServer(context.Context, storage.NewServer) (*storage.Server, error) {
 	panic("unused")
 }
-func (m *memStore) GetServer(context.Context, int) (*storage.Server, error)  { panic("unused") }
-func (m *memStore) ListServers(context.Context) ([]*storage.Server, error)   { panic("unused") }
+func (m *memStore) GetServer(context.Context, int) (*storage.Server, error) { panic("unused") }
+func (m *memStore) ListServers(context.Context) ([]*storage.Server, error)  { panic("unused") }
 func (m *memStore) UpdateServer(context.Context, int, storage.UpdateServer) (*storage.Server, error) {
 	panic("unused")
 }
-func (m *memStore) DeleteServer(context.Context, int) error              { panic("unused") }
+func (m *memStore) DeleteServer(context.Context, int) error { panic("unused") }
 func (m *memStore) SetServerStatus(context.Context, int, string, string) error {
 	panic("unused")
 }
@@ -139,7 +139,7 @@ func (m *memStore) ListDBTargets(context.Context) ([]*storage.DBTarget, error)  
 func (m *memStore) UpdateDBTarget(context.Context, int, storage.UpdateDBTarget) (*storage.DBTarget, error) {
 	panic("unused")
 }
-func (m *memStore) DeleteDBTarget(context.Context, int) error                  { panic("unused") }
+func (m *memStore) DeleteDBTarget(context.Context, int) error { panic("unused") }
 func (m *memStore) SetDBTargetStatus(context.Context, int, storage.DBTargetStatus) error {
 	panic("unused")
 }
@@ -156,7 +156,8 @@ func (m *memStore) MarkControlActionRunning(context.Context, int) error { panic(
 func (m *memStore) FinishControlAction(context.Context, int, storage.ControlActionResult) (*storage.ControlAction, error) {
 	panic("unused")
 }
-func (m *memStore) Close() error { return nil }
+func (m *memStore) FailStaleControlActions(context.Context, string) (int, error) { return 0, nil }
+func (m *memStore) Close() error                                                 { return nil }
 
 // recordedNotifier captures every Notify call.
 type recordedNotifier struct {
@@ -246,8 +247,8 @@ func TestEvaluator_NewFiringAlertNotifies(t *testing.T) {
 
 func TestEvaluator_RepeatedFiringWithinCooldownDoesNotNotify(t *testing.T) {
 	rule := Rule{
-		Name: "x",
-		Expr: "y > 0",
+		Name:              "x",
+		Expr:              "y > 0",
 		FingerprintLabels: []string{"server"},
 	}
 	vm := &fakeVM{resp: map[string][]Sample{
@@ -282,8 +283,8 @@ func TestEvaluator_RepeatedFiringWithinCooldownDoesNotNotify(t *testing.T) {
 
 func TestEvaluator_ResolutionDeletesAndNotifies(t *testing.T) {
 	rule := Rule{
-		Name: "x",
-		Expr: "y > 0",
+		Name:              "x",
+		Expr:              "y > 0",
 		FingerprintLabels: []string{"server"},
 	}
 	store := newMemStore()
@@ -354,8 +355,8 @@ func TestEvaluator_DistinctFingerprintsTrackedSeparately(t *testing.T) {
 }
 
 func TestRule_Validate(t *testing.T) {
-	require.Error(t, Rule{Expr: "x"}.Validate(),         "missing name")
-	require.Error(t, Rule{Name: "x"}.Validate(),         "missing expr")
+	require.Error(t, Rule{Expr: "x"}.Validate(), "missing name")
+	require.Error(t, Rule{Name: "x"}.Validate(), "missing expr")
 	require.Error(t, Rule{Name: "x", Expr: "y", Severity: "loud"}.Validate(), "bad severity")
 	require.NoError(t, Rule{Name: "x", Expr: "y"}.Validate())
 	require.NoError(t, Rule{Name: "x", Expr: "y", Severity: "info"}.Validate())
