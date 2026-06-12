@@ -252,6 +252,27 @@ func TestDeleteServer_CascadesChildren(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound, "child system snapshot should be gone")
 }
 
+func TestUpsertSystemSnapshot_BootstrapErrorOnlyCreatesRow(t *testing.T) {
+	// A server-add bootstrap whose SSH failed passes only LastError and no
+	// payload. The first (create) upsert must NOT violate payload's NOT NULL
+	// constraint — it defaults to "{}".
+	s := newTestStore(t)
+	ctx := context.Background()
+	srv, err := s.CreateServer(ctx, NewServer{
+		Name: "boot", Hostname: "boot.example.com", SSHUser: "m", SSHPort: 22, SSHKeyPath: "/k",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, s.UpsertSystemSnapshot(ctx, SystemSnapshot{
+		ServerID: srv.ID, LastError: "ssh: connection refused",
+	}))
+
+	got, err := s.GetSystemSnapshot(ctx, srv.ID)
+	require.NoError(t, err)
+	require.Equal(t, "ssh: connection refused", got.LastError)
+	require.Equal(t, "{}", string(got.Payload), "empty bootstrap payload defaults to {}")
+}
+
 func TestDeleteServer_NotFound(t *testing.T) {
 	s := newTestStore(t)
 	require.ErrorIs(t, s.DeleteServer(context.Background(), 99999), ErrNotFound)

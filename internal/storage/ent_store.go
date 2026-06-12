@@ -360,8 +360,15 @@ func (s *EntStore) UpsertSystemSnapshot(ctx context.Context, in SystemSnapshot) 
 		return err
 	}
 	if ent.IsNotFound(err) {
+		// First snapshot for this server. payload is NOT NULL, but a bootstrap
+		// whose SSH failed passes only LastError (empty payload) — default it
+		// to an empty JSON object so the create doesn't violate NOT NULL.
+		payload := in.Payload
+		if len(payload) == 0 {
+			payload = []byte("{}")
+		}
 		if _, err = tx.SystemSnapshot.Create().
-			SetPayload(in.Payload).
+			SetPayload(payload).
 			SetLastError(in.LastError).
 			SetServerID(in.ServerID).
 			Save(ctx); err != nil {
