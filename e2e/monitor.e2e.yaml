@@ -1,0 +1,20 @@
+# Config used by the Playwright e2e harness. The harness boots a clean,
+# disposable monitor on :8099 backed by an ephemeral SQLite file (wiped before
+# each run by global-setup). VM/Loki point at the prod-compose ports — bring
+# them up if you want the data-bearing pages (Benches/Sites/charts) to populate.
+server:
+  listen_addr: "127.0.0.1:8099"
+database:
+  driver: "sqlite"
+  path: "/tmp/fm-e2e/monitor.db"
+log:
+  level: "warn"
+  format: "text"
+metrics:
+  vm_url: "http://127.0.0.1:8428"
+logs:
+  loki_url: "http://127.0.0.1:3100"
+auth:
+  password: "e2e-password"
+realtime:
+  enabled: true
