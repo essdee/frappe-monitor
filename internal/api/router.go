@@ -54,6 +54,12 @@ type Deps struct {
 	OnServerCreated func(serverID int)
 	OnServerDeleted func(serverID int)
 
+	// TriggerPull runs an immediate background metrics pull for a server. Wired
+	// by main to the collector pipeline; called after a collector deploy and by
+	// the "Collect now" endpoint so data appears without waiting for the next
+	// scheduler tick. Nil = no-op (tests).
+	TriggerPull func(serverID int)
+
 	// Phase 6 alerts: passed when alerts.Service is enabled so the
 	// Alerts page in the dashboard can render configured rules and
 	// firing state. AlertsRules nil/empty is fine (the page just
@@ -131,6 +137,7 @@ func NewRouter(d Deps) http.Handler {
 			sshDeadline:     d.SSHResponseDeadline,
 			onServerCreated: d.OnServerCreated,
 			onServerDeleted: d.OnServerDeleted,
+			triggerPull:     d.TriggerPull,
 			broadcaster:     d.Hub,
 		}
 		h.mount(api)

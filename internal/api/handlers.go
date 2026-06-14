@@ -35,6 +35,7 @@ type serverHandlers struct {
 	// ones) without a process restart. Nil = no-op.
 	onServerCreated func(serverID int)
 	onServerDeleted func(serverID int)
+	triggerPull     func(serverID int)
 
 	// broadcaster pushes server.created/updated/deleted events to the
 	// dashboard so the server list updates live. Nil = no-op (tests).
@@ -84,6 +85,7 @@ func (h *serverHandlers) mount(r chi.Router) {
 	r.Delete("/servers/{id}", h.delete)
 	r.Post("/servers/{id}/test-connection", h.testConnection)
 	r.Post("/servers/{id}/deploy-collector", h.deployCollector)
+	r.Post("/servers/{id}/collect", h.collectNow)
 	r.Post("/servers/{id}/refresh-system", h.refreshSystem)
 	r.Get("/servers/{id}/system", h.getSystem)
 }
@@ -488,10 +490,42 @@ func (h *serverHandlers) deployCollector(w http.ResponseWriter, r *http.Request)
 		writeErr(w, statusForSSHError(err), "deploy failed: "+err.Error())
 		return
 	}
+	// Kick an immediate background pull so bench/site metrics appear right after
+	// deploy instead of waiting up to a full scheduler interval.
+	if h.triggerPull != nil {
+		h.triggerPull(id)
+	}
 	writeJSON(w, http.StatusOK, deployCollectorResp{
 		Deployed: true,
 		Version:  scripts.CollectorVersion(),
 	})
+}
+
+// collectNow triggers an immediate background metrics pull for a server (the
+// "Collect now" button), so an operator doesn't have to wait for the next
+// scheduled tick. Returns 202 Accepted — the pull runs asynchronously and its
+// results stream to the dashboard over the realtime channel. 404 if unknown,
+// 503 if on-demand pulls aren't wired.
+func (h *serverHandlers) collectNow(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if _, err := h.store.GetServer(r.Context(), id); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "server not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if h.triggerPull == nil {
+		writeErr(w, http.StatusServiceUnavailable, "on-demand collection not available")
+		return
+	}
+	h.triggerPull(id)
+	writeJSON(w, http.StatusAccepted, map[string]any{"collecting": true, "server_id": id})
 }
 
 // systemSnapshotResp is what GET /servers/{id}/system and

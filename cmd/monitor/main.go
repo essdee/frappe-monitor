@@ -301,6 +301,23 @@ func run(cfgPath string) error {
 		MaxConcurrent:  cfg.Control.MaxConcurrent,
 	})
 
+	// triggerPull runs an immediate, out-of-band metrics pull for one server in
+	// the background (best-effort, bounded by the per-job timeout). Wired to the
+	// API so a collector deploy and the "Collect now" button populate data right
+	// away instead of waiting up to default_interval_seconds for the next tick.
+	triggerPull := func(serverID int) {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Duration(cfg.Scheduler.PerJobTimeoutSeconds)*time.Second)
+			defer cancel()
+			if err := pipeline.PullOnce(ctx, serverID); err != nil {
+				logger.Warn("on-demand pull failed", "server_id", serverID, "err", err)
+			} else {
+				logger.Info("on-demand pull ok", "server_id", serverID)
+			}
+		}()
+	}
+
 	// Lifecycle hooks: when a server is added/removed via the API,
 	// register/deregister its scheduler entry so it picks up (or
 	// stops) on the next tick — no process restart required.
@@ -395,6 +412,7 @@ func run(cfgPath string) error {
 		// Hot register/deregister scheduler entries on server CRUD.
 		OnServerCreated: onServerCreated,
 		OnServerDeleted: onServerDeleted,
+		TriggerPull:     triggerPull,
 
 		// Phase 6: surface configured rules + enabled flag to the
 		// dashboard's Alerts page. alertsSvc may be nil when alerts

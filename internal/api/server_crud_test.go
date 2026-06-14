@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -159,6 +161,31 @@ func TestDeleteServer_SucceedsWhenHostUnreachable(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestCollectNow_TriggersPullAndAccepts(t *testing.T) {
+	var pulls int32
+	r := NewRouter(Deps{
+		Store:       openMemStore(t),
+		Executor:    sshpkg.NewFakeExecutor(),
+		TriggerPull: func(int) { atomic.AddInt32(&pulls, 1) },
+	})
+	ts := httptest.NewServer(r)
+	t.Cleanup(ts.Close)
+	id := createForCRUDTest(t, ts.URL, "collect.example.com")
+
+	resp, err := http.Post(ts.URL+"/api/v1/servers/"+strconv.Itoa(id)+"/collect", "", nil)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+	require.Equal(t, int32(1), atomic.LoadInt32(&pulls), "collect should trigger exactly one pull")
+
+	// Unknown id → 404, no pull.
+	resp, err = http.Post(ts.URL+"/api/v1/servers/9999/collect", "", nil)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	require.Equal(t, int32(1), atomic.LoadInt32(&pulls))
 }
 
 func TestDeleteServer_404OnUnknownID(t *testing.T) {

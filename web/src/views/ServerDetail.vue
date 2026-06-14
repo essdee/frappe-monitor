@@ -6,6 +6,7 @@ import {
   fetchServer,
   testServerConnection,
   deployCollector,
+  collectNow,
   deleteServer,
   type Server,
   type TestConnectionResult,
@@ -98,11 +99,25 @@ async function runDeploy() {
   deployMsg.value = null
   try {
     const r = await deployCollector(props.id)
-    deployMsg.value = `Collector v${r.version} deployed.`
+    deployMsg.value = `Collector v${r.version} deployed — collecting metrics now, benches/sites appear shortly.`
   } catch (e) {
     deployMsg.value = `Deploy failed: ${e instanceof Error ? e.message : String(e)}`
   } finally {
     deployRunning.value = false
+  }
+}
+
+const collectRunning = ref(false)
+async function runCollect() {
+  collectRunning.value = true
+  deployMsg.value = null
+  try {
+    await collectNow(props.id)
+    deployMsg.value = 'Collecting metrics now — benches/sites + charts update in a few seconds.'
+  } catch (e) {
+    deployMsg.value = `Collect failed: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    collectRunning.value = false
   }
 }
 
@@ -200,6 +215,9 @@ const loadLabel = (m: Record<string, string>) => {
       </button>
       <button :disabled="deployRunning" @click="runDeploy">
         {{ deployRunning ? 'Deploying…' : 'Deploy collector' }}
+      </button>
+      <button :disabled="collectRunning" @click="runCollect">
+        {{ collectRunning ? 'Collecting…' : 'Collect now' }}
       </button>
       <button class="edit" @click="showEdit = true">
         <Pencil :size="14" :stroke-width="2" /> Edit

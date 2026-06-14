@@ -186,6 +186,16 @@ export async function deployCollector(id: number): Promise<{ deployed: boolean; 
   return (await resp.json()) as { deployed: boolean; version: string }
 }
 
+// collectNow triggers an immediate background metrics pull for a server, so
+// bench/site data appears without waiting for the next scheduled tick.
+export async function collectNow(id: number): Promise<void> {
+  const resp = await apiFetch(`/api/v1/servers/${id}/collect`, { method: 'POST' })
+  if (!resp.ok) {
+    const body = await resp.text()
+    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+  }
+}
+
 // --- System snapshot ---------------------------------------------------
 
 export interface SystemPayload {
