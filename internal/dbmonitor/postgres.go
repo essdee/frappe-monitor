@@ -16,7 +16,9 @@ import (
 //	IsReplica  = pg_is_in_recovery()                  (is this a standby?)
 //	IORunning  = a WAL receiver is "streaming"        (connected to primary)
 //	SQLRunning = the standby is in recovery (applying WAL — always true on a standby)
-//	LagSeconds = now() - pg_last_xact_replay_timestamp()
+//	LagSeconds = now() - pg_last_xact_replay_timestamp(), but only while received
+//	             WAL is still pending apply (received LSN != replayed LSN); 0 when
+//	             caught up, so an idle primary doesn't read as lag.
 //
 // Credentials: psql reads ~/.pgpass by default; DefaultsFile overrides it
 // via PGPASSFILE. Socket is passed as the host (-h), which may be a socket
@@ -34,11 +36,34 @@ func (c *Checker) checkPostgres(ctx context.Context, tgt sshpkg.Target, t *stora
 	base := env + psql + host
 
 	// One round-trip: is_in_recovery | wal_receiver_status | lag_seconds(-1=NULL).
-	const q = `SELECT pg_is_in_recovery()::int, ` +
+	//
+	// Lag is gated on the received-vs-replayed WAL LSN so an idle-but-healthy
+	// standby reports 0, not an ever-growing now()-last_replay estimate: when
+	// all received WAL has been applied the two LSNs match and there is no
+	// real apply lag, even though the last replayed transaction may be old
+	// because the primary is simply quiet. The time-based estimate is only
+	// emitted while received WAL is still pending apply. IS DISTINCT FROM also
+	// handles a NULL receive LSN (e.g. archive recovery), falling through to
+	// the time-based estimate. A configured HeartbeatQuery remains the most
+	// accurate source.
+	const richQ = `SELECT pg_is_in_recovery()::int, ` +
 		`COALESCE((SELECT status FROM pg_stat_wal_receiver LIMIT 1),'none'), ` +
+		`CASE WHEN pg_last_wal_receive_lsn() IS DISTINCT FROM pg_last_wal_replay_lsn() ` +
+		`THEN COALESCE(EXTRACT(EPOCH FROM (now()-pg_last_xact_replay_timestamp()))::bigint,-1) ELSE 0 END`
+
+	// Fallback for PostgreSQL < 10, which lacks pg_last_wal_*_lsn() (PG renames:
+	// pg_last_xlog_* pre-10). The rich query fails to PARSE there — and a parse
+	// failure (swallowed by 2>/dev/null) yields empty output that would make a
+	// 9.x standby look like a primary. This fallback uses only 9.0+ functions:
+	// it loses the WAL-receiver status + LSN gating but keeps correct replica
+	// detection and a time-based lag estimate, so the standby is still monitored.
+	const fallbackQ = `SELECT pg_is_in_recovery()::int, 'none', ` +
 		`COALESCE(EXTRACT(EPOCH FROM (now()-pg_last_xact_replay_timestamp()))::bigint,-1)`
 
-	out, err := c.Exec.Run(ctx, tgt, base+" -tA -F'|' -c "+shellQuote(q)+" 2>/dev/null")
+	out, err := c.Exec.Run(ctx, tgt, base+" -tA -F'|' -c "+shellQuote(richQ)+" 2>/dev/null")
+	if err != nil || strings.TrimSpace(out) == "" {
+		out, err = c.Exec.Run(ctx, tgt, base+" -tA -F'|' -c "+shellQuote(fallbackQ)+" 2>/dev/null")
+	}
 	if err != nil {
 		return Result{Reachable: false, LastError: cleanErr(err.Error())}
 	}

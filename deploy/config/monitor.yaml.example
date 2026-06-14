@@ -2,7 +2,10 @@
 server:
   listen_addr: ":8080"
   read_timeout_seconds: 15
-  write_timeout_seconds: 15
+  # Must be >= ssh.command_timeout_seconds so a slow SSH-backed response
+  # (test-connection / deploy / refresh) is not severed mid-flight.
+  write_timeout_seconds: 60
+  max_body_bytes: 1048576   # request-body cap (1 MiB); also guards /login
 
 database:
   # driver selects the backend:
@@ -28,7 +31,12 @@ database:
 ssh:
   dial_timeout_seconds: 10
   command_timeout_seconds: 30
-  max_connections_per_host: 2
+  # Host-key handling: trust-on-first-use by default — a host's key is pinned
+  # on first connect (auto-onboard, no ssh-keyscan needed) and a later CHANGED
+  # key is rejected as a possible MITM. Empty known_hosts_path → ~/.ssh/
+  # known_hosts of the service user (created automatically).
+  known_hosts_path: ""
+  insecure_skip_host_key_check: false   # true disables verification entirely (DEV ONLY — MITM-able)
 
 log:
   level: "info"   # debug | info | warn | error
@@ -112,3 +120,21 @@ realtime:
   write_timeout_seconds: 10   # bound on a single frame write / ping
   send_buffer: 128            # per-client queue depth before a slow client is dropped
   max_clients: 512            # total concurrent connections (0 = unlimited)
+
+# --- Phase 10 control panel ----------------------------------------------
+# Allowlisted bench/service commands run over SSH (no free-form commands).
+# Action timeouts are the important knob: long bench update/migrate runs
+# need a generous ceiling, separate from ssh.command_timeout_seconds.
+control:
+  action_timeout_seconds: 300          # normal action ceiling (5 min)
+  danger_action_timeout_seconds: 1800  # Dangerous actions e.g. bench update (30 min)
+  read_timeout_seconds: 20             # synchronous reads (site-config fetch)
+  max_output_bytes: 65536              # stored command-output cap (64 KiB)
+  max_concurrent: 4                    # in-flight control runs
+
+# --- Phase 9 DB replication monitor --------------------------------------
+# Idle until replication targets are added in the dashboard.
+dbmonitor:
+  interval_seconds: 60          # sweep cadence across all targets
+  max_parallel: 4               # concurrent target checks per sweep
+  command_timeout_seconds: 15   # per status query

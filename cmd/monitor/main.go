@@ -100,6 +100,12 @@ func run(cfgPath string) error {
 
 	logger := newLogger(cfg.Log.Level, cfg.Log.Format)
 
+	// Clamp clampable config (warn, don't fail) so an in-place binary upgrade
+	// of a deployment with an older on-disk config keeps booting.
+	for _, w := range cfg.Reconcile() {
+		logger.Warn("config: " + w)
+	}
+
 	driver, dsn, err := cfg.Database.DSN()
 	if err != nil {
 		return fmt.Errorf("database config: %w", err)
@@ -149,10 +155,15 @@ func run(cfgPath string) error {
 	}
 
 	pool := sshpkg.NewPool(sshpkg.PoolConfig{
-		DialTimeout:    time.Duration(cfg.SSH.DialTimeoutSeconds) * time.Second,
-		CommandTimeout: time.Duration(cfg.SSH.CommandTimeoutSeconds) * time.Second,
+		DialTimeout:              time.Duration(cfg.SSH.DialTimeoutSeconds) * time.Second,
+		CommandTimeout:           time.Duration(cfg.SSH.CommandTimeoutSeconds) * time.Second,
+		KnownHostsPath:           cfg.SSH.KnownHostsPath,
+		InsecureSkipHostKeyCheck: cfg.SSH.InsecureSkipHostKeyCheck,
 	})
 	defer pool.Close()
+	if cfg.SSH.InsecureSkipHostKeyCheck {
+		logger.Warn("ssh: host-key verification DISABLED (ssh.insecure_skip_host_key_check=true) — fleet SSH is vulnerable to man-in-the-middle; unset for production")
+	}
 
 	// Phase 8: real-time push hub. Producers (the pull pipeline, alerts,
 	// the streamer, server CRUD) broadcast events to subscribed dashboard
@@ -243,6 +254,7 @@ func run(cfgPath string) error {
 		PushTimeoutSeconds:   cfg.Streaming.PushTimeoutSeconds,
 		MinBackoffSeconds:    cfg.Streaming.MinBackoffSeconds,
 		MaxBackoffSeconds:    cfg.Streaming.MaxBackoffSeconds,
+		MaxLineBytes:         cfg.Streaming.MaxLineBytes,
 	}
 	for _, f := range cfg.Streaming.Files {
 		streamCfg.Files = append(streamCfg.Files, streamer.FileSpecConfig{
@@ -270,14 +282,24 @@ func run(cfgPath string) error {
 	// targets are admin-managed via the dashboard). Reuses the SSH pool to
 	// read SHOW SLAVE/REPLICA STATUS, pushes replication metrics to VM, and
 	// pushes live status over WebSocket.
-	dbMon := dbmonitor.New(store, pool, vmClient, hub, logger)
+	dbMon := dbmonitor.New(store, pool, vmClient, hub, logger, dbmonitor.Config{
+		Interval:    time.Duration(cfg.DBMonitor.IntervalSeconds) * time.Second,
+		MaxParallel: cfg.DBMonitor.MaxParallel,
+		CmdTimeout:  time.Duration(cfg.DBMonitor.CommandTimeoutSeconds) * time.Second,
+	})
 	dbMon.Start(ctx)
 	logger.Info("db monitor started")
 
 	// Phase 10: control panel. Runs allowlisted bench/service commands and
 	// site-config edits over the same SSH pool, recording every run in the
 	// audit log and pushing lifecycle over WebSocket. Stateless — no Start.
-	ctrl := control.New(store, pool, hub, logger)
+	ctrl := control.New(store, pool, hub, logger, control.Config{
+		ActionTimeout:  time.Duration(cfg.Control.ActionTimeoutSeconds) * time.Second,
+		DangerTimeout:  time.Duration(cfg.Control.DangerActionTimeoutSeconds) * time.Second,
+		ReadTimeout:    time.Duration(cfg.Control.ReadTimeoutSeconds) * time.Second,
+		MaxOutputBytes: cfg.Control.MaxOutputBytes,
+		MaxConcurrent:  cfg.Control.MaxConcurrent,
+	})
 
 	// Lifecycle hooks: when a server is added/removed via the API,
 	// register/deregister its scheduler entry so it picks up (or
@@ -358,6 +380,14 @@ func run(cfgPath string) error {
 		MetricsQueryTimeout: time.Duration(cfg.Metrics.QueryTimeoutSeconds) * time.Second,
 		LogsQueryTimeout:    time.Duration(cfg.Logs.QueryTimeoutSeconds) * time.Second,
 
+		// SSH-backed handlers can block for up to the dial + command budget;
+		// give their responses that long (plus headroom) so the global HTTP
+		// WriteTimeout doesn't sever a slow test-connection / deploy / refresh.
+		SSHResponseDeadline: time.Duration(cfg.SSH.DialTimeoutSeconds+cfg.SSH.CommandTimeoutSeconds+5) * time.Second,
+
+		// Cap request bodies (covers the pre-auth /login too).
+		MaxBodyBytes: cfg.Server.MaxBodyBytes,
+
 		// Phase 7: HTTP basic auth.
 		AuthPassword: cfg.Auth.Password,
 		AuthRealm:    cfg.Auth.Realm,
@@ -398,7 +428,10 @@ func run(cfgPath string) error {
 		Handler:      router,
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeoutSeconds) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeoutSeconds) * time.Second,
-		BaseContext:  func(net.Listener) context.Context { return ctx },
+		// Bound request headers (the body is bounded by the limitBody
+		// middleware). 64 KiB is generous for our small JSON APIs.
+		MaxHeaderBytes: 64 << 10,
+		BaseContext:    func(net.Listener) context.Context { return ctx },
 	}
 
 	serverErr := make(chan error, 1)
@@ -427,9 +460,14 @@ func run(cfgPath string) error {
 	// Scheduler jobs go SSH→VM directly — they don't flow through the
 	// HTTP server — but they DO use the store and pool, which are
 	// closed via deferreds when run() returns.
-	shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
-	defer stop()
-	if err := sched.Stop(shutdownCtx); err != nil {
+	// Each shutdown stage gets its OWN deadline. Sharing a single 10s context
+	// meant a slow scheduler stop could exhaust the budget before
+	// srv.Shutdown ran, making srv.Shutdown fail with context-deadline-
+	// exceeded and turn a clean shutdown into a non-zero exit.
+	const shutdownGrace = 10 * time.Second
+	schedCtx, schedStop := context.WithTimeout(context.Background(), shutdownGrace)
+	defer schedStop()
+	if err := sched.Stop(schedCtx); err != nil {
 		logger.Error("scheduler stop", "err", err)
 	}
 	if alertsSvc != nil {
@@ -447,19 +485,21 @@ func run(cfgPath string) error {
 	// Disconnect WebSocket clients before stopping the HTTP server so the
 	// long-lived /ws handlers return promptly and don't block Shutdown.
 	hub.Close()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	httpCtx, httpStop := context.WithTimeout(context.Background(), shutdownGrace)
+	defer httpStop()
+	if err := srv.Shutdown(httpCtx); err != nil {
 		return fmt.Errorf("http shutdown: %w", err)
 	}
 	return nil
 }
 
 // registerScheduledPulls lists every server in the store and adds a
-// scheduler entry per server. Phase 2 uses one global cron spec
-// (default_interval_seconds); Phase 3 will support per-server overrides.
+// scheduler entry per server, using one global cron spec
+// (default_interval_seconds). Per-server interval overrides are a backlog item.
 //
-// Note: this is one-shot at boot. Servers added via the API after boot
-// are not auto-scheduled until the next process restart. Hot reload is
-// a Phase 3 concern.
+// This runs once at boot. Servers added/removed via the API after boot are
+// hot-(de)registered by the OnServerCreated / OnServerDeleted hooks above —
+// no process restart is needed.
 func registerScheduledPulls(
 	ctx context.Context,
 	sched *scheduler.Scheduler,

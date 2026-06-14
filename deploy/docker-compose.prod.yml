@@ -50,9 +50,12 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
+    # Use our config (enables compactor + 90d retention); the image default has
+    # none, so log disk would grow unbounded with the streamer on.
+    command: -config.file=/etc/loki/loki.yaml
     volumes:
       - loki-data:/loki
+      - ./config/loki.yaml:/etc/loki/loki.yaml:ro
     # Loki is the lighter of the two; its working set is mostly
     # write-side. 256 MB is generous for our log volume.
     mem_limit: 256m

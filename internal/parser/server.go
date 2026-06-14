@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -142,6 +143,12 @@ func requireFloat64(s Section, key string) (float64, error) {
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil {
 		return 0, fmt.Errorf("key %q: invalid float64 %q: %w", key, v, err)
+	}
+	// strconv.ParseFloat accepts "NaN"/"Inf"/"+Inf"/"-Inf" without error;
+	// such a value is torn/garbage collector output and would push a NaN/Inf
+	// sample into VictoriaMetrics (rejected or corrupting). Reject it here.
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, fmt.Errorf("key %q: non-finite float64 %q", key, v)
 	}
 	return f, nil
 }

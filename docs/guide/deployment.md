@@ -165,7 +165,17 @@ sudo systemctl reload caddy
 
 Caddy provisions Let's Encrypt automatically. Open ports 80 + 443 on the host firewall and point your DNS at it.
 
-> **Auth caveat:** until Phase 7 ships built-in auth, the dashboard has no login. Restrict access by IP in the Caddyfile (the example shows the pattern) or only expose it on a private network / VPN.
+> **Auth + TLS:** the dashboard has built-in auth — the installer sets a
+> dashboard password (cookie-session login in the browser; HTTP basic for
+> scripts). It serves plain HTTP, so still put TLS in front (Caddy above) and,
+> for defense in depth, restrict access by IP or to a private network / VPN.
+>
+> **SSH host keys:** the monitor uses trust-on-first-use — it pins each bench
+> host's key on the first connection and rejects it later only if the key
+> *changes*. No manual `ssh-keyscan` step. (If a host is legitimately rebuilt,
+> remove its line from the service user's `~/.ssh/known_hosts` and reconnect.)
+> The installer auto-generates the monitor's SSH key under the state dir and
+> prints its path — authorize that `.pub` on each bench (`ssh-copy-id`).
 
 ## Upgrades
 

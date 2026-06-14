@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -22,6 +23,13 @@ type serverHandlers struct {
 	exec   sshpkg.Executor
 	logger *slog.Logger
 
+	// sshDeadline is how long the SSH-backed handlers (test-connection,
+	// deploy-collector, refresh-system) may take to respond. Their response
+	// blocks on an SSH round-trip that can legitimately exceed the server's
+	// global WriteTimeout, so those handlers push the write deadline out to
+	// this value via http.ResponseController. Zero = leave the global timeout.
+	sshDeadline time.Duration
+
 	// Lifecycle hooks fire after a successful create/delete so the
 	// scheduler can pick up new servers (and stop calling deleted
 	// ones) without a process restart. Nil = no-op.
@@ -38,6 +46,19 @@ func (h *serverHandlers) emit(ev realtime.Event) {
 	if h.broadcaster != nil {
 		h.broadcaster.Broadcast(ev)
 	}
+}
+
+// extendWriteDeadline pushes the HTTP response write deadline out to sshDeadline
+// for the SSH-backed handlers, whose response legitimately blocks on an SSH
+// dial+command round-trip that can exceed the server's global WriteTimeout.
+// Without this the http.Server severs the connection mid-SSH and the client
+// sees a truncated/aborted response. Best-effort: if the deadline is unset or
+// the ResponseController doesn't support it, the global timeout still applies.
+func (h *serverHandlers) extendWriteDeadline(w http.ResponseWriter) {
+	if h.sshDeadline <= 0 {
+		return
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(h.sshDeadline))
 }
 
 // emitStatus broadcasts a server.status event mirroring the collector
@@ -266,17 +287,45 @@ func (h *serverHandlers) patch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto)
 }
 
-// delete removes a server by id. Cascading delete on the schema's
-// log_cursors edge cleans up cursor rows; alert states (Phase 6) age
-// out on the next reconciliation cycle when their series disappears.
-// Returns 204 on success, 404 if id unknown.
+// collectorCleanupCmd removes the deployed collector from a host. It deletes
+// ONLY the collector script and then the ~/.frappe-monitor directory, and only
+// when that directory is empty (rmdir, not rm -rf) — so if an operator ever
+// kept other files there, they are left untouched. Mirrors the path written by
+// deployCollector.
+const collectorCleanupCmd = `rm -f "$HOME/.frappe-monitor/frappe-monitor-collect.sh"; ` +
+	`rmdir "$HOME/.frappe-monitor" 2>/dev/null || true`
+
+// removeRemoteCollector deletes the collector we deployed to a server's host so
+// that deleting the server doesn't leave our script behind. Best-effort and
+// bounded by its own timeout: a permanently-unreachable host must still be
+// deletable, so a failure here is logged, never fatal.
+func (h *serverHandlers) removeRemoteCollector(ctx context.Context, srv *storage.Server) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if _, err := h.exec.Run(cctx, tgtFromServer(srv), collectorCleanupCmd); err != nil {
+		h.logger.Warn("server delete: remote collector cleanup failed (host unreachable?)",
+			"server_id", srv.ID, "host", srv.Hostname, "err", err)
+		return
+	}
+	h.logger.Info("server delete: removed remote collector",
+		"server_id", srv.ID, "host", srv.Hostname)
+}
+
+// delete removes a server by id. The DB row is dropped FIRST (so the delete is
+// never gated on, nor cancellable by, the reachability of the very host being
+// removed); the collector we deployed to ~/.frappe-monitor is then torn down in
+// the background, best-effort. Cascading delete on the schema's log_cursors edge
+// cleans up cursor rows; alert states (Phase 6) age out on the next
+// reconciliation cycle when their series disappears. Returns 204, 404 if unknown.
 func (h *serverHandlers) delete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	err = h.store.DeleteServer(r.Context(), id)
+	// Fetch first so we keep the SSH coordinates needed to clean up the remote
+	// collector after the row (and its ssh_key_path etc.) is gone.
+	srv, err := h.store.GetServer(r.Context(), id)
 	if errors.Is(err, storage.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "server not found")
 		return
@@ -285,9 +334,23 @@ func (h *serverHandlers) delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	if err := h.store.DeleteServer(r.Context(), id); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "server not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if h.onServerDeleted != nil {
 		h.onServerDeleted(id)
 	}
+	// Tear down the remote collector in the background on a detached context, so
+	// a dead/slow/blocked host can neither delay the delete nor abort it via a
+	// client disconnect. Best-effort: an unreachable host just keeps the script.
+	go h.removeRemoteCollector(context.Background(), srv)
+
 	h.emit(realtime.Event{Type: realtime.TypeServerDeleted, Topic: realtime.TopicServers(), Data: map[string]any{"id": id}})
 	h.emit(realtime.Event{Type: realtime.TypeServerDeleted, Topic: realtime.TopicServer(id), Data: map[string]any{"id": id}})
 	w.WriteHeader(http.StatusNoContent)
@@ -359,6 +422,7 @@ func (h *serverHandlers) testConnection(w http.ResponseWriter, r *http.Request) 
 	tgt := sshpkg.Target{
 		Host: srv.Hostname, Port: srv.SSHPort, User: srv.SSHUser, KeyPath: srv.SSHKeyPath,
 	}
+	h.extendWriteDeadline(w)
 	lat, pingErr := sshpkg.Ping(r.Context(), h.exec, tgt)
 
 	if pingErr != nil {
@@ -419,6 +483,7 @@ func (h *serverHandlers) deployCollector(w http.ResponseWriter, r *http.Request)
 	const cmd = `mkdir -p "$HOME/.frappe-monitor" && ` +
 		`cat > "$HOME/.frappe-monitor/frappe-monitor-collect.sh" && ` +
 		`chmod +x "$HOME/.frappe-monitor/frappe-monitor-collect.sh"`
+	h.extendWriteDeadline(w)
 	if _, err := h.exec.RunWithInput(r.Context(), tgtFromServer(srv), cmd, scripts.CollectorScript); err != nil {
 		writeErr(w, statusForSSHError(err), "deploy failed: "+err.Error())
 		return
@@ -465,6 +530,7 @@ func (h *serverHandlers) refreshSystem(w http.ResponseWriter, r *http.Request) {
 	// between cycles, so just re-shipping it is simpler than tracking
 	// a deployed version.
 	const cmd = "bash -s"
+	h.extendWriteDeadline(w)
 	stdout, runErr := h.exec.RunWithInput(r.Context(), tgtFromServer(srv), cmd, scripts.SystemScript)
 	if runErr != nil {
 		// Persist the failure so the dashboard shows "tried, failed".

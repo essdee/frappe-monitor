@@ -76,6 +76,19 @@ Each item has a phase target (when we'd want to address it by) and the review th
 | T2 | Smoke script's hardcoded `:18080` blocks parallel runs. | Task 10 review | Phase 7 polish | `PORT` env var already overrides — just needs a one-liner in README about parallel CI shards if that ever becomes routine. |
 | T3 | "Bogus host" smoke step actually exercises `loadKey` failure (file-not-found), not a real dial-timeout path. | Task 10 review | Phase 7 polish | Sub-second probe; doesn't validate `DialTimeout` enforcement. If the smoke is ever switched to a real-but-unreachable hostname with a real key, the test will absorb up to `dial_timeout_seconds` per probe — adjust expected timing accordingly. |
 
+### 2026-06-13 review (deferred — enhancements, not blockers)
+
+Surfaced by the production-readiness review of the 2026-06-13 hardening change set. The critical/high correctness + upgrade-safety items from that review were fixed in-tree; these are the lower-priority enhancements deferred here.
+
+| # | Item | Source | Phase target | Notes |
+|---|---|---|---|---|
+| R2 | `SITE_PROBE_BUDGET_S` (collector site-probe budget, 20s) is hardcoded in the bash collector and not derived from `scheduler.per_job_timeout_seconds`. Lowering `per_job_timeout_seconds` below ~22s makes the collector get SIGKILLed mid-probe, marking every server unreachable. | 2026-06-13 prod-readiness #8 | Phase 7 | Mitigated by docs for now (keep `per_job_timeout_seconds` ≥ 25). Full fix: export `SITE_PROBE_BUDGET_S` from `buildCollectCmd` derived from the per-job timeout minus headroom (needs threading the value into `collector.Pipeline`). |
+| R3 | No per-server scheduler jitter — all boot-registered servers fire on the same `default_interval_seconds` boundary, a thundering herd against `max_parallel` on large fleets. | 2026-06-13 prod-readiness #16 | Phase 7 v2 | Only matters at tens of servers. Fix: derive a deterministic 0..interval offset from `serverID` and delay the first fire (or jitter each entry). |
+| R4 | Bench/site auto-discovery is silent when the SSH user can't read the bench owner's files (0750 home, SSH-user != bench-owner) — indistinguishable from a bench-less host. | 2026-06-13 prod-readiness #15 | Phase 7 | Emit a `discovered_benches=N` / `###WARN no_benches_discovered` line from the collector so `pipeline.go` can surface "reachable but no benches readable" instead of silently reporting nothing. |
+| R5 | Control actions have no idle/output-heartbeat timeout — a wedged bench command (apt lock, stuck migration, interactive prompt) holds the SSH session for the full 5m/30m ceiling. | 2026-06-13 prod-readiness #9 | Phase 7 | Keep the long hard ceiling but add a "no stdout/stderr for N seconds → kill" heartbeat so a stuck session is reaped quickly without truncating a legitimately long-running migration. |
+| R6 | The 1 MiB request-body cap returns a generic 400 "invalid json" on an oversized body instead of a 413 naming `server.max_body_bytes`. | 2026-06-13 prod-readiness #21 | Phase 7 polish | Detect `*http.MaxBytesError` (errors.As) in the JSON-decode error paths and return 413 with the configured limit. Cosmetic; oversized bodies are already safely rejected. |
+| R7 | The SSH pool multiplexes one connection per `host\|user\|key`; there is no per-host session limiter. | 2026-06-13 prod-readiness #10 | Phase 7 v2 | The misleading `ssh.max_connections_per_host` knob (validated-but-unenforced) was REMOVED in this change set. If concurrent metrics + control + dbmonitor + streaming on a busy host ever needs throttling, add a real per-host session semaphore in the pool and re-introduce the knob wired to it. |
+
 ## Done
 
 _(empty — items move here with a commit ref when addressed)_

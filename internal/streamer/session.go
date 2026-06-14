@@ -220,39 +220,98 @@ func (s *Session) runOnce(ctx context.Context) error {
 	}()
 	defer close(stopWatcher)
 
-	scanner := bufio.NewScanner(stream)
-	scanner.Buffer(make([]byte, 0, 64*1024), s.cfg.MaxLineBytes)
+	// A bufio.Reader (not bufio.Scanner) so an over-long line doesn't wedge
+	// the stream: Scanner returns bufio.ErrTooLong and stops, and because the
+	// cursor never advanced past the offending line, every reconnect replays
+	// it — an infinite loop on one bad line. readBoundedLine instead caps the
+	// buffered bytes at MaxLineBytes but counts the TRUE physical length so we
+	// can ship a truncated line AND advance the file cursor past the whole
+	// thing.
+	reader := bufio.NewReaderSize(stream, 64*1024)
 	versionSeen := false
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		ev := ParseLine(line)
-		now := time.Now()
-
-		switch ev.Type {
-		case EventVersion:
-			versionSeen = true
-			s.handler.OnVersion(ctx, s.cfg.ServerID, ev.Version)
-		case EventLine:
-			s.handler.OnLine(ctx, s.cfg.ServerID, ev.FileID, ev.Content, now, ev.SourceByteLen())
-		case EventFileError:
-			s.handler.OnFileError(ctx, s.cfg.ServerID, ev.FileID, ev.ErrorToken)
-		case EventUnknown:
-			// Don't flood logs on every unknown line — log once per
-			// session at info, then shut up. Unknown lines are
-			// almost always a forward-compat-newer-streamer thing.
-			if versionSeen {
-				s.logger.Debug("streamer: unknown line",
-					"server_id", s.cfg.ServerID, "line", truncate(line, 200))
+	for {
+		line, physLen, truncated, rerr := readBoundedLine(reader, s.cfg.MaxLineBytes)
+		if len(line) > 0 || truncated {
+			now := time.Now()
+			lineStr := string(line)
+			ev := ParseLine(lineStr)
+			switch ev.Type {
+			case EventVersion:
+				versionSeen = true
+				s.handler.OnVersion(ctx, s.cfg.ServerID, ev.Version)
+			case EventLine:
+				srcLen := ev.SourceByteLen()
+				content := ev.Content
+				if truncated {
+					// True source bytes = physical line minus the protocol
+					// prefix "##F=<id>|", so the cursor advances past the
+					// full line even though we only kept a prefix of it.
+					if pl := physLen - (len(filePrefix) + len(ev.FileID) + 1); pl > srcLen {
+						srcLen = pl
+					}
+					content += " …(truncated at max_line_bytes)"
+					s.logger.Warn("streamer: log line exceeded max_line_bytes, shipped truncated",
+						"server_id", s.cfg.ServerID, "file_id", ev.FileID, "source_bytes", srcLen)
+				}
+				s.handler.OnLine(ctx, s.cfg.ServerID, ev.FileID, content, now, srcLen)
+			case EventFileError:
+				s.handler.OnFileError(ctx, s.cfg.ServerID, ev.FileID, ev.ErrorToken)
+			case EventUnknown:
+				// Don't flood logs on every unknown line — log once per
+				// session at info, then shut up. Unknown lines are
+				// almost always a forward-compat-newer-streamer thing.
+				if versionSeen {
+					s.logger.Debug("streamer: unknown line",
+						"server_id", s.cfg.ServerID, "line", truncate(lineStr, 200))
+				}
 			}
 		}
+		if rerr != nil {
+			// io.EOF is a clean remote close (tail exited / session ended);
+			// anything else is a network/read error worth surfacing.
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("scan: %w", rerr)
+		}
 	}
-	if err := scanner.Err(); err != nil {
-		// Distinguish "remote closed cleanly" (EOF, scanner.Err==nil)
-		// from a network error. bufio.Scanner returns nil for EOF.
-		return fmt.Errorf("scan: %w", err)
+}
+
+// readBoundedLine reads one '\n'-terminated line from r without ever buffering
+// more than maxLine bytes. When the physical line is longer than maxLine it
+// returns the first maxLine bytes as line, the TRUE total physical length
+// (including the discarded tail and the terminating '\n'), and truncated=true,
+// so the caller can advance the file cursor past the whole line. The trailing
+// '\n' is stripped from line. A final unterminated line at EOF is returned with
+// err == io.EOF.
+func readBoundedLine(r *bufio.Reader, maxLine int) (line []byte, physLen int, truncated bool, err error) {
+	if maxLine <= 0 {
+		maxLine = 1 << 20
 	}
-	return nil
+	for {
+		chunk, e := r.ReadSlice('\n')
+		physLen += len(chunk)
+		if room := maxLine - len(line); room > 0 {
+			if len(chunk) <= room {
+				line = append(line, chunk...)
+			} else {
+				line = append(line, chunk[:room]...)
+				truncated = true
+			}
+		} else if len(chunk) > 0 {
+			truncated = true
+		}
+		if e == bufio.ErrBufferFull {
+			// The reader's internal buffer filled before a '\n'; more of this
+			// same physical line remains. Keep reading it.
+			continue
+		}
+		if e == nil && len(line) > 0 && line[len(line)-1] == '\n' {
+			line = line[:len(line)-1]
+		}
+		return line, physLen, truncated, e
+	}
 }
 
 // nextBackoff doubles up to max. Simple exponential, no jitter for

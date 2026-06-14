@@ -113,13 +113,12 @@ cat > "$TMPDIR/monitor.yaml" <<EOF
 server:
   listen_addr: ":$PORT"
   read_timeout_seconds: 15
-  write_timeout_seconds: 15
+  write_timeout_seconds: 60
 database:
   path: "$TMPDIR/monitor.db"
 ssh:
   dial_timeout_seconds: 10
   command_timeout_seconds: 30
-  max_connections_per_host: 2
 log:
   level: "info"
   format: "json"

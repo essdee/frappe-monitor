@@ -49,13 +49,13 @@ cat > "$TMPDIR/monitor.yaml" <<EOF
 server:
   listen_addr: ":$PORT"
   read_timeout_seconds: 15
-  write_timeout_seconds: 15
+  write_timeout_seconds: 60
 database:
   path: "$TMPDIR/data/monitor.db"
 ssh:
   dial_timeout_seconds: 10
   command_timeout_seconds: 30
-  max_connections_per_host: 2
+  insecure_skip_host_key_check: true
 log:
   level: "info"
   format: "json"
@@ -561,13 +561,13 @@ cat > "$TMPDIR/monitor-auth.yaml" <<EOF
 server:
   listen_addr: ":$PORT"
   read_timeout_seconds: 15
-  write_timeout_seconds: 15
+  write_timeout_seconds: 60
 database:
   path: "$TMPDIR/data/monitor.db"
 ssh:
   dial_timeout_seconds: 10
   command_timeout_seconds: 30
-  max_connections_per_host: 2
+  insecure_skip_host_key_check: true
 log:
   level: "info"
   format: "json"
@@ -595,9 +595,12 @@ ok "GET /healthz → 200 (no auth required)"
 # /api/v1/servers must be 401 without auth.
 HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/v1/servers")
 [ "$HTTP" = "401" ] || fail "expected /api/v1/servers=401 unauth'd, got $HTTP"
+# Cookie-session auth intentionally omits WWW-Authenticate so browsers don't
+# pop the native credential prompt (the SPA catches 401 and routes to its
+# in-view /login). Lock that: the header must be ABSENT.
 WWW_AUTH=$(curl -s -o /dev/null -D - "$BASE/api/v1/servers" | grep -i '^www-authenticate:' || true)
-[ -n "$WWW_AUTH" ] || fail "expected WWW-Authenticate header, got none"
-ok "GET /api/v1/servers → 401 with WWW-Authenticate header"
+[ -z "$WWW_AUTH" ] || fail "expected NO WWW-Authenticate header (cookie-session auth), got: $WWW_AUTH"
+ok "GET /api/v1/servers → 401 without WWW-Authenticate (no browser prompt)"
 
 # With wrong password → 401.
 HTTP=$(curl -s -u "x:wrong" -o /dev/null -w "%{http_code}" "$BASE/api/v1/servers")
@@ -609,10 +612,20 @@ HTTP=$(curl -s -u "x:smoke-pw-$$" -o /dev/null -w "%{http_code}" "$BASE/api/v1/s
 [ "$HTTP" = "200" ] || fail "expected 200 for correct password, got $HTTP"
 ok "GET /api/v1/servers (correct password) → 200"
 
-# SPA must also be auth-gated.
+# The SPA shell is served WITHOUT auth on purpose — it self-gates by calling
+# /api/v1/whoami and routing to the in-view login. Only /api/v1/* is gated, so
+# wrapping the SPA in auth would trigger the browser's native prompt before the
+# SPA even loads (defeating the in-view-login UX).
 HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/")
-[ "$HTTP" = "401" ] || fail "expected SPA root=401 unauth'd, got $HTTP"
-ok "GET / (SPA) → 401 without auth"
+[ "$HTTP" = "200" ] || fail "expected SPA root=200 (served unauth'd, self-gates), got $HTTP"
+ok "GET / (SPA shell) → 200 (served unauth'd; gates via /whoami)"
+
+# /api/v1/whoami is the gate signal the SPA reads: 401 unauth'd, 200 with auth.
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/v1/whoami")
+[ "$HTTP" = "401" ] || fail "expected /api/v1/whoami=401 unauth'd, got $HTTP"
+HTTP=$(curl -s -u "x:smoke-pw-$$" -o /dev/null -w "%{http_code}" "$BASE/api/v1/whoami")
+[ "$HTTP" = "200" ] || fail "expected /api/v1/whoami=200 with auth, got $HTTP"
+ok "GET /api/v1/whoami → 401 unauth'd, 200 with auth (SPA gate signal)"
 
 kill -TERM "$P7_AUTH_PID"
 for _ in $(seq 1 110); do

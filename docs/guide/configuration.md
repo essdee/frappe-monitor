@@ -24,8 +24,16 @@ server:
 
   # Per-request HTTP timeouts. The dashboard's longest call is the
   # /api/v1/metrics/query proxy; tune against your VM's response time.
+  # write_timeout_seconds MUST be >= ssh.command_timeout_seconds (validated
+  # at startup) so a slow SSH-backed response (test-connection / deploy /
+  # refresh) isn't severed mid-flight; those routes also extend their own
+  # write deadline at runtime.
   read_timeout_seconds: 15
-  write_timeout_seconds: 15
+  write_timeout_seconds: 60
+
+  # Request-body size cap (bytes). Applies to every JSON endpoint including
+  # the pre-auth /login. Default 1 MiB.
+  max_body_bytes: 1048576
 
 database:
   # SQLite path. Production install rewrites this to /var/lib/frappe-monitor/.
@@ -49,9 +57,16 @@ ssh:
   # next deploy-collector cycle.
   command_timeout_seconds: 30
 
-  # Pool: max simultaneous SSH connections per remote host. Two is
-  # enough for parallel metrics + log pulls within a single cycle.
-  max_connections_per_host: 2
+  # Host-key handling: trust-on-first-use (TOFU) by default. A host's key is
+  # pinned to known_hosts on first connect and accepted (so a fresh install and
+  # an upgrade both onboard hosts automatically — no manual ssh-keyscan); a
+  # later CHANGED key is rejected as a possible man-in-the-middle. Empty
+  # known_hosts_path resolves to ~/.ssh/known_hosts of the service user, created
+  # automatically if absent.
+  known_hosts_path: ""
+  # Set true ONLY for dev — it disables verification entirely (incl. the
+  # changed-key check) and makes every connection MITM-able. Logged at startup.
+  insecure_skip_host_key_check: false
 
 log:
   # Minimum level emitted. "info" in prod; "debug" temporarily for
@@ -268,12 +283,35 @@ ExecStart=/usr/local/bin/frappe-monitor --config /etc/frappe-monitor/monitor.sta
 
 (The empty `ExecStart=` clears the unit's default before the new one kicks in.)
 
+## Control panel + DB monitor
+
+```yaml
+# Allowlisted bench/service commands run over SSH (no free-form commands).
+# These timeouts are SEPARATE from ssh.command_timeout_seconds: a control
+# action runs under its own ceiling, so a long `bench update`/`migrate` is
+# not killed at the 30s command timeout.
+control:
+  action_timeout_seconds: 300          # normal action ceiling (5 min)
+  danger_action_timeout_seconds: 1800  # Dangerous actions e.g. bench update (30 min)
+  read_timeout_seconds: 20             # synchronous reads (site-config fetch)
+  max_output_bytes: 65536              # stored command-output cap
+  max_concurrent: 4                    # in-flight control runs
+
+# DB replication monitor (idle until targets are added in the dashboard).
+dbmonitor:
+  interval_seconds: 60          # sweep cadence across all targets
+  max_parallel: 4               # concurrent target checks per sweep
+  command_timeout_seconds: 15   # per status query
+```
+
 ## Tuning cheatsheet
 
 | Symptom | Knob to try |
 |---|---|
 | Dashboard charts feel stale | `scheduler.default_interval_seconds: 300` (5 min) |
 | Pulls pile up at top of the hour | `scheduler.max_parallel: 20` (or higher) |
-| SSH timeouts on a slow bench host | `ssh.command_timeout_seconds: 60` |
+| SSH timeouts on a slow bench host | `ssh.command_timeout_seconds: 60` (also bump `server.write_timeout_seconds` to match) |
+| `bench update`/`migrate` from the control panel needs longer | `control.danger_action_timeout_seconds: 3600` |
+| Adding a server fails with a host-key "CHANGED" error | the host's key changed (rebuilt host or MITM); if legitimate, remove its line from `known_hosts` and reconnect (or, dev only, `ssh.insecure_skip_host_key_check: true`) |
 | VM eating disk too fast | edit `--retentionPeriod=30d` in `deploy/docker-compose.prod.yml`, then restart the stack unit |
 | Need verbose collector output | `log.level: "debug"` (revert when done — high volume) |

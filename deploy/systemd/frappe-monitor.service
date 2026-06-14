@@ -2,8 +2,11 @@
 Description=Frappe Monitor (multi-server, multi-bench, multi-site monitoring)
 Documentation=https://github.com/sakthikumarp/frappe_monitor
 After=network-online.target frappe-monitor-stack.service
-Wants=network-online.target
-Requires=frappe-monitor-stack.service
+# Wants (not Requires): the local VM+Loki stack is started when it's enabled
+# (default install), but a --no-stack / remote-tier deploy that leaves it
+# disabled won't have it force-pulled up, and a stack failure won't take the
+# monitor down with it.
+Wants=network-online.target frappe-monitor-stack.service
 
 [Service]
 Type=simple
@@ -12,6 +15,11 @@ Group=frappe-monitor
 ExecStart=/usr/local/bin/frappe-monitor --config /etc/frappe-monitor/monitor.yaml
 Restart=on-failure
 RestartSec=5s
+
+# Pin HOME so SSH host-key (TOFU known_hosts) + ~ expansion resolve under the
+# state dir even if the account database / env drifts. ssh.known_hosts_path in
+# the config is set explicitly too; this is belt-and-suspenders.
+Environment=HOME=/var/lib/frappe-monitor
 
 # Graceful shutdown contract: scheduler stops accepting ticks, in-flight
 # pulls observe ctx.Done() and unwind, HTTP server drains. Combined

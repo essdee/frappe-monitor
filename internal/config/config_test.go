@@ -21,7 +21,6 @@ database:
 ssh:
   dial_timeout_seconds: 5
   command_timeout_seconds: 15
-  max_connections_per_host: 1
 log:
   level: "debug"
   format: "text"
@@ -96,11 +95,6 @@ func TestLoad_RejectsNonPositiveNumbers(t *testing.T) {
 			name:      "negative command timeout",
 			yaml:      `ssh: {command_timeout_seconds: -1}`,
 			errSubstr: "ssh.command_timeout_seconds",
-		},
-		{
-			name:      "zero max connections",
-			yaml:      `ssh: {max_connections_per_host: 0}`,
-			errSubstr: "ssh.max_connections_per_host",
 		},
 		{
 			name:      "zero read timeout",
@@ -187,4 +181,48 @@ func TestLoad_NewSectionsHonorEnvOverrides(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "http://victoriametrics:8428", cfg.Metrics.VMURL)
 	require.Equal(t, 5, cfg.Scheduler.DefaultIntervalSeconds)
+}
+
+func TestReconcile_ClampsLowWriteTimeout(t *testing.T) {
+	// Upgrade scenario: an on-disk config from an older release (write=15)
+	// loads WITHOUT error (no hard-fail), and Reconcile clamps it up + warns —
+	// rather than the monitor refusing to boot and crash-looping.
+	cfg := &Config{}
+	cfg.Server.WriteTimeoutSeconds = 15
+	cfg.SSH.CommandTimeoutSeconds = 30
+	warns := cfg.Reconcile()
+	require.Equal(t, 30, cfg.Server.WriteTimeoutSeconds, "write_timeout should be clamped up to command_timeout")
+	require.Len(t, warns, 1, "clamp should produce one warning")
+	require.Contains(t, warns[0], "write_timeout_seconds")
+}
+
+func TestReconcile_NoOpWhenConsistent(t *testing.T) {
+	cfg := &Config{}
+	cfg.Server.WriteTimeoutSeconds = 60
+	cfg.SSH.CommandTimeoutSeconds = 30
+	require.Empty(t, cfg.Reconcile())
+	require.Equal(t, 60, cfg.Server.WriteTimeoutSeconds)
+}
+
+func TestReconcile_ClampsLowMaxLineBytes(t *testing.T) {
+	cfg := &Config{}
+	cfg.Streaming.Enabled = true
+	cfg.Streaming.MaxLineBytes = 100 // below the 4096 floor
+	warns := cfg.Reconcile()
+	require.Equal(t, 1<<20, cfg.Streaming.MaxLineBytes)
+	require.Len(t, warns, 1)
+}
+
+func TestLoad_LowWriteTimeoutNoLongerFailsToBoot(t *testing.T) {
+	// The cross-field invariant is a Reconcile clamp now, not a validate() error.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "monitor.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+server: {write_timeout_seconds: 15}
+ssh: {command_timeout_seconds: 30}
+metrics: {vm_url: "http://127.0.0.1:8428"}
+logs: {loki_url: "http://127.0.0.1:3100"}
+`), 0o644))
+	_, err := Load(path)
+	require.NoError(t, err, "a write<command config must load (clamped at runtime), not fail")
 }

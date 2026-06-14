@@ -7,15 +7,16 @@
 # DNS prerequisite: monitor.example.com → A → this host's public IP.
 # Firewall: allow 80 + 443 inbound on this host (LE challenge needs 80).
 #
-# This config does not add auth — Phase 7 ships built-in auth. Until
-# then, restrict by source IP (basicauth or remote_ip) if exposed.
+# The monitor has its own dashboard auth (cookie-session login + HTTP basic for
+# scripts), so this proxy just needs to add TLS. Optionally also restrict by
+# source IP (remote_ip) for defense in depth if exposed to the internet.
 
 monitor.example.com {
 	encode zstd gzip
 	# Default upstream is the monitor binary on localhost:8080.
 	reverse_proxy 127.0.0.1:8080
 
-	# Optional: limit to your office / VPN ranges until Phase 7 auth.
+	# Optional: also limit to your office / VPN ranges for defense in depth.
 	# @internal {
 	#     remote_ip 10.0.0.0/8 192.168.0.0/16
 	# }

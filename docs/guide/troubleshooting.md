@@ -100,6 +100,29 @@ If that works but `test-connection` fails, double-check the registered `ssh_user
 curl -fsS http://127.0.0.1:8080/api/v1/servers/<id>
 ```
 
+## "test-connection / deploy fails: host key CHANGED"
+
+Host-key handling is **trust-on-first-use** by default: the first time the
+monitor connects to a host it pins that host's key to `known_hosts` and accepts
+it (no manual `ssh-keyscan` — fresh installs and upgrades onboard hosts
+automatically). After that, a host presenting a **different** key is rejected
+with a "host key … CHANGED" error — either a man-in-the-middle, or the host was
+legitimately rebuilt/re-keyed.
+
+If the change is legitimate, drop the stale pin and let it re-pin:
+
+```bash
+# as the service user (e.g. frappe-monitor); path is ssh.known_hosts_path or ~/.ssh/known_hosts
+ssh-keygen -R <host> -f /var/lib/frappe-monitor/.ssh/known_hosts
+```
+
+For dev only, you can disable host-key checking entirely (incl. the changed-key
+detection) with `ssh.insecure_skip_host_key_check: true` (logged at startup;
+never use it in production — it makes the connection MITM-able).
+
+Passphrase-protected keys are not supported — give the monitor an unencrypted
+key dedicated to it. The error message says so explicitly.
+
 ## "VM unreachable" / "Loki unreachable"
 
 Are the containers up?
@@ -179,7 +202,9 @@ sites. Each site probe is up to 2s, and SSH's command timeout is 30s —
 benches with 30+ sites legitimately exceed the budget. Fixes:
 
 - Run the collector more often: lower `scheduler.tick_interval_seconds`.
-- Raise the SSH command timeout: `ssh.command_timeout_seconds: 60`.
+- Raise the SSH command timeout: `ssh.command_timeout_seconds: 60` (also bump
+  `server.write_timeout_seconds` to be >= it — the monitor refuses to start
+  otherwise, so a slow SSH-backed HTTP response can't be severed).
 - Reduce the bench's site count (most user-visible value comes from a
   small number of frequently-checked sites).
 
@@ -299,7 +324,7 @@ Also check the SSH pool isn't leaking connections:
 sudo -u frappe-monitor ss -tnp | wc -l
 ```
 
-A healthy idle state is ≤ 2 × `max_connections_per_host` × `len(servers)`. Far more than that and the pool isn't releasing — file an issue with the log output.
+The pool multiplexes one connection per `host|user|key`, so a healthy idle state is roughly `len(servers)` connections. Far more than that and the pool isn't releasing — file an issue with the log output.
 
 ## Resetting everything
 

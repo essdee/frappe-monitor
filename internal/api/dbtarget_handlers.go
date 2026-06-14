@@ -44,6 +44,13 @@ func (h *dbTargetHandlers) emit(ev realtime.Event) {
 	}
 }
 
+// isWhitespaceOnly reports whether s is non-empty but only whitespace — a value
+// that passes an "is it set?" check yet would run as a blank command on the
+// bench. Empty is allowed (the caller falls back to a default client).
+func isWhitespaceOnly(s string) bool {
+	return s != "" && strings.TrimSpace(s) == ""
+}
+
 type dbTargetDTO struct {
 	ID                  int        `json:"id"`
 	ServerID            int        `json:"server_id"`
@@ -112,6 +119,12 @@ func (h *dbTargetHandlers) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.HeartbeatEnabled && strings.TrimSpace(req.HeartbeatQuery) == "" {
 		writeErr(w, http.StatusBadRequest, "heartbeat_query is required when heartbeat is enabled")
+		return
+	}
+	// A whitespace-only client_command would pass firstNonEmpty() and run as a
+	// blank command on the bench. Reject it (empty is fine — defaults to psql/mysql).
+	if isWhitespaceOnly(req.ClientCommand) {
+		writeErr(w, http.StatusBadRequest, "client_command must not be only whitespace")
 		return
 	}
 	if req.Engine != "" && req.Engine != "mysql" && req.Engine != "postgres" {
@@ -208,6 +221,10 @@ func (h *dbTargetHandlers) patch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "engine must be 'mysql' or 'postgres'")
 		return
 	}
+	if req.ClientCommand != nil && isWhitespaceOnly(*req.ClientCommand) {
+		writeErr(w, http.StatusBadRequest, "client_command must not be only whitespace")
+		return
+	}
 	// Changing the SSH host: re-validate the new server exists (the edge
 	// is a FK; a bad id would otherwise fail opaquely).
 	if req.ServerID != nil {
@@ -222,7 +239,7 @@ func (h *dbTargetHandlers) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.store.UpdateDBTarget(r.Context(), id, storage.UpdateDBTarget{
 		ServerID: req.ServerID, Engine: req.Engine,
-		Name:     req.Name, Enabled: req.Enabled, LagThresholdSeconds: req.LagThresholdSeconds,
+		Name: req.Name, Enabled: req.Enabled, LagThresholdSeconds: req.LagThresholdSeconds,
 		ClientCommand: req.ClientCommand, DefaultsFile: req.DefaultsFile, Socket: req.Socket,
 		HeartbeatEnabled: req.HeartbeatEnabled, HeartbeatQuery: req.HeartbeatQuery,
 	})

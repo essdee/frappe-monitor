@@ -24,12 +24,46 @@ type Config struct {
 	Alerts    AlertsConfig    `koanf:"alerts"`
 	Streaming StreamingConfig `koanf:"streaming"`
 	Realtime  RealtimeConfig  `koanf:"realtime"`
+	Control   ControlConfig   `koanf:"control"`
+	DBMonitor DBMonitorConfig `koanf:"dbmonitor"`
+}
+
+// ControlConfig tunes the Phase-10 control panel (allowlisted bench/service
+// commands + site-config edits over SSH). Action timeouts are the important
+// knob: long bench update/migrate runs need a generous ceiling.
+type ControlConfig struct {
+	// ActionTimeoutSeconds bounds a normal action. Default 300 (5 min).
+	ActionTimeoutSeconds int `koanf:"action_timeout_seconds"`
+	// DangerActionTimeoutSeconds bounds a Dangerous action (bench update).
+	// Default 1800 (30 min).
+	DangerActionTimeoutSeconds int `koanf:"danger_action_timeout_seconds"`
+	// ReadTimeoutSeconds bounds a synchronous read (site-config fetch).
+	// Default 20.
+	ReadTimeoutSeconds int `koanf:"read_timeout_seconds"`
+	// MaxOutputBytes caps stored command output. Default 65536 (64 KiB).
+	MaxOutputBytes int `koanf:"max_output_bytes"`
+	// MaxConcurrent caps in-flight control runs. Default 4.
+	MaxConcurrent int `koanf:"max_concurrent"`
+}
+
+// DBMonitorConfig tunes the Phase-9 DB replication monitor.
+type DBMonitorConfig struct {
+	// IntervalSeconds is the sweep cadence across all targets. Default 60.
+	IntervalSeconds int `koanf:"interval_seconds"`
+	// MaxParallel caps concurrent target checks per sweep. Default 4.
+	MaxParallel int `koanf:"max_parallel"`
+	// CommandTimeoutSeconds bounds a single status query. Default 15.
+	CommandTimeoutSeconds int `koanf:"command_timeout_seconds"`
 }
 
 type ServerConfig struct {
 	ListenAddr          string `koanf:"listen_addr"`
 	ReadTimeoutSeconds  int    `koanf:"read_timeout_seconds"`
 	WriteTimeoutSeconds int    `koanf:"write_timeout_seconds"`
+	// MaxBodyBytes caps the request body size accepted by any JSON handler
+	// (including the pre-auth /login). Protects against pathological/huge
+	// bodies. Default 1 MiB.
+	MaxBodyBytes int64 `koanf:"max_body_bytes"`
 }
 
 // DatabaseConfig selects and configures the persistent store. The production
@@ -149,7 +183,15 @@ func SQLiteDSN(path string) string {
 type SSHConfig struct {
 	DialTimeoutSeconds    int `koanf:"dial_timeout_seconds"`
 	CommandTimeoutSeconds int `koanf:"command_timeout_seconds"`
-	MaxConnectionsPerHost int `koanf:"max_connections_per_host"`
+	// KnownHostsPath is the OpenSSH known_hosts file used to pin/verify remote
+	// host keys. Empty → ~/.ssh/known_hosts of the user the monitor runs as
+	// (created automatically if absent).
+	KnownHostsPath string `koanf:"known_hosts_path"`
+	// InsecureSkipHostKeyCheck disables SSH host-key verification entirely.
+	// Dangerous (MITM-able) — intended only for dev. Default false, which uses
+	// trust-on-first-use: a host's key is pinned on first connect and accepted,
+	// and a later CHANGED key is rejected (no manual ssh-keyscan needed).
+	InsecureSkipHostKeyCheck bool `koanf:"insecure_skip_host_key_check"`
 }
 
 type LogConfig struct {
@@ -227,6 +269,7 @@ type StreamingConfig struct {
 	PushTimeoutSeconds   int                   `koanf:"push_timeout_seconds"`
 	MinBackoffSeconds    int                   `koanf:"min_backoff_seconds"`
 	MaxBackoffSeconds    int                   `koanf:"max_backoff_seconds"`
+	MaxLineBytes         int                   `koanf:"max_line_bytes"`
 }
 
 type StreamingFileConfig struct {
@@ -256,45 +299,56 @@ type RealtimeConfig struct {
 func defaults() *koanf.Koanf {
 	k := koanf.New(".")
 	if err := k.Load(confmap.Provider(map[string]any{
-		"server.listen_addr":                   ":8080",
-		"server.read_timeout_seconds":          15,
-		"server.write_timeout_seconds":         15,
-		"database.driver":                      "sqlite",
-		"database.path":                        "./data/monitor.db",
-		"ssh.dial_timeout_seconds":             10,
-		"ssh.command_timeout_seconds":          30,
-		"ssh.max_connections_per_host":         2,
-		"log.level":                            "info",
-		"log.format":                           "json",
-		"metrics.vm_url":                       "http://127.0.0.1:8428",
-		"metrics.push_timeout_seconds":         5,
-		"metrics.query_timeout_seconds":        15,
-		"logs.loki_url":                        "http://127.0.0.1:3100",
-		"logs.push_timeout_seconds":            5,
-		"logs.query_timeout_seconds":           15,
-		"scheduler.default_interval_seconds":   900, // 15 min — master plan §5 default
-		"scheduler.max_parallel":               10,
-		"scheduler.per_job_timeout_seconds":    30,
-		"auth.password":                        "",
-		"auth.realm":                           "frappe-monitor",
-		"alerts.enabled":                       false,
-		"alerts.evaluation_interval_seconds":   60,
-		"alerts.notify_repeat_seconds":         3600,
-		"alerts.vm_query_timeout_seconds":      10,
-		"alerts.telegram.send_timeout_seconds": 5,
-		"alerts.disable_defaults":              false,
-		"streaming.enabled":                    false,
-		"streaming.script_path":                "",
-		"streaming.flush_interval_seconds":     1,
-		"streaming.max_batch_lines":            500,
-		"streaming.push_timeout_seconds":       10,
-		"streaming.min_backoff_seconds":        1,
-		"streaming.max_backoff_seconds":        60,
-		"realtime.enabled":                     true,
-		"realtime.ping_interval_seconds":       30,
-		"realtime.write_timeout_seconds":       10,
-		"realtime.send_buffer":                 128,
-		"realtime.max_clients":                 512,
+		"server.listen_addr":                    ":8080",
+		"server.read_timeout_seconds":           15,
+		"server.write_timeout_seconds":          60,
+		"server.max_body_bytes":                 1 << 20, // 1 MiB
+		"database.driver":                       "sqlite",
+		"database.path":                         "./data/monitor.db",
+		"ssh.dial_timeout_seconds":              10,
+		"ssh.command_timeout_seconds":           30,
+		"ssh.known_hosts_path":                  "",
+		"ssh.insecure_skip_host_key_check":      false,
+		"log.level":                             "info",
+		"log.format":                            "json",
+		"metrics.vm_url":                        "http://127.0.0.1:8428",
+		"metrics.push_timeout_seconds":          5,
+		"metrics.query_timeout_seconds":         15,
+		"logs.loki_url":                         "http://127.0.0.1:3100",
+		"logs.push_timeout_seconds":             5,
+		"logs.query_timeout_seconds":            15,
+		"scheduler.default_interval_seconds":    900, // 15 min — master plan §5 default
+		"scheduler.max_parallel":                10,
+		"scheduler.per_job_timeout_seconds":     30,
+		"auth.password":                         "",
+		"auth.realm":                            "frappe-monitor",
+		"alerts.enabled":                        false,
+		"alerts.evaluation_interval_seconds":    60,
+		"alerts.notify_repeat_seconds":          3600,
+		"alerts.vm_query_timeout_seconds":       10,
+		"alerts.telegram.send_timeout_seconds":  5,
+		"alerts.disable_defaults":               false,
+		"streaming.enabled":                     false,
+		"streaming.script_path":                 "",
+		"streaming.flush_interval_seconds":      1,
+		"streaming.max_batch_lines":             500,
+		"streaming.push_timeout_seconds":        10,
+		"streaming.min_backoff_seconds":         1,
+		"streaming.max_backoff_seconds":         60,
+		"streaming.max_line_bytes":              1 << 20, // 1 MiB
+		"realtime.enabled":                      true,
+		"realtime.ping_interval_seconds":        30,
+		"realtime.write_timeout_seconds":        10,
+		"realtime.send_buffer":                  128,
+		"realtime.max_clients":                  512,
+		"control.action_timeout_seconds":        300,
+		"control.danger_action_timeout_seconds": 1800,
+		"control.read_timeout_seconds":          20,
+		"control.max_output_bytes":              65536,
+		"control.max_concurrent":                4,
+		"dbmonitor.interval_seconds":            60,
+		"dbmonitor.max_parallel":                4,
+		"dbmonitor.command_timeout_seconds":     15,
 	}, "."), nil); err != nil {
 		panic(fmt.Sprintf("config defaults: %v", err))
 	}
@@ -323,11 +377,28 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// validate enforces invariants on the merged config. It guards against
-// explicit empty overrides (e.g. `path: ""` in YAML) and out-of-range
-// values for fields wired into long-lived runtime components like the
-// SSH pool and HTTP server. Absent keys fall back to defaults() and
-// never reach these checks.
+// Reconcile clamps clampable values to safe equivalents (instead of failing)
+// and returns a human-readable warning for each adjustment, so the caller can
+// log them. This keeps an in-place binary upgrade from bricking the service:
+// a config that predates a bumped default (e.g. write_timeout_seconds: 15 from
+// an older release, below the now-30+ command timeout) is raised and logged
+// rather than rejected. Call it after Load, then log the returned warnings.
+func (c *Config) Reconcile() []string {
+	var warns []string
+	if c.Server.WriteTimeoutSeconds < c.SSH.CommandTimeoutSeconds {
+		warns = append(warns, fmt.Sprintf(
+			"server.write_timeout_seconds (%d) is below ssh.command_timeout_seconds (%d); raising it to %d so a slow SSH-backed response isn't severed",
+			c.Server.WriteTimeoutSeconds, c.SSH.CommandTimeoutSeconds, c.SSH.CommandTimeoutSeconds))
+		c.Server.WriteTimeoutSeconds = c.SSH.CommandTimeoutSeconds
+	}
+	if c.Streaming.Enabled && c.Streaming.MaxLineBytes > 0 && c.Streaming.MaxLineBytes < 4096 {
+		warns = append(warns, fmt.Sprintf(
+			"streaming.max_line_bytes (%d) is below the 4096 floor; raising to 1 MiB", c.Streaming.MaxLineBytes))
+		c.Streaming.MaxLineBytes = 1 << 20
+	}
+	return warns
+}
+
 // validateDatabase checks the database block against the selected driver:
 // sqlite needs a path; the server engines need host/user/name.
 func (c *Config) validateDatabase() error {
@@ -360,6 +431,10 @@ func (c *Config) validateDatabase() error {
 	return nil
 }
 
+// validate enforces invariants on the merged config. It guards against
+// explicit empty overrides (e.g. `path: ""` in YAML) and out-of-range values
+// for fields wired into long-lived runtime components like the SSH pool and
+// HTTP server. Absent keys fall back to defaults() and never reach these checks.
 func (c *Config) validate() error {
 	if err := c.validateDatabase(); err != nil {
 		return err
@@ -385,15 +460,20 @@ func (c *Config) validate() error {
 	if c.Server.WriteTimeoutSeconds < 1 {
 		return fmt.Errorf("server.write_timeout_seconds must be >= 1, got %d", c.Server.WriteTimeoutSeconds)
 	}
+	if c.Server.MaxBodyBytes < 1 {
+		return fmt.Errorf("server.max_body_bytes must be >= 1, got %d", c.Server.MaxBodyBytes)
+	}
 	if c.SSH.DialTimeoutSeconds < 1 {
 		return fmt.Errorf("ssh.dial_timeout_seconds must be >= 1, got %d", c.SSH.DialTimeoutSeconds)
 	}
 	if c.SSH.CommandTimeoutSeconds < 1 {
 		return fmt.Errorf("ssh.command_timeout_seconds must be >= 1, got %d", c.SSH.CommandTimeoutSeconds)
 	}
-	if c.SSH.MaxConnectionsPerHost < 1 {
-		return fmt.Errorf("ssh.max_connections_per_host must be >= 1, got %d", c.SSH.MaxConnectionsPerHost)
-	}
+	// NOTE: the server.write_timeout_seconds >= ssh.command_timeout_seconds
+	// invariant is enforced by Reconcile() as a clamp+warn, NOT a hard error —
+	// an existing deployment whose on-disk config predates the bumped default
+	// must keep booting on upgrade (the SSH routes also extend their own write
+	// deadline at runtime, so a low static value is non-fatal).
 
 	if c.Metrics.VMURL == "" {
 		return fmt.Errorf("metrics.vm_url is required")
@@ -459,6 +539,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("streaming.max_backoff_seconds (%d) must be >= streaming.min_backoff_seconds (%d)",
 				c.Streaming.MaxBackoffSeconds, c.Streaming.MinBackoffSeconds)
 		}
+		// streaming.max_line_bytes is clamped (not hard-failed) by Reconcile():
+		// 0 falls back to the session default, a too-small positive value is
+		// raised to the floor — so a stale override can't block startup.
 	}
 
 	// Realtime: numeric guards (the WS shares the HTTP listener, no port
@@ -476,6 +559,36 @@ func (c *Config) validate() error {
 		if c.Realtime.MaxClients < 0 {
 			return fmt.Errorf("realtime.max_clients must be >= 0 (0 = unlimited), got %d", c.Realtime.MaxClients)
 		}
+	}
+
+	// Control panel (always wired). Action timeouts must be positive and the
+	// danger ceiling must be at least the normal one.
+	if c.Control.ActionTimeoutSeconds < 1 {
+		return fmt.Errorf("control.action_timeout_seconds must be >= 1, got %d", c.Control.ActionTimeoutSeconds)
+	}
+	if c.Control.DangerActionTimeoutSeconds < c.Control.ActionTimeoutSeconds {
+		return fmt.Errorf("control.danger_action_timeout_seconds (%d) must be >= control.action_timeout_seconds (%d)",
+			c.Control.DangerActionTimeoutSeconds, c.Control.ActionTimeoutSeconds)
+	}
+	if c.Control.ReadTimeoutSeconds < 1 {
+		return fmt.Errorf("control.read_timeout_seconds must be >= 1, got %d", c.Control.ReadTimeoutSeconds)
+	}
+	if c.Control.MaxOutputBytes < 1 {
+		return fmt.Errorf("control.max_output_bytes must be >= 1, got %d", c.Control.MaxOutputBytes)
+	}
+	if c.Control.MaxConcurrent < 1 {
+		return fmt.Errorf("control.max_concurrent must be >= 1, got %d", c.Control.MaxConcurrent)
+	}
+
+	// DB replication monitor (always runs; idle with no targets).
+	if c.DBMonitor.IntervalSeconds < 1 {
+		return fmt.Errorf("dbmonitor.interval_seconds must be >= 1, got %d", c.DBMonitor.IntervalSeconds)
+	}
+	if c.DBMonitor.MaxParallel < 1 {
+		return fmt.Errorf("dbmonitor.max_parallel must be >= 1, got %d", c.DBMonitor.MaxParallel)
+	}
+	if c.DBMonitor.CommandTimeoutSeconds < 1 {
+		return fmt.Errorf("dbmonitor.command_timeout_seconds must be >= 1, got %d", c.DBMonitor.CommandTimeoutSeconds)
 	}
 
 	return nil

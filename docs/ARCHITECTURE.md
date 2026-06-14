@@ -154,8 +154,7 @@ Then `k.Unmarshal("", &cfg)` populates the struct and `cfg.validate()` enforces 
 | `server.read_timeout_seconds` / `write_timeout_seconds` | 15 / 15 | |
 | `database.path` | `./data/monitor.db` | dir auto-created 0750 |
 | `ssh.dial_timeout_seconds` | 10 | |
-| `ssh.command_timeout_seconds` | 30 | per-command cap (not applied to streams) |
-| `ssh.max_connections_per_host` | 2 | **validated but not enforced** by the pool (unbounded map) |
+| `ssh.command_timeout_seconds` | 30 | default per-command cap — effective bound is min(ctx, this); control actions opt out via `WithoutCommandCap`; not applied to streams |
 | `log.level` / `log.format` | info / json | |
 | `metrics.vm_url` | `http://127.0.0.1:8428` | required; `/write` for push, `/api/v1/query_range` for queries |
 | `metrics.push_timeout_seconds` / `query_timeout_seconds` | 5 / 15 | |
@@ -498,7 +497,7 @@ A map for the feature work that follows this document:
 - **New dashboard view** → add a route in `web/src/router/index.ts`, a view in `web/src/views/`, and client calls in `web/src/api.ts`; reuse `useTimeRange`/`MetricChart`/`TimelineFilter`.
 - **New notification channel** (Slack/email/etc.) → implement the `Notifier` interface in `internal/alerts` and add it to the `MultiNotifier` fan-out.
 
-Backlog candidates (`docs/guide/architecture.md` + `docs/hardening-backlog.md`): per-server schedule overrides, site-scoped log labels, deploy markers, multi-tenant scoping, p95/quantile on site detail, SSH password auth, and enforcing `ssh.max_connections_per_host` in the pool.
+Backlog candidates (`docs/guide/architecture.md` + `docs/hardening-backlog.md`): per-server schedule overrides, site-scoped log labels, deploy markers, multi-tenant scoping, p95/quantile on site detail, SSH password auth, and a per-host SSH session limiter (the pool currently multiplexes one connection per host).
 
 ---
 

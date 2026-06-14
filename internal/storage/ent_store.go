@@ -380,6 +380,12 @@ func (s *EntStore) UpsertSystemSnapshot(ctx context.Context, in SystemSnapshot) 
 		SetLastError(in.LastError)
 	if len(in.Payload) > 0 {
 		upd = upd.SetPayload(in.Payload)
+	} else {
+		// Failure path (LastError only, payload left intact): pin captured_at
+		// to the last good snapshot's time so the dashboard's "captured at"
+		// reflects the data's real age. captured_at has UpdateDefault(now),
+		// which would otherwise stamp stale payload with a fresh timestamp.
+		upd = upd.SetCapturedAt(existing.CapturedAt)
 	}
 	if _, err = upd.Save(ctx); err != nil {
 		return err

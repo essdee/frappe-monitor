@@ -67,21 +67,47 @@ type Service struct {
 	sem            chan struct{} // caps concurrent in-flight runs
 }
 
-// New builds a control Service with production-safe defaults.
-func New(store storage.Store, exec sshpkg.Executor, hub realtime.Broadcaster, logger *slog.Logger) *Service {
+// Config tunes the control Service. Any zero field falls back to the
+// production-safe default, so Config{} keeps the historical behavior.
+type Config struct {
+	ActionTimeout  time.Duration // normal action ceiling (default 5m)
+	DangerTimeout  time.Duration // Dangerous action ceiling (default 30m)
+	ReadTimeout    time.Duration // synchronous read ceiling (default 20s)
+	MaxOutputBytes int           // stored output cap (default 64 KiB)
+	MaxConcurrent  int           // in-flight run cap (default 4)
+}
+
+// New builds a control Service. Zero fields in cfg take production-safe
+// defaults.
+func New(store storage.Store, exec sshpkg.Executor, hub realtime.Broadcaster, logger *slog.Logger, cfg Config) *Service {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if cfg.ActionTimeout <= 0 {
+		cfg.ActionTimeout = 5 * time.Minute
+	}
+	if cfg.DangerTimeout <= 0 {
+		cfg.DangerTimeout = 30 * time.Minute
+	}
+	if cfg.ReadTimeout <= 0 {
+		cfg.ReadTimeout = 20 * time.Second
+	}
+	if cfg.MaxOutputBytes <= 0 {
+		cfg.MaxOutputBytes = 64 * 1024
+	}
+	if cfg.MaxConcurrent <= 0 {
+		cfg.MaxConcurrent = 4
 	}
 	return &Service{
 		store:          store,
 		exec:           exec,
 		hub:            hub,
 		logger:         logger,
-		timeout:        5 * time.Minute,
-		dangerTimeout:  30 * time.Minute,
-		readTimeout:    20 * time.Second,
-		maxOutputBytes: 64 * 1024,
-		sem:            make(chan struct{}, 4),
+		timeout:        cfg.ActionTimeout,
+		dangerTimeout:  cfg.DangerTimeout,
+		readTimeout:    cfg.ReadTimeout,
+		maxOutputBytes: cfg.MaxOutputBytes,
+		sem:            make(chan struct{}, cfg.MaxConcurrent),
 	}
 }
 
@@ -206,19 +232,30 @@ func (s *Service) WriteSiteConfig(ctx context.Context, req WriteConfigRequest) (
 	s.broadcast(realtime.TypeControlStarted, act, srv.Name)
 
 	path := req.BenchPath + "/sites/" + req.Site + "/site_config.json"
+	// Temp file lives in the same directory as the target so the final mv is
+	// an atomic rename (not a cross-device copy). The action ID keeps the temp
+	// name unique across concurrent edits to the same site.
+	tmpPath := fmt.Sprintf("%s.tmp.%d", path, act.ID)
 	content, restart, bench, site := req.Content, req.Restart, req.BenchPath, req.Site
 	writeCopy := *act // goroutine-owned copy; see Run for the rationale
 	go s.execAudited(&writeCopy, srv, restart, func(ctx context.Context, tgt sshpkg.Target) (string, error) {
 		qp := shellQuote(path)
-		old, _ := s.exec.Run(ctx, tgt, "cat "+qp+" 2>/dev/null")
-		writeCmd := "cp -f " + qp + " " + qp + ".bak 2>/dev/null; cat > " + qp
+		tmp := shellQuote(tmpPath)
+		bak := shellQuote(path + ".bak")
+		// Atomic, fail-closed write: back up the live config (only if it
+		// exists, so a real cp failure like a permission error still aborts
+		// the &&-chain instead of being swallowed), stream the new content to
+		// a temp file, then atomically rename it over the target. If any step
+		// fails the live site_config.json is never touched, so a dropped SSH
+		// session mid-write can no longer truncate it. The previous config is
+		// deliberately NOT captured into the audit log — it holds db_password,
+		// encryption_key and API secrets; recovery is via the on-host .bak.
+		writeCmd := "if [ -f " + qp + " ]; then cp -f " + qp + " " + bak + "; fi && cat > " + tmp + " && mv -f " + tmp + " " + qp
 		if _, werr := s.exec.RunWithInput(ctx, tgt, writeCmd, content); werr != nil {
-			return "previous config:\n" + old, werr
+			return "", werr
 		}
 		var b strings.Builder
-		b.WriteString("previous config:\n")
-		b.WriteString(old)
-		b.WriteString("\n--- wrote new site_config.json (backup: site_config.json.bak) ---\n")
+		b.WriteString("wrote new site_config.json (backup: site_config.json.bak)\n")
 		if restart {
 			r, rerr := s.exec.Run(ctx, tgt,
 				"cd "+shellQuote(bench)+" && bench --site "+shellQuote(site)+" clear-cache && bench restart")
@@ -250,7 +287,11 @@ func (s *Service) execAudited(act *storage.ControlAction, srv *storage.Server, d
 	if danger {
 		timeout = s.dangerTimeout
 	}
-	cctx, cancel := context.WithTimeout(bg, timeout)
+	// Opt out of the SSH pool's per-command CommandTimeout: a bench update /
+	// migrate legitimately runs for minutes, so this action's own 5m/30m budget
+	// (cctx) is the only bound — otherwise the pool would SIGKILL it at the
+	// 30s command timeout mid-flight.
+	cctx, cancel := context.WithTimeout(sshpkg.WithoutCommandCap(bg), timeout)
 	defer cancel()
 
 	tgt := sshpkg.Target{Host: srv.Hostname, Port: srv.SSHPort, User: srv.SSHUser, KeyPath: srv.SSHKeyPath}

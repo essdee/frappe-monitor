@@ -215,7 +215,15 @@ emit_bench() {
   local sup_running=0 sup_total=0
   if command -v supervisorctl >/dev/null 2>&1; then
     local sup_lines
-    sup_lines=$(supervisorctl status 2>/dev/null | grep -E "^${name}[-:]" || true)
+    # The supervisor socket is usually owned by the bench owner/root, not the
+    # SSH user, so try non-interactive sudo first (matches the control panel's
+    # `sudo supervisorctl`); fall back to a plain call when the SSH user can
+    # already read it or sudo isn't permitted. Without this, a standard
+    # SSH-user != bench-owner box silently reports 0/0 running processes.
+    sup_lines=$(sudo -n supervisorctl status 2>/dev/null | grep -E "^${name}[-:]" || true)
+    if [ -z "$sup_lines" ]; then
+      sup_lines=$(supervisorctl status 2>/dev/null | grep -E "^${name}[-:]" || true)
+    fi
     if [ -n "$sup_lines" ]; then
       sup_total=$(printf '%s\n' "$sup_lines" | wc -l)
       sup_running=$(printf '%s\n' "$sup_lines" | grep -c RUNNING || true)

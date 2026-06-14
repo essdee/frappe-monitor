@@ -122,7 +122,7 @@ func TestService_RunRecordsAuditAndExecutesSafeCommand(t *testing.T) {
 
 	ex := &fakeExec{out: "migrated ok"}
 	hub := &fakeHub{}
-	svc := New(store, ex, hub, nil)
+	svc := New(store, ex, hub, nil, Config{})
 
 	act, err := svc.Run(ctx, RunRequest{
 		ServerID: srv.ID, ActionKey: "bench.migrate",
@@ -149,7 +149,7 @@ func TestService_RunFailurePropagatesToAudit(t *testing.T) {
 	store := newStore(t, "ctlfail")
 	srv := seedServer(t, store)
 
-	svc := New(store, &fakeExec{err: context.DeadlineExceeded}, &fakeHub{}, nil)
+	svc := New(store, &fakeExec{err: context.DeadlineExceeded}, &fakeHub{}, nil, Config{})
 	act, err := svc.Run(ctx, RunRequest{ServerID: srv.ID, ActionKey: "supervisor.status"})
 	require.NoError(t, err)
 
@@ -162,7 +162,7 @@ func TestService_RunRejectsUnknownInjectionAndMissingServer(t *testing.T) {
 	ctx := context.Background()
 	store := newStore(t, "ctlrej")
 	srv := seedServer(t, store)
-	svc := New(store, &fakeExec{}, &fakeHub{}, nil)
+	svc := New(store, &fakeExec{}, &fakeHub{}, nil, Config{})
 
 	_, err := svc.Run(ctx, RunRequest{ServerID: srv.ID, ActionKey: "totally.bogus"})
 	require.ErrorIs(t, err, ErrUnknownAction)
@@ -185,7 +185,7 @@ func TestService_RunRejectsUnregisteredBench(t *testing.T) {
 		BenchPaths: []string{"/home/frappe/frappe-bench"},
 	})
 	require.NoError(t, err)
-	svc := New(store, &fakeExec{out: "ok"}, &fakeHub{}, nil)
+	svc := New(store, &fakeExec{out: "ok"}, &fakeHub{}, nil, Config{})
 
 	// A validation-clean path that is NOT one of the server's registered
 	// bench paths must be refused (defense-in-depth containment).
@@ -207,7 +207,7 @@ func TestService_WriteSiteConfigValidatesAndAudits(t *testing.T) {
 	ctx := context.Background()
 	store := newStore(t, "ctlcfg")
 	srv := seedServer(t, store)
-	svc := New(store, &fakeExec{out: "{}"}, &fakeHub{}, nil)
+	svc := New(store, &fakeExec{out: "{}"}, &fakeHub{}, nil, Config{})
 
 	_, err := svc.WriteSiteConfig(ctx, WriteConfigRequest{
 		ServerID: srv.ID, BenchPath: "/home/frappe/frappe-bench", Site: "s.local", Content: "{not json",

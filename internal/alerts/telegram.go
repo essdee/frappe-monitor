@@ -72,6 +72,58 @@ func NewTelegramClient(botToken, chatID string, timeout time.Duration) *Telegram
 	}
 }
 
+// redact masks the bot token in an arbitrary string so it never reaches a
+// log line. The token appears in *url.Error messages (which embed the full
+// /bot<token>/ request path) and could appear in other transport errors.
+func (c *TelegramClient) redact(s string) string {
+	if c.BotToken == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, c.BotToken, "***")
+}
+
+// maxTelegramText is the Telegram Bot API per-message text ceiling (4096
+// chars). A longer message is rejected with HTTP 400 every evaluation
+// cycle — the alert never marks notified, so it re-sends forever. Truncate
+// defensively on a rune boundary so an over-long rendered card still delivers.
+const maxTelegramText = 4096
+
+// truncateRunes caps s at n runes on a rune boundary, appending an ellipsis
+// when it cuts. n <= 0 yields "". Operating on a rune boundary keeps the result
+// valid UTF-8; callers that need valid HTML must truncate the PLAIN text before
+// escaping/wrapping (see formatMessage), never the rendered HTML.
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	const ell = "…"
+	if n <= len([]rune(ell)) {
+		return string(r[:n])
+	}
+	return string(r[:n-len([]rune(ell))]) + ell
+}
+
+// telegramHTTPError is a non-2xx response from the Bot API, typed so the caller
+// can distinguish a permanent client error (4xx — malformed message, retrying
+// won't help) from a transient 5xx.
+type telegramHTTPError struct {
+	status int
+	body   string
+}
+
+func (e *telegramHTTPError) Error() string {
+	return fmt.Sprintf("telegram: HTTP %d: %s", e.status, e.body)
+}
+
+func isClientError(err error) bool {
+	var he *telegramHTTPError
+	return errors.As(err, &he) && he.status >= 400 && he.status < 500
+}
+
 // telegramSendReq is the JSON body for sendMessage.
 type telegramSendReq struct {
 	ChatID             string `json:"chat_id"`
@@ -96,10 +148,29 @@ func (c *TelegramClient) Notify(ctx context.Context, n Notification) error {
 	if c.BotToken == "" || c.ChatID == "" {
 		return fmt.Errorf("telegram: bot token or chat id missing")
 	}
+	text := formatMessage(n)
+	// If escaping expanded the (body-budgeted) card past the limit — e.g. a body
+	// full of <, > or & — the HTML form can't be sent safely; send plain text.
+	if len([]rune(text)) > maxTelegramText {
+		return c.send(ctx, plainMessage(n), "")
+	}
+	err := c.send(ctx, text, "HTML")
+	// A 4xx (e.g. an "Unclosed tag"/"can't parse entities" 400) means the HTML
+	// is malformed — retrying it would re-fail every cycle forever. Fall back to
+	// plain text ONCE so a formatting bug can never become an infinite re-send
+	// loop. Transient (network/5xx) errors propagate so the caller can retry.
+	if isClientError(err) {
+		return c.send(ctx, plainMessage(n), "")
+	}
+	return err
+}
+
+// send POSTs one message to the Bot API. parseMode "" sends plain text.
+func (c *TelegramClient) send(ctx context.Context, text, parseMode string) error {
 	body, _ := json.Marshal(telegramSendReq{
 		ChatID:             c.ChatID,
-		Text:               formatMessage(n),
-		ParseMode:          "HTML",
+		Text:               text,
+		ParseMode:          parseMode,
 		DisableLinkPreview: true,
 	})
 	api := strings.TrimRight(c.APIBase, "/")
@@ -111,15 +182,18 @@ func (c *TelegramClient) Notify(ctx context.Context, n Notification) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram: send: %w", err)
+		// http.Client.Do returns a *url.Error whose message embeds the full
+		// request URL — which contains /bot<token>/. Stringify and redact rather
+		// than %w-wrapping so the bot token never reaches the evaluator logs.
+		return fmt.Errorf("telegram: send: %s", c.redact(err.Error()))
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("telegram: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return &telegramHTTPError{status: resp.StatusCode, body: strings.TrimSpace(string(b))}
 	}
 	var out telegramSendResp
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -153,22 +227,56 @@ func formatMessage(n Notification) string {
 	}
 	footer := fmt.Sprintf("%s %s", verb, when.Format("15:04 MST"))
 
+	rule := truncateRunes(strings.TrimSpace(n.RuleName), 256) // operator input — cap it
 	body := strings.TrimSpace(n.Body)
 	if body == "" {
 		// Defensive: a rule whose Message renders empty still produces
 		// a useful card instead of a blank one.
-		body = fmt.Sprintf("%s triggered.", n.RuleName)
+		body = fmt.Sprintf("%s triggered.", rule)
 	}
+	crumb := buildBreadcrumb(n.Labels)
+
+	// Budget the PLAIN body so the final rendered card stays within Telegram's
+	// 4096-char limit with every tag balanced. Truncating the plain text here
+	// (then escaping + wrapping) guarantees the <b>…</b>/<code>…</code> always
+	// close — unlike slicing the rendered HTML, which can strand an open tag and
+	// get the card permanently rejected (400 → re-send-forever). For ordinary
+	// ASCII bodies escaping is ~1:1; a body that escapes much larger trips the
+	// length re-check in Notify and is sent as plain text instead.
+	// 64 generously covers the fixed tag/separator chars (<b></b><i></i><code>
+	// </code>, the " — " divider, newlines) plus the truncation ellipsis. The
+	// rendered card is re-checked against the hard limit in Notify regardless.
+	overhead := len([]rune(icon)) + len([]rune(head)) + len([]rune(escapeHTML(rule))) +
+		len([]rune(escapeHTML(footer))) + len([]rune(crumb)) + 64
+	body = truncateRunes(body, maxTelegramText-overhead)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s <b>%s</b> — <i>%s</i>\n\n",
-		icon, head, escapeHTML(n.RuleName))
+	fmt.Fprintf(&b, "%s <b>%s</b> — <i>%s</i>\n\n", icon, head, escapeHTML(rule))
 	fmt.Fprintf(&b, "<b>%s</b>", escapeHTML(body))
-	if crumb := buildBreadcrumb(n.Labels); crumb != "" {
+	if crumb != "" {
 		fmt.Fprintf(&b, "\n\n%s", crumb)
 	}
 	fmt.Fprintf(&b, "\n<code>%s</code>", escapeHTML(footer))
 	return b.String()
+}
+
+// plainMessage renders the notification as tag-free text, truncated safely. It
+// is the fallback when the HTML card can't be sent (over-long after escaping, or
+// rejected by the API) — plain text has no tags to strand, so it always
+// delivers, breaking any re-send loop a formatting issue might otherwise cause.
+func plainMessage(n Notification) string {
+	_, head, verb := severityVisuals(n)
+	when := n.Time
+	if when.IsZero() {
+		when = time.Now()
+	}
+	rule := truncateRunes(strings.TrimSpace(n.RuleName), 256)
+	body := strings.TrimSpace(n.Body)
+	if body == "" {
+		body = rule + " triggered."
+	}
+	msg := fmt.Sprintf("%s — %s\n\n%s\n%s %s", head, rule, body, verb, when.Format("15:04 MST"))
+	return truncateRunes(msg, maxTelegramText)
 }
 
 // severityVisuals picks the leading icon, the bolded headline, and the

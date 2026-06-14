@@ -39,11 +39,28 @@ type Service struct {
 	once sync.Once
 }
 
+// Config tunes the dbmonitor Service. Any zero field falls back to the default,
+// so Config{} preserves the historical behavior.
+type Config struct {
+	Interval    time.Duration // sweep cadence (default 60s)
+	MaxParallel int           // concurrent checks per sweep (default 4)
+	CmdTimeout  time.Duration // per status query (default 15s)
+}
+
 // New builds a dbmonitor Service. hub may be nil (no live push); vm may be
-// nil (no metrics). Sensible defaults are used for cadence/timeouts.
-func New(store storage.Store, exec sshpkg.Executor, vm MetricsPusher, hub realtime.Broadcaster, logger *slog.Logger) *Service {
+// nil (no metrics). Zero fields in cfg take sensible defaults.
+func New(store storage.Store, exec sshpkg.Executor, vm MetricsPusher, hub realtime.Broadcaster, logger *slog.Logger, cfg Config) *Service {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if cfg.Interval <= 0 {
+		cfg.Interval = 60 * time.Second
+	}
+	if cfg.MaxParallel <= 0 {
+		cfg.MaxParallel = 4
+	}
+	if cfg.CmdTimeout <= 0 {
+		cfg.CmdTimeout = 15 * time.Second
 	}
 	return &Service{
 		store:       store,
@@ -51,9 +68,9 @@ func New(store storage.Store, exec sshpkg.Executor, vm MetricsPusher, hub realti
 		vm:          vm,
 		hub:         hub,
 		logger:      logger,
-		interval:    60 * time.Second,
-		maxParallel: 4,
-		cmdTimeout:  15 * time.Second,
+		interval:    cfg.Interval,
+		maxParallel: cfg.MaxParallel,
+		cmdTimeout:  cfg.CmdTimeout,
 		stop:        make(chan struct{}),
 	}
 }

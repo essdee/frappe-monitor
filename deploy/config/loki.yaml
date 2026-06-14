@@ -1,0 +1,53 @@
+# Loki config for frappe-monitor (image: grafana/loki:3.4.x).
+#
+# The image's bundled local-config.yaml has NO retention, so with the streamer
+# enabled the log volume grows until it fills the disk. This config enables the
+# compactor with a 90-day retention period (matching VictoriaMetrics'
+# --retentionPeriod=90d) so old log chunks are deleted on a schedule.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 90d
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+
+# The compactor is what actually enforces retention (deletes expired chunks).
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+  compaction_interval: 10m
+  retention_delete_delay: 2h
+
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules

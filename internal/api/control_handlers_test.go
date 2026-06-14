@@ -64,7 +64,7 @@ func TestControl_RunWithoutRunnerReturns503(t *testing.T) {
 func TestControl_RunUnknownActionRejected(t *testing.T) {
 	store := openMemStore(t)
 	id := seedControlServer(t, store)
-	ts := newControlAPIServer(t, store, control.New(store, sshpkg.NewFakeExecutor(), nil, nil))
+	ts := newControlAPIServer(t, store, control.New(store, sshpkg.NewFakeExecutor(), nil, nil, control.Config{}))
 
 	resp, err := http.Post(ts.URL+"/api/v1/control/run", "application/json",
 		bytes.NewBufferString(`{"server_id":`+strconv.Itoa(id)+`,"action":"bogus.cmd"}`))
@@ -76,7 +76,7 @@ func TestControl_RunUnknownActionRejected(t *testing.T) {
 func TestControl_RunAcceptedAndRecorded(t *testing.T) {
 	store := openMemStore(t)
 	id := seedControlServer(t, store)
-	ts := newControlAPIServer(t, store, control.New(store, sshpkg.NewFakeExecutor(), nil, nil))
+	ts := newControlAPIServer(t, store, control.New(store, sshpkg.NewFakeExecutor(), nil, nil, control.Config{}))
 
 	resp, err := http.Post(ts.URL+"/api/v1/control/run", "application/json",
 		bytes.NewBufferString(`{"server_id":`+strconv.Itoa(id)+`,"action":"supervisor.status"}`))

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"strconv"
 	"time"
 )
 
@@ -36,7 +38,9 @@ func (t Target) addr() string {
 	if p == 0 {
 		p = 22
 	}
-	return fmt.Sprintf("%s:%d", t.Host, p)
+	// net.JoinHostPort brackets IPv6 literals ("::1" → "[::1]:22"); a plain
+	// "%s:%d" would produce the unparseable "::1:22".
+	return net.JoinHostPort(t.Host, strconv.Itoa(p))
 }
 
 // Executor runs a command on a remote host and returns its combined stdout/stderr.

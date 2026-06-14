@@ -28,6 +28,17 @@ type Deps struct {
 	MetricsQueryTimeout time.Duration
 	LogsQueryTimeout    time.Duration
 
+	// SSHResponseDeadline bounds the SSH-backed handlers (test-connection,
+	// deploy-collector, refresh-system) whose response blocks on an SSH
+	// round-trip longer than the server's global WriteTimeout. main derives
+	// it from the SSH dial + command timeouts plus headroom. Zero = leave the
+	// global write timeout in force.
+	SSHResponseDeadline time.Duration
+
+	// MaxBodyBytes caps every request body (including the pre-auth /login).
+	// Zero = no limit (tests). main sets it from server.max_body_bytes.
+	MaxBodyBytes int64
+
 	// Phase 7 auth. Empty means no auth (dev / behind-internal-network
 	// deploys). Non-empty applies HTTP basic auth to every /api/v1/*
 	// route and the SPA — browsers handle the credential prompt
@@ -66,6 +77,20 @@ type Deps struct {
 	ControlRunner ControlRunner
 }
 
+// limitBody wraps each request body in http.MaxBytesReader so an oversized
+// body is rejected (the reader errors past the cap, surfacing as a 400 in the
+// JSON decoders, or a 413 if a handler maps *http.MaxBytesError).
+func limitBody(maxBytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func NewRouter(d Deps) http.Handler {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
@@ -75,6 +100,12 @@ func NewRouter(d Deps) http.Handler {
 	// middleware (including the logger) is caught and turned into a 500.
 	r.Use(recoverer(d.Logger))
 	r.Use(requestLogger(d.Logger))
+	// Cap request bodies globally so it also covers /login + /logout (which
+	// sit outside the auth group). A pathological/huge body is rejected before
+	// any handler decodes it.
+	if d.MaxBodyBytes > 0 {
+		r.Use(limitBody(d.MaxBodyBytes))
+	}
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -97,6 +128,7 @@ func NewRouter(d Deps) http.Handler {
 			store:           d.Store,
 			exec:            d.Executor,
 			logger:          d.Logger,
+			sshDeadline:     d.SSHResponseDeadline,
 			onServerCreated: d.OnServerCreated,
 			onServerDeleted: d.OnServerDeleted,
 			broadcaster:     d.Hub,

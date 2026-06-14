@@ -51,6 +51,10 @@ type Config struct {
 	// reconnect cadence. Defaults 1 / 60.
 	MinBackoffSeconds int `koanf:"min_backoff_seconds"`
 	MaxBackoffSeconds int `koanf:"max_backoff_seconds"`
+
+	// MaxLineBytes caps a single tailed log line; longer lines are shipped
+	// truncated so the scanner advances past them. 0 → session default (1 MiB).
+	MaxLineBytes int `koanf:"max_line_bytes"`
 }
 
 // FileSpecConfig is the YAML-friendly form of FileSpec.
@@ -86,20 +90,21 @@ func (c Config) Validate() error {
 // Start enumerates servers, spawns sessions, returns; Stop signals
 // every session and waits for them to finish.
 type Manager struct {
-	cfg     Config
-	exec    sshpkg.Executor
-	store   storage.Store
-	loki    LokiPusher
-	vm      VMPusher
-	logger  *slog.Logger
+	cfg    Config
+	exec   sshpkg.Executor
+	store  storage.Store
+	loki   LokiPusher
+	vm     VMPusher
+	logger *slog.Logger
 
 	sink     *LokiSink
 	sessions map[int]*Session
 
-	mu       sync.Mutex
-	stopped  bool
-	flushDone chan struct{}
-	flushTick *time.Ticker
+	mu          sync.Mutex
+	stopped     bool
+	flushDone   chan struct{}
+	flushTick   *time.Ticker
+	flushCancel context.CancelFunc // cancels flushLoop independently of the caller's ctx
 }
 
 // NewManager constructs the Manager. Returns nil + nil when
@@ -198,7 +203,13 @@ func (m *Manager) Start(ctx context.Context) error {
 	if m.cfg.FlushIntervalSeconds <= 0 {
 		m.flushTick = time.NewTicker(1 * time.Second)
 	}
-	go m.flushLoop(ctx)
+	// Derive an internal cancelable context so Stop can wind the flush loop
+	// down deterministically without depending on the caller cancelling the
+	// ctx it passed here. flushLoop still also returns if the parent ctx is
+	// canceled.
+	flushCtx, flushCancel := context.WithCancel(ctx)
+	m.flushCancel = flushCancel
+	go m.flushLoop(flushCtx)
 
 	m.logger.Info("streamer: manager started",
 		"servers_launched", launched,
@@ -278,6 +289,7 @@ func (m *Manager) launchOne(ctx context.Context, serverID int, files []FileSpec)
 		BuildCommand: buildCmd,
 		MinBackoff:   time.Duration(m.cfg.MinBackoffSeconds) * time.Second,
 		MaxBackoff:   time.Duration(m.cfg.MaxBackoffSeconds) * time.Second,
+		MaxLineBytes: m.cfg.MaxLineBytes,
 	}
 
 	sess := NewSession(cfg, m.exec, m.sink, m.logger)
@@ -334,9 +346,20 @@ func (m *Manager) Stop(timeout time.Duration) {
 		}
 	}
 
+	// Stop the flush loop and wait for it to exit BEFORE the final flush, so
+	// flushLoop can't run a Flush concurrently with the one below (data race)
+	// and the goroutine + ticker are provably released even if the caller
+	// never cancels the ctx it passed to Start. Guarded on flushCancel so a
+	// Stop without a preceding Start can't block on flushDone forever.
+	if m.flushCancel != nil {
+		m.flushCancel()
+		<-m.flushDone
+	}
+
 	if m.flushTick != nil {
-		// Drain the ticker and run one last flush so anything queued
-		// makes it to Loki + the cursor table.
+		// Run one last flush so anything queued makes it to Loki + the
+		// cursor table. flushLoop has stopped (and stopped the ticker via
+		// its defer) so this is the only flusher now running.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = m.sink.Flush(ctx)
 		cancel()

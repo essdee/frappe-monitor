@@ -152,14 +152,21 @@ func RenderConfig(o Options) string {
 server:
   listen_addr: %s
   read_timeout_seconds: 15
-  write_timeout_seconds: 15
+  # Must be >= ssh.command_timeout_seconds so a slow SSH-backed response
+  # (test-connection / deploy / refresh) isn't severed.
+  write_timeout_seconds: 60
+  max_body_bytes: 1048576   # 1 MiB request-body cap
 
 database:
 %s
 ssh:
   dial_timeout_seconds: 10
   command_timeout_seconds: 30
-  max_connections_per_host: 2
+  # Host-key handling: trust-on-first-use by default — a host's key is pinned
+  # on first connect (no ssh-keyscan needed) and a later CHANGED key is
+  # rejected. Empty known_hosts_path → ~/.ssh/known_hosts (created if absent).
+  known_hosts_path: ""
+  insecure_skip_host_key_check: false   # true disables verification entirely (DEV ONLY — MITM-able)
 
 log:
   level: "info"
@@ -186,6 +193,15 @@ auth:
 
 alerts:
   enabled: false
+  evaluation_interval_seconds: 60
+  notify_repeat_seconds: 3600
+  vm_query_timeout_seconds: 10
+  telegram:
+    bot_token: ""
+    chat_ids: []
+    send_timeout_seconds: 5
+  disable_defaults: false
+  rules: []
 
 realtime:
   enabled: true
@@ -193,6 +209,21 @@ realtime:
   write_timeout_seconds: 10
   send_buffer: 128
   max_clients: 512
+
+# Control panel: allowlisted bench/service commands run over SSH. Long actions
+# (bench update/migrate) need a generous ceiling.
+control:
+  action_timeout_seconds: 300
+  danger_action_timeout_seconds: 1800
+  read_timeout_seconds: 20
+  max_output_bytes: 65536
+  max_concurrent: 4
+
+# DB replication monitor (idle until targets are added in the dashboard).
+dbmonitor:
+  interval_seconds: 60
+  max_parallel: 4
+  command_timeout_seconds: 15
 `, yamlStr(orStr(o.ListenAddr, ":8080")), db.String(), yamlStr(o.AuthPassword))
 }
 
