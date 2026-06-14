@@ -282,3 +282,16 @@ func TestSyncBuffer_ConcurrentWriteAndString(t *testing.T) {
 		t.Errorf("buffer length = %d, want %d", len(got), want)
 	}
 }
+
+func TestLoadKey_PublicKeyGivesClearError(t *testing.T) {
+	dir := t.TempDir()
+	// A .pub file (the common mistake) — content is an OpenSSH public key.
+	pub := filepath.Join(dir, "id_ed25519.pub")
+	if err := os.WriteFile(pub, []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 monitor\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadKey(pub)
+	if err == nil || !strings.Contains(err.Error(), "PUBLIC key") {
+		t.Fatalf("want a clear PUBLIC-key error, got: %v", err)
+	}
+}

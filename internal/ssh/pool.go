@@ -438,9 +438,31 @@ func loadKey(path string) (ssh.AuthMethod, error) {
 			return nil, fmt.Errorf("parse key %q: key is passphrase-protected, which is not supported — "+
 				"point the server at an unencrypted key dedicated to the monitor: %w", path, err)
 		}
+		// Pointing at the public key (…/id_ed25519.pub) is the most common
+		// mistake; ssh.ParsePrivateKey reports an opaque "no key found". Give an
+		// actionable message instead.
+		if looksLikePublicKey(path, raw) {
+			return nil, fmt.Errorf("parse key %q: that is a PUBLIC key — configure the PRIVATE key path instead "+
+				"(drop the .pub); authorize the .pub on the bench with ssh-copy-id", path)
+		}
 		return nil, fmt.Errorf("parse key %q: %w", path, err)
 	}
 	return ssh.PublicKeys(signer), nil
+}
+
+// looksLikePublicKey reports whether path/content is an OpenSSH public key
+// rather than a private key — the usual cause of a "no key found" parse error.
+func looksLikePublicKey(path string, raw []byte) bool {
+	if strings.HasSuffix(path, ".pub") {
+		return true
+	}
+	s := strings.TrimSpace(string(raw))
+	for _, p := range []string{"ssh-rsa ", "ssh-ed25519 ", "ssh-dss ", "ecdsa-sha2-", "sk-ssh-", "sk-ecdsa-"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // expandHomePath expands a leading "~" / "~/" to the home directory of the user
