@@ -20,6 +20,8 @@ type LogCursor struct {
 	ID int `json:"id,omitempty"`
 	// LogPath holds the value of the "log_path" field.
 	LogPath string `json:"log_path,omitempty"`
+	// FileIdentity holds the value of the "file_identity" field.
+	FileIdentity string `json:"file_identity,omitempty"`
 	// ByteOffset holds the value of the "byte_offset" field.
 	ByteOffset int64 `json:"byte_offset,omitempty"`
 	// LastSeenAt holds the value of the "last_seen_at" field.
@@ -58,7 +60,7 @@ func (*LogCursor) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case logcursor.FieldID, logcursor.FieldByteOffset:
 			values[i] = new(sql.NullInt64)
-		case logcursor.FieldLogPath:
+		case logcursor.FieldLogPath, logcursor.FieldFileIdentity:
 			values[i] = new(sql.NullString)
 		case logcursor.FieldLastSeenAt:
 			values[i] = new(sql.NullTime)
@@ -90,6 +92,12 @@ func (_m *LogCursor) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field log_path", values[i])
 			} else if value.Valid {
 				_m.LogPath = value.String
+			}
+		case logcursor.FieldFileIdentity:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field file_identity", values[i])
+			} else if value.Valid {
+				_m.FileIdentity = value.String
 			}
 		case logcursor.FieldByteOffset:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -153,6 +161,9 @@ func (_m *LogCursor) String() string {
 	builder.WriteString(fmt.Sprintf("id=%v, ", _m.ID))
 	builder.WriteString("log_path=")
 	builder.WriteString(_m.LogPath)
+	builder.WriteString(", ")
+	builder.WriteString("file_identity=")
+	builder.WriteString(_m.FileIdentity)
 	builder.WriteString(", ")
 	builder.WriteString("byte_offset=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ByteOffset))

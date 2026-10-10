@@ -56,18 +56,52 @@ function handle401(resp: Response): Response {
   return resp
 }
 
+async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+	return handle401(await fetch(url, { ...init, credentials: 'same-origin' }))
+}
+
+async function responseError(resp: Response): Promise<Error> {
+	const body = await resp.text()
+	let message = body.slice(0, 500)
+	try {
+		const parsed = JSON.parse(body) as { error?: unknown }
+		if (typeof parsed.error === 'string') message = parsed.error
+	} catch {
+		// A non-JSON upstream/proxy error is still useful as plain text.
+	}
+	return new Error(message || `${resp.status} ${resp.statusText}`)
+}
+
 async function jsonGET<T>(url: string): Promise<T> {
-  const resp = handle401(
-    await fetch(url, {
+	const resp = await apiFetch(url, {
       headers: { Accept: 'application/json' },
-      credentials: 'same-origin',
-    }),
-  )
-  if (!resp.ok) {
-    const body = await resp.text()
-    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
-  }
+	})
+	if (!resp.ok) throw await responseError(resp)
   return resp.json() as Promise<T>
+}
+
+async function jsonMutation<T>(url: string, init: RequestInit): Promise<T> {
+	const resp = await apiFetch(url, {
+		...init,
+		headers: {
+			Accept: 'application/json',
+			...(init.body ? { 'Content-Type': 'application/json' } : {}),
+			...init.headers,
+		},
+	})
+	if (!resp.ok) throw await responseError(resp)
+	return resp.json() as Promise<T>
+}
+
+/** PromQL/LogQL string literal escaping for operator-provided labels. */
+export function queryStringLiteral(value: string): string {
+	return JSON.stringify(value)
+}
+
+export function queryLabelMatchers(labels: Record<string, string>): string {
+	return Object.entries(labels)
+		.map(([key, value]) => `${key}=${queryStringLiteral(value)}`)
+		.join(',')
 }
 
 // --- Auth ---------------------------------------------------------------
@@ -87,15 +121,25 @@ export async function login(password: string): Promise<void> {
 }
 
 export async function logout(): Promise<void> {
-  await fetch('/api/v1/logout', {
+  const resp = await fetch('/api/v1/logout', {
     method: 'POST',
     credentials: 'same-origin',
   })
+  if (!resp.ok) throw await responseError(resp)
 }
 
-export async function whoami(): Promise<boolean> {
+export interface AuthStatus {
+  authenticated: boolean
+  auth_enabled: boolean
+  timezone: string
+}
+
+export async function whoami(): Promise<AuthStatus> {
   const resp = await fetch('/api/v1/whoami', { credentials: 'same-origin' })
-  return resp.ok
+  if (!resp.ok) {
+    return { authenticated: false, auth_enabled: true, timezone: 'UTC' }
+  }
+  return resp.json() as Promise<AuthStatus>
 }
 
 export function fetchServers(): Promise<Server[]> {
@@ -118,62 +162,231 @@ export interface NewServerInput {
 }
 
 export async function createServer(input: NewServerInput): Promise<Server> {
-  const resp = await fetch('/api/v1/servers', {
+	return jsonMutation<Server>('/api/v1/servers', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(input),
   })
-  if (!resp.ok) {
-    const body = await resp.text()
-    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
-  }
-  return (await resp.json()) as Server
 }
 
 export async function patchServer(id: number, patch: Partial<NewServerInput>): Promise<Server> {
-  const resp = await fetch(`/api/v1/servers/${id}`, {
+	return jsonMutation<Server>(`/api/v1/servers/${id}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(patch),
   })
-  if (!resp.ok) {
-    const body = await resp.text()
-    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
-  }
-  return (await resp.json()) as Server
 }
 
 export async function deleteServer(id: number): Promise<void> {
-  const resp = await fetch(`/api/v1/servers/${id}`, { method: 'DELETE' })
-  if (!resp.ok && resp.status !== 204) {
-    const body = await resp.text()
-    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
-  }
+	const resp = await apiFetch(`/api/v1/servers/${id}`, { method: 'DELETE' })
+	if (!resp.ok) throw await responseError(resp)
 }
 
 export interface TestConnectionResult {
   reachable: boolean
   latency_ms: number
   error?: string
-  error_kind?: 'auth' | 'dial' | 'timeout' | 'unknown'
+  error_kind?: 'auth' | 'dial' | 'timeout' | 'host_key' | 'key' | 'unknown'
 }
 
 export async function testServerConnection(id: number): Promise<TestConnectionResult> {
-  const resp = await fetch(`/api/v1/servers/${id}/test-connection`, { method: 'POST' })
-  if (!resp.ok) {
-    const body = await resp.text()
-    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
-  }
-  return (await resp.json()) as TestConnectionResult
+	return jsonMutation<TestConnectionResult>(`/api/v1/servers/${id}/test-connection`, { method: 'POST' })
 }
 
-export async function deployCollector(id: number): Promise<{ deployed: boolean; version: string }> {
-  const resp = await fetch(`/api/v1/servers/${id}/deploy-collector`, { method: 'POST' })
-  if (!resp.ok) {
-    const body = await resp.text()
-    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
+export async function testDraftServerConnection(
+  input: Pick<NewServerInput, 'hostname' | 'ssh_user' | 'ssh_port' | 'ssh_key_path'>,
+): Promise<TestConnectionResult> {
+	return jsonMutation<TestConnectionResult>('/api/v1/servers/test-connection', {
+    method: 'POST',
+    body: JSON.stringify({
+      hostname: input.hostname,
+      ssh_user: input.ssh_user,
+      ssh_port: input.ssh_port,
+      ssh_key_path: input.ssh_key_path,
+    }),
+  })
+}
+
+// --- Local monitor settings -------------------------------------------
+
+export interface HTTPServerSettings {
+  listen_addr: string
+  read_timeout_seconds: number
+  write_timeout_seconds: number
+  trusted_proxy_cidrs: string[]
+}
+
+export interface DatabaseSettings {
+  path: string
+}
+
+export interface SSHSettings {
+  dial_timeout_seconds: number
+  command_timeout_seconds: number
+  max_connections_per_host: number
+  known_hosts_path: string
+}
+
+export interface LogSettings {
+  level: 'debug' | 'info' | 'warn' | 'error'
+  format: 'json' | 'text'
+}
+
+export interface MetricsSettings {
+  vm_url: string
+  push_timeout_seconds: number
+  query_timeout_seconds: number
+}
+
+export interface LogsSettings {
+  loki_url: string
+  push_timeout_seconds: number
+  query_timeout_seconds: number
+}
+
+export interface SchedulerSettings {
+  default_interval_seconds: number
+  max_parallel: number
+  per_job_timeout_seconds: number
+}
+
+export interface PublicProbeTargetSettings {
+  server: string
+  bench: string
+  site: string
+  url: string
+  disabled: boolean
+}
+
+export interface PublicProbeSettings {
+  enabled: boolean
+  auto_discover: boolean
+  default_scheme: 'http' | 'https'
+  path: string
+  timeout_seconds: number
+  max_parallel: number
+  allow_private_targets: boolean
+  require_pong: boolean
+  targets: PublicProbeTargetSettings[]
+}
+
+export interface StreamingFileSettings {
+  server_id: number
+  id: string
+  path: string
+  log_type: string
+  bench: string
+  site: string
+}
+
+export interface StreamingSettings {
+  enabled: boolean
+  monitor_id: string
+  script_path: string
+  files: StreamingFileSettings[]
+  flush_interval_seconds: number
+  max_batch_lines: number
+  max_buffered_lines: number
+  max_buffered_bytes: number
+  push_timeout_seconds: number
+  min_backoff_seconds: number
+  max_backoff_seconds: number
+}
+
+export interface SettingsResponse {
+  server: HTTPServerSettings
+  display: { timezone: string }
+  database: DatabaseSettings
+  ssh: SSHSettings
+  log: LogSettings
+  metrics: MetricsSettings
+  logs: LogsSettings
+  scheduler: SchedulerSettings
+  public_probes: PublicProbeSettings
+  auth: { realm: string; password_configured: boolean }
+  alerts: {
+    enabled: boolean
+    evaluation_interval_seconds: number
+    notify_repeat_seconds: number
+    vm_query_timeout_seconds: number
+    telegram: {
+      chat_ids: string[]
+      send_timeout_seconds: number
+      bot_token_configured: boolean
+    }
+    rules: AlertRule[]
+    disable_defaults: boolean
+    bundled_rule_count: number
   }
-  return (await resp.json()) as { deployed: boolean; version: string }
+  streaming: StreamingSettings
+  restart_required: boolean
+}
+
+export interface SettingsUpdate {
+  server: HTTPServerSettings
+  display: { timezone: string }
+  database: DatabaseSettings
+  ssh: SSHSettings
+  log: LogSettings
+  metrics: MetricsSettings
+  logs: LogsSettings
+  scheduler: SchedulerSettings
+  public_probes: PublicProbeSettings
+  auth: { realm: string; password?: string }
+  alerts: {
+    enabled: boolean
+    evaluation_interval_seconds: number
+    notify_repeat_seconds: number
+    vm_query_timeout_seconds: number
+    telegram: { chat_ids: string[]; send_timeout_seconds: number; bot_token?: string }
+    rules: AlertRule[]
+    disable_defaults: boolean
+  }
+  streaming: StreamingSettings
+}
+
+export interface IntegrationTestResult {
+  ok: boolean
+  latency_ms: number
+  message: string
+}
+
+export interface RuntimeStatus {
+  started_at: string
+  uptime_seconds: number
+  goroutines: number
+  heap_alloc_bytes: number
+  heap_sys_bytes: number
+  streaming: {
+    enabled: boolean
+    sessions: number
+    connected: number
+    launching: number
+    buffered_lines: number
+    buffered_bytes: number
+    max_buffered_lines: number
+    max_buffered_bytes: number
+  }
+}
+
+export function fetchRuntimeStatus(): Promise<RuntimeStatus> {
+  return jsonGET<RuntimeStatus>('/api/v1/status')
+}
+
+export function fetchSettings(): Promise<SettingsResponse> {
+  return jsonGET<SettingsResponse>('/api/v1/settings')
+}
+
+export function saveSettings(input: SettingsUpdate): Promise<SettingsResponse> {
+	return jsonMutation<SettingsResponse>('/api/v1/settings', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export function testIntegration(kind: 'metrics' | 'logs' | 'telegram', botToken?: string): Promise<IntegrationTestResult> {
+	return jsonMutation<IntegrationTestResult>('/api/v1/settings/test', {
+    method: 'POST',
+    body: JSON.stringify({ kind, ...(botToken ? { bot_token: botToken } : {}) }),
+  })
 }
 
 // --- System snapshot ---------------------------------------------------
@@ -213,22 +426,14 @@ export interface SystemSnapshotResp {
 }
 
 export async function fetchSystemSnapshot(id: number): Promise<SystemSnapshotResp | null> {
-  const resp = await fetch(`/api/v1/servers/${id}/system`)
-  if (resp.status === 404) return null
-  if (!resp.ok) {
-    const body = await resp.text()
-    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
-  }
+	const resp = await apiFetch(`/api/v1/servers/${id}/system`)
+	if (resp.status === 404) return null
+	if (!resp.ok) throw await responseError(resp)
   return (await resp.json()) as SystemSnapshotResp
 }
 
 export async function refreshSystemSnapshot(id: number): Promise<SystemSnapshotResp> {
-  const resp = await fetch(`/api/v1/servers/${id}/refresh-system`, { method: 'POST' })
-  if (!resp.ok) {
-    const body = await resp.text()
-    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`)
-  }
-  return (await resp.json()) as SystemSnapshotResp
+	return jsonMutation<SystemSnapshotResp>(`/api/v1/servers/${id}/refresh-system`, { method: 'POST' })
 }
 
 export function queryMetrics(query: string, range: TimeRange): Promise<MetricsQueryResponse> {
@@ -253,15 +458,32 @@ export interface BenchDetail {
   bench: string
   frappe_version?: string
   apps_count: number
+	web_workers_configured: number
+	background_workers_configured: number
   supervisor_running: number
   supervisor_total: number
   redis_queues: Record<string, number>
+	workers_registered: number
+	workers_busy: number
+	workers_idle: number
+	services: Array<{
+		name: string
+		kind: string
+		queue?: string
+		state: number
+		pid: number
+		cpu_percent: number
+		memory_percent: number
+		rss_bytes: number
+		uptime_seconds: number
+	}>
 }
 
 export interface SitePair {
   server: string
   bench: string
   site: string
+  is_healthy: number
 }
 
 export interface SiteDetail {
@@ -271,6 +493,19 @@ export interface SiteDetail {
   http_status_code: number
   http_response_ms: number
   is_healthy: number
+	failure_reason_code: number
+  internal_http_status_code: number
+  internal_http_response_ms: number
+  internal_is_healthy: number
+  internal_failure_reason_code: number
+  public_probe_available: boolean
+  public_http_status_code: number
+  public_http_response_ms: number
+  public_is_healthy: number
+  public_failure_reason_code: number
+  public_tls_cert_expiry_timestamp_seconds: number
+  native_monitor_enabled: number
+  database_identities: Array<{ hash: string; kind: 'database' | 'user' }>
   avg_response_ms_1h: number
 }
 
@@ -336,6 +571,20 @@ export interface AlertsResponse {
   enabled: boolean
   rules: AlertRule[]
   firing: FiringAlert[]
+	incidents: AlertIncident[]
+}
+
+export interface AlertIncident {
+	id: number
+	rule_name: string
+	fingerprint: string
+	severity: string
+	status: 'firing' | 'resolved'
+	value: number
+	labels: Record<string, string>
+	started_at: string
+	resolved_at?: string
+	last_notified_at?: string
 }
 
 export function fetchAlerts(): Promise<AlertsResponse> {
@@ -350,8 +599,8 @@ export function queryLogs(
   const params = new URLSearchParams({
     query,
     // Loki accepts unix nanoseconds for start/end.
-    start: String(range.from * 1_000_000_000),
-    end: String(range.to * 1_000_000_000),
+		start: (BigInt(Math.floor(range.from)) * 1_000_000_000n).toString(),
+		end: (BigInt(Math.floor(range.to)) * 1_000_000_000n).toString(),
     limit: String(limit),
     direction: 'backward',
   })

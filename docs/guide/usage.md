@@ -1,351 +1,212 @@
 # Using Frappe Monitor
 
-Day-to-day flow: register a bench server, watch its metrics, drill into benches and sites.
+Frappe Monitor is a read-only observability console for SSH-reachable Frappe
+servers. It does not deploy, pull application code, update packages, restart a
+bench, or install a target-side agent.
 
-This assumes you already deployed via `deploy/install.sh` and the dashboard is reachable at `http://<host>:8080`.
+## 1. Prepare least-privilege SSH access
 
-## 1. Prepare SSH access
-
-The monitor connects from the host running `frappe-monitor.service` (as the `frappe-monitor` system user) to each Frappe bench server you want to monitor. You only need to do this once, when you first set up the host.
+The production installer creates a dedicated key on the monitor host. Print
+its public half and authorize it for a user that can read the Frappe bench,
+process table, Supervisor status, and log files:
 
 ```bash
-# On the monitor host:
-sudo -u frappe-monitor ssh-keygen -t ed25519 -N "" \
-    -f /var/lib/frappe-monitor/.ssh/id_ed25519 -C frappe-monitor
 sudo cat /var/lib/frappe-monitor/.ssh/id_ed25519.pub
 ```
 
-Copy the printed public key. On each bench server, append it to the authorized_keys of a user with read access to the bench (typically `frappe`):
+Append the public key to the target user's `authorized_keys`. Capture the
+target host key, verify its fingerprint through an independent channel, then
+add it to the monitor's strict trust store:
 
 ```bash
-# On each bench server:
-sudo -u frappe mkdir -p /home/frappe/.ssh
-sudo -u frappe tee -a /home/frappe/.ssh/authorized_keys <<< "<paste pubkey here>"
-sudo -u frappe chmod 600 /home/frappe/.ssh/authorized_keys
+ssh-keyscan -p 22 -H bench1.example.com > /tmp/bench1.known-host
+ssh-keygen -lf /tmp/bench1.known-host
+# Only after verifying the fingerprint:
+sudo tee -a /var/lib/frappe-monitor/.ssh/known_hosts \
+  < /tmp/bench1.known-host >/dev/null
+sudo chown frappe-monitor:frappe-monitor \
+  /var/lib/frappe-monitor/.ssh/known_hosts
+sudo chmod 600 /var/lib/frappe-monitor/.ssh/known_hosts
 ```
 
-Verify it works from the monitor host:
+The target user does not need permission to change services or write into a
+bench. A restricted account or SSH policy is recommended in production.
 
-```bash
-sudo -u frappe-monitor ssh -i /var/lib/frappe-monitor/.ssh/id_ed25519 \
-    -p 22 frappe@bench1.example.com 'echo hello'
-```
+## 2. Register a target
 
-If that prints `hello`, you're good.
+Target registration changes only the monitor's local SQLite registry. It does
+not touch the remote server.
 
-## 2. Register a server
+In the console, open **Servers → Add server**, enter the hostname, SSH user,
+port, and private-key path, then choose **Test connection**. The diagnostic
+runs only `echo ok` over SSH and does not create the target. Save when the
+connection and host-key policy are correct. Bench paths may be left empty for
+read-only automatic discovery, including common `frappe-bench` and versioned
+`frappe-13`, `frappe-15`, or `frappe-16` home-directory layouts. Labels such as
+environment, region, and owner are optional and searchable.
 
-The fast path is the dashboard: open `http://<host>:8080/servers`, click **+ Add server**, fill the form, hit Add. Same flow available via API:
+The equivalent API request is:
 
 ```bash
 curl -u "admin:<password>" -X POST http://127.0.0.1:8080/api/v1/servers \
   -H 'Content-Type: application/json' \
   -d '{
-    "name":         "prod1",
-    "hostname":     "bench1.example.com",
-    "ssh_user":     "frappe",
-    "ssh_port":     22,
-    "ssh_key_path": "/var/lib/frappe-monitor/.ssh/id_ed25519"
+    "name": "prod1",
+    "hostname": "bench1.example.com",
+    "ssh_user": "frappe",
+    "ssh_port": 22,
+    "ssh_key_path": "/var/lib/frappe-monitor/.ssh/id_ed25519",
+    "bench_paths": ["/home/frappe/frappe-bench"]
   }'
 ```
 
-Drop the `-u` flag in dev where `auth.password` is empty.
-
-Response:
-
-```json
-{
-  "id": 1,
-  "name": "prod1",
-  "hostname": "bench1.example.com",
-  "ssh_user": "frappe",
-  "ssh_port": 22,
-  "ssh_key_path": "/var/lib/frappe-monitor/.ssh/id_ed25519",
-  "status": "unknown",
-  ...
-}
-```
-
-`409` on duplicate hostname; `400` on missing fields.
-
-## 3. Verify SSH from the monitor
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/servers/1/test-connection
-# {"reachable":true,"latency_ms":42}
-```
-
-If `reachable: false`, look at `error_kind`:
-
-| `error_kind` | Meaning | Fix |
-|---|---|---|
-| `auth` | Key rejected | Verify the pubkey is in the bench user's `authorized_keys`. |
-| `dial` | TCP connect failed | Check hostname, port, firewall. |
-| `timeout` | Took longer than `ssh.dial_timeout_seconds` | Network slow, or wrong host. |
-| `unknown` | Anything else | Check the response's `error` field for details. |
-
-The diagnostic endpoint is always 200 OK with `reachable=false` on failure (it's a *probe*, not a *health check*) — the HTTP layer succeeded; SSH is what failed.
-
-## 4. Deploy the collector
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/servers/1/deploy-collector
-# {"deployed":true,"version":"v3"}
-```
-
-This pipes the embedded `frappe-monitor-collect.sh` (a self-contained bash script) to the target via SSH and `chmod +x`s it. The script lands at `~/.frappe-monitor/collect.sh` for the SSH user. The scheduler then runs it every cycle.
-
-The version is the first comment line in the embedded script. If you upgrade the monitor binary and the script changes, re-deploy:
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/servers/1/deploy-collector
-```
-
-## 5. Wait for the first cycle
-
-The scheduler picks up the new server on the next tick. With the default 15-minute interval, the first batch of metrics arrives within 15 minutes; if you want immediate feedback, lower it temporarily:
-
-```bash
-sudo systemctl edit frappe-monitor
-# Add:
-[Service]
-Environment=MONITOR_SCHEDULER__DEFAULT_INTERVAL_SECONDS=60
-# Save, then:
-sudo systemctl daemon-reload && sudo systemctl restart frappe-monitor
-```
-
-Watch the monitor logs:
-
-```bash
-sudo journalctl -u frappe-monitor -f
-```
-
-You'll see lines like `collector: pulled successfully server_id=1 took=1.2s`.
-
-## 6. Open the dashboard
-
-Browse to `http://<monitor-host>:8080`. The sidebar has three pages:
-
-### Servers (`/servers`)
-
-Cards sorted worst-first (unreachable → unknown → reachable). Each card shows status, hostname, and last-seen timestamp. Click one to drill into per-server charts:
-
-- CPU usage % (derived from `frappe_server_cpu_*` jiffies)
-- Memory usage %
-- Disk usage % per mount
-- Load average (1m, 5m, 15m)
-
-### Benches (`/benches`)
-
-All benches across all servers, grouped by server. Each bench is one card → click for:
-
-- Frappe version, apps count, supervisor running/total, queue count
-- Per-queue Redis depth (table)
-- Time-series charts: supervisor processes, queue depths, apps count
-
-### Sites (`/sites`)
-
-Flat searchable table of every site reporting metrics. Substring filter across server / bench / site columns. Click into a site for:
-
-- Health status block (HTTP code + healthy bit)
-- Charts: response time (ms), HTTP status code, healthy
-- "Recent error log lines" panel — pulls bench-scoped error logs from Loki for the active time window. (Per-site log labels arrive in Phase 7.)
-
-## Timeline filter (top header)
-
-Six presets: `15m`, `1h`, `6h`, `24h`, `7d`, `30d`. Picking one rewrites the URL with `?from=&to=&step=` query params. Every chart on every page reads from the same range. Refresh interval is selectable too (default 30s, `0` to disable polling).
-
-## Renaming or removing a server
-
-In the dashboard, open the server's detail page. The header has four buttons:
-
-- **Test SSH** — runs the same probe as `POST /api/v1/servers/{id}/test-connection`. On success the page-header status badge updates to `reachable` immediately (no manual refresh needed).
-- **Deploy collector** — re-pushes the embedded `frappe-monitor-collect.sh` to the host.
-- **Edit** — opens an in-page form for changing **hostname/IP**, **SSH user**, **port**, **key path**, and **bench paths** without re-creating the server. Updates apply on the next collector cycle. The metric `name` label is read-only here because renaming would orphan all historical VM series for this host — if you genuinely need to rename, do it via the API and re-tag your dashboards.
-- **Delete** — removes the server (with a confirm prompt). Cascades log cursors; alert states age out next cycle. Existing data in VictoriaMetrics + Loki ages out on retention.
-
-The Edit button is also the right path when:
-
-- The bench host's IP changed (e.g., re-provisioned VM) — change `hostname` and the next pull uses the new address.
-- You added a new bench under `/srv/<custom>` that the collector's auto-discover doesn't find — add the path to `bench_paths` and the next cycle will scan it explicitly.
-- You rotated the monitor's SSH key — change `ssh_key_path` and Test SSH to confirm.
-
-Curl equivalent (also useful for scripting + the `name` rename case):
-
-```bash
-curl -u "admin:<password>" -X PATCH http://127.0.0.1:8080/api/v1/servers/1 \
-  -H 'Content-Type: application/json' \
-  -d '{"hostname": "10.0.0.7", "bench_paths": ["/srv/bench-prod"]}'
-```
-
-## What metrics are emitted
-
-| Prefix | Cardinality | Examples |
-|---|---|---|
-| `frappe_server_*` | one series per `(server, mount/iface)` | `cpu_user`, `cpu_idle`, `mem_total_bytes`, `disk_used_bytes`, `load_1m`, `net_rx_bytes`, `uptime_seconds` |
-| `frappe_bench_*` | one series per `(server, bench, queue?)` | `apps_count`, `supervisor_running`, `supervisor_total`, `redis_queue_depth`, `info` (with `frappe_version` label) |
-| `frappe_site_*` | one series per `(server, bench, site)` | `http_status_code`, `http_response_ms`, `is_healthy` |
-
-Every metric carries `server` as a label; bench metrics also carry `bench`; site metrics carry `bench` and `site`. The dashboard relies on this hierarchy when drilling down.
-
-For raw PromQL exploration:
-
-```bash
-# Hit VM directly:
-curl 'http://127.0.0.1:8428/api/v1/query?query=frappe_server_load_1m'
-
-# Or through the monitor's proxy (so timeline filter works):
-curl 'http://127.0.0.1:8080/api/v1/metrics/query?query=frappe_server_load_1m&start=1714468800&end=1714472400&step=15'
-```
-
-## Setting up Telegram alerting
-
-1. Create a bot. DM `@BotFather` on Telegram, send `/newbot`, follow the prompts. You get back a token like `1234567890:AAH...`.
-
-2. Get your chat ID. DM your new bot, send `/start`, then visit:
-
-   ```
-   https://api.telegram.org/bot<TOKEN>/getUpdates
-   ```
-
-   Look for `"chat":{"id": 123456789, ...}` — that integer is your chat ID. For group chats, add the bot, send a message, and look for the negative ID.
-
-3. Edit `/etc/frappe-monitor/monitor.yaml`:
-
-   ```yaml
-   alerts:
-     enabled: true
-     telegram:
-       bot_token: "1234567890:AAH..."
-       chat_ids: ["123456789", "987654321"]
-   ```
-
-4. Restart: `sudo systemctl restart frappe-monitor`.
-
-The default rule set fires on:
-
-| Rule | Trigger | Severity |
-|---|---|---|
-| `server_unreachable` | A server's last `frappe_server_load_1m` sample is more than 5 min old. | critical |
-| `disk_almost_full` | `disk_used / disk_total > 90%` on any monitored mount. | warning |
-| `site_unhealthy` | `frappe_site_is_healthy == 0` for any site. | critical |
-| `redis_queue_high` | Any Redis queue depth above 1000 jobs. | warning |
-
-Each unique target (server / mount / site / queue) gets one notification on first fire, then re-pages every `notify_repeat_seconds` (default 1h) while still firing, then a single recovery message when the condition clears.
-
-### What the messages look like
-
-Telegram messages render in HTML mode with a severity icon, a bolded headline, the rule's rendered message body as the focal point, and a derived hierarchy breadcrumb (server → bench → site, taken from the firing series' labels — only the levels that exist are shown). Footer carries the verb (`fired` / `cleared`) and a wall-clock timestamp.
-
-Firing (critical):
-
-```
-🚨 CRITICAL — site_unhealthy
-
-Site "client-a.com" on prod-1/production-bench is unhealthy.
-
-prod-1 → production-bench → client-a.com
-fired 21:14 IST
-```
-
-Resolved:
-
-```
-✅ RESOLVED — site_unhealthy
-
-Site "client-a.com" on prod-1/production-bench is unhealthy.
-
-prod-1 → production-bench → client-a.com
-cleared 21:18 IST
-```
-
-Severity icons: `🚨 critical`, `⚠️ warning`, `ℹ️ info`. Resolved messages always use `✅` regardless of original severity. Untrusted strings (rule names, label values, body) are HTML-escaped before being placed into the template.
-
-To add custom rules, append to `alerts.rules`:
-
-```yaml
-alerts:
-  rules:
-    - name: long_running_pull
-      expr: time() - timestamp(frappe_server_load_1m) > 60
-      severity: warning
-      fingerprint_labels: [server]
-      message: "Server {{.Labels.server}} hasn't reported in 1 minute (last value {{.Value}}s ago)."
-```
-
-The expression is any PromQL that returns a non-empty result vector when the alert should fire. `fingerprint_labels` chooses which series labels distinguish unique alerts; if omitted, every label is used (which is sometimes too noisy).
-
-## Enable per-event streaming (Phase 8)
-
-The 15-minute SSH-pull collector samples state on a cron tick. Streaming complements it: the monitor opens a long-lived SSH session per server that runs `tail -F` over Frappe and MariaDB log files, and pushes each new line into Loki as it arrives — no per-event delay. Design rationale + tradeoffs: [`docs/2026-05-07/2.md`](../2026-05-07/2.md).
-
-This is opt-in. Both pipelines can run side by side; the streamer doesn't replace the cron pull.
-
-### One-time per bench
-
-1. **Deploy the streamer script** to the SSH user's home on each bench. The script ships embedded in the monitor binary; the simplest copy path:
-
-   ```bash
-   # from the monitor host:
-   ssh frappe-monitor@<bench> "mkdir -p ~/.frappe-monitor"
-   # the script body lives at scripts/frappe-monitor-stream.sh in the repo
-   scp scripts/frappe-monitor-stream.sh frappe-monitor@<bench>:~/.frappe-monitor/stream.sh
-   ssh frappe-monitor@<bench> "chmod +x ~/.frappe-monitor/stream.sh"
-   ```
-
-2. **Make sure the SSH user can read every file in `streaming.files`.** Frappe's own logs (`web.log`, `web.error.log`, etc.) are usually fine; the MariaDB slow query log typically needs a one-time permissions adjustment:
-
-   ```bash
-   sudo chmod g+r /var/log/mysql/mariadb-slow.log
-   sudo usermod -a -G adm frappe-monitor
-   ```
-
-3. (Optional) Lower MariaDB's `long_query_time` so slow queries actually land in the slow log. `0.5` (= 500ms) is a sane default — at this threshold MariaDB documents <0.1% overhead.
-
-### Turn it on
-
-In `/etc/frappe-monitor/monitor.yaml`:
+`bench_paths` is optional. An empty list enables standard-path discovery. The
+monitor collects immediately after registration and on every scheduler tick.
+The embedded collector is sent to `bash -s` over SSH stdin, so there is no
+collector deployment or remote version to maintain.
+
+## 3. Use the monitoring console
+
+- **Overview** shows fleet reachability, bench/site counts, current incidents,
+  and the targets that need attention.
+- **Servers** is a searchable inventory with UI-managed onboarding. Server
+  detail shows CPU, memory, disks, load, network, uptime, and top processes;
+  **Configure** edits or removes the monitor-local target record.
+- **Benches** shows Frappe version, configured web/background-worker capacity,
+  Supervisor state, actual web and queue-worker processes, per-process
+  CPU/RSS/uptime, RQ busy/idle occupancy, and Redis queue depth.
+- **Sites** shows current health, HTTP status, response time, failure reason,
+  request/job performance, busiest API routes, correlated database slow-query
+  charts, readable error signals, and shortcuts into related logs.
+- **Logs** searches Loki across server, bench, site, and log type. It supports
+  text filtering, live/pause, time-window selection, result limits, and export.
+- **Incidents** shows current failures, durable fire/recovery history, duration,
+  affected target, related-log links, and configured detection rules.
+- **Settings** manages the whole local control plane: storage, SSH, collection,
+  VictoriaMetrics/Loki, console security, Telegram, custom rules, and log
+  streaming. Its runtime card shows live uptime, heap/goroutines, stream
+  connectivity, and buffer usage without relying on the metrics backend.
+  Connectivity can be tested before saving. Saved service settings take effect
+  after the restart command shown in the UI.
+
+The global timeline controls every historical query. Browser polling is
+completion-based, so a slow backend cannot create overlapping refresh storms.
+
+## 4. Service and worker interpretation
+
+Frappe has two distinct forms of worker capacity:
+
+- **Web/Gunicorn workers:** the monitor reads configured capacity from
+  `common_site_config.json` and enumerates running Gunicorn processes. Stock
+  Gunicorn does not expose an exact request-by-request busy/free state through
+  process inspection, so the console does not invent one.
+- **RQ background workers:** Redis maintains a worker registry with worker
+  state and current-job identity. The monitor therefore reports exact
+  registered, busy, and idle RQ counts and alerts when registered workers are
+  present but none are idle.
+
+Supervisor service groups and individual bench processes are both inspected.
+For development `bench start` installations, the process inventory also
+identifies Redis, web, Socket.IO, scheduler, watcher, RQ, event-dispatcher, and
+JSON-worker units. Werkzeug reloaders and RQ work-horse children are collapsed
+into their owning service so they do not inflate capacity. Stopped/failed
+service state and complete RQ saturation are bundled critical alert rules.
+
+## 5. Enable searchable logs
+
+Open **Settings → Log streaming**, enable the streamer, and save/restart. Empty
+manual file overrides enable standard-path discovery. The equivalent YAML is:
 
 ```yaml
 streaming:
   enabled: true
-  script_path: /home/frappe-monitor/.frappe-monitor/stream.sh
+  files: []
+```
+
+With an empty list, the monitor discovers `<bench>/logs/*.log` and
+`<bench>/sites/*/logs/*.log` over read-only SSH. It then runs the embedded
+streamer through SSH stdin. New files start at EOF; persisted device/inode and
+byte offsets resume known files after reconnect or monitor restart.
+
+For a non-standard file, configure it explicitly:
+
+```yaml
+streaming:
+  enabled: true
   files:
-    - id: web
-      path: /home/frappe/frappe-bench/logs/web.log
-    - id: err
-      path: /home/frappe/frappe-bench/logs/web.error.log
-    - id: worker_err
-      path: /home/frappe/frappe-bench/logs/worker.error.log
-    - id: schedule_err
-      path: /home/frappe/frappe-bench/logs/schedule.error.log
-    - id: slowq
-      path: /var/log/mysql/mariadb-slow.log
+    - server_id: 1
+      id: prod_custom_error
+      path: /srv/bench-prod/logs/custom.error.log
+      log_type: error
+      bench: bench-prod
 ```
 
-Restart: `sudo systemctl restart frappe-monitor`.
+The stream reads existing files only. It does not enable logging, rotate a
+file, or alter Frappe.
 
-### Verify it's working
+### Per-site request and job telemetry
 
-The monitor emits two stream-health metrics to VictoriaMetrics:
+Frappe's existing `monitor` setting must be enabled by an operator on the
+target bench or site. Frappe Monitor reports this prerequisite on every site
+and does not change it. Once Frappe writes `logs/monitor.json.log`, automatic
+log discovery ingests each request/job event and derives bounded per-site
+metrics for request rate, p95 latency, HTTP errors, route performance, job
+duration, and queue wait. Request UUIDs and raw paths remain in Loki, never in
+time-series labels.
 
-```promql
-# Should be 1 for each streaming server. 0 = disconnected.
-frappe_stream_connected
+### Site-correlated slow queries
 
-# Lag (seconds) between the most recent line and now, per server.
-# Spikes during a Loki blip; should hover near 0 in steady state.
-frappe_stream_lag_seconds
+Slow-query logging must likewise be enabled in MariaDB/MySQL or PostgreSQL by
+the database operator, and the target SSH account must be able to read the
+resulting `*slow*.log`. The monitor discovers only explicitly slow-log-looking
+files. It hashes each site's database and user identity on the target, joins
+slow events to the matching site, and produces a safe structured event for the
+site dashboard. Database names, users, passwords, and SQL are not copied into
+metrics. Exact SQL stays in the original host-level Loki log and can be reached
+through trace search when `FRAPPE_TRACE_ID` is present.
+
+## 6. Enable Telegram incidents
+
+Open **Settings → Alerts**, enter the BotFather token and one chat ID per line,
+use **Test bot**, enable the alert engine, and save/restart. The equivalent YAML
+is:
+
+```yaml
+alerts:
+  enabled: true
+  evaluation_interval_seconds: 60
+  notify_repeat_seconds: 3600
+  telegram:
+    bot_token: "<bot token>"
+    chat_ids: ["<chat id>"]
+    send_timeout_seconds: 5
 ```
 
-Logs land in Loki under stream labels `{server="id-<N>", log_type=<id>, monitor=<monitor_id>}`. Quick LogQL sanity check:
+Bundled rules cover unreachable servers, nearly full disks, sustained CPU,
+memory and swap pressure, unhealthy or slow sites, high Redis queues, complete
+RQ saturation, missing Gunicorn capacity, failed bench services, slow per-site
+requests/jobs/database queries, high HTTP 5xx rates, and log-stream
+disconnection. Fires, configured repeats, and recoveries are delivered to
+Telegram. Each episode remains in SQLite incident history after recovery.
 
-```logql
-{server="id-1", log_type="err"}
-```
+## 7. Metrics emitted
 
-A successful first connect logs `streamer: launched session` and `streamer: bench version` at info level; a misconfigured `script_path` shows `streamer: session error` repeatedly.
+| Prefix | Scope | Examples |
+|---|---|---|
+| `frappe_server_*` | server, mount, interface | reachability, CPU counters, memory, disk, load, network, uptime |
+| `frappe_bench_*` | server + bench + queue/service | apps, configured workers, Supervisor, RQ busy/idle, queue depth, service PID/state/CPU/RSS/uptime |
+| `frappe_site_*` | server + bench + site | internal localhost health, HTTP status, response time, failure reason |
+| `frappe_site_public_*` | server + bench + site | public DNS/TLS/HTTP health, response time, failure reason, certificate expiry |
+| `frappe_site_request_*`, `frappe_site_job_*` | server + bench + site | request/job duration, rate inputs, status/error, route/method and queue wait |
+| `frappe_database_slow_query_*` | server + opaque identity | duration, lock time, rows sent/examined, engine and operation |
+| `frappe_stream_*` | server | stream connection state |
 
-### Stop it without restarting
+Every metric carries the canonical server name. Bench and site labels preserve
+the hierarchy used by the UI and alert rules.
 
-Set `streaming.enabled: false`, restart. The cron-pull pipeline keeps running. Per-server toggles are post-v1; today it's all-or-nothing.
+## 8. Local registry changes
+
+`PATCH` and `DELETE /api/v1/servers/{id}` affect monitor-local configuration.
+They can change where future read-only SSH inspection connects or remove a
+target from the registry; they never mutate the target. Existing
+VictoriaMetrics and Loki data ages out according to backend retention.

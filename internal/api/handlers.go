@@ -3,17 +3,21 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
-	"frappe-monitor/scripts"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
+	"frappe-monitor/scripts"
 )
 
 type serverHandlers struct {
@@ -25,17 +29,18 @@ type serverHandlers struct {
 	// scheduler can pick up new servers (and stop calling deleted
 	// ones) without a process restart. Nil = no-op.
 	onServerCreated func(serverID int)
+	onServerUpdated func(serverID int)
 	onServerDeleted func(serverID int)
 }
 
 func (h *serverHandlers) mount(r chi.Router) {
 	r.Post("/servers", h.create)
 	r.Get("/servers", h.list)
+	r.Post("/servers/test-connection", h.testDraftConnection)
 	r.Get("/servers/{id}", h.get)
 	r.Patch("/servers/{id}", h.patch)
 	r.Delete("/servers/{id}", h.delete)
 	r.Post("/servers/{id}/test-connection", h.testConnection)
-	r.Post("/servers/{id}/deploy-collector", h.deployCollector)
 	r.Post("/servers/{id}/refresh-system", h.refreshSystem)
 	r.Get("/servers/{id}/system", h.getSystem)
 }
@@ -48,12 +53,11 @@ func tgtFromServer(s *storage.Server) sshpkg.Target {
 }
 
 // statusForSSHError maps the ssh package's typed sentinels to HTTP status
-// codes for write-style endpoints (deploy-collector, future scheduler-
-// triggered ops surfaced via API). Diagnostic endpoints (test-connection)
+// codes for SSH-backed inspection endpoints. Diagnostic endpoints (test-connection)
 // use a different convention (200-always).
 func statusForSSHError(err error) int {
 	switch {
-	case errors.Is(err, sshpkg.ErrAuth), errors.Is(err, sshpkg.ErrDial):
+	case errors.Is(err, sshpkg.ErrAuth), errors.Is(err, sshpkg.ErrDial), errors.Is(err, sshpkg.ErrHostKey):
 		return http.StatusBadGateway // 502 — couldn't reach upstream
 	case errors.Is(err, sshpkg.ErrTimeout):
 		return http.StatusGatewayTimeout // 504
@@ -70,6 +74,99 @@ type createServerReq struct {
 	SSHKeyPath string            `json:"ssh_key_path"`
 	BenchPaths []string          `json:"bench_paths,omitempty"`
 	Labels     map[string]string `json:"labels,omitempty"`
+}
+
+const maxJSONBodyBytes = 1 << 20
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateTextField(name, value string, maxLen int, allowEmpty bool) error {
+	if value == "" && allowEmpty {
+		return nil
+	}
+	if value == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if len(value) > maxLen {
+		return fmt.Errorf("%s must be at most %d bytes", name, maxLen)
+	}
+	if strings.ContainsAny(value, "\x00\r\n") {
+		return fmt.Errorf("%s contains an invalid control character", name)
+	}
+	return nil
+}
+
+func validateHostname(host string) error {
+	if err := validateTextField("hostname", host, 253, false); err != nil {
+		return err
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return nil
+	}
+	if strings.ContainsAny(host, " \t/:@\\") || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return errors.New("hostname must be a DNS name or IP address without a port")
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return errors.New("hostname contains an invalid DNS label")
+		}
+		for _, char := range label {
+			if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+				(char < '0' || char > '9') && char != '-' && char != '_' {
+				return errors.New("hostname contains an invalid DNS character")
+			}
+		}
+	}
+	return nil
+}
+
+func validateBenchPaths(paths []string) error {
+	if len(paths) > 64 {
+		return errors.New("bench_paths must contain at most 64 paths")
+	}
+	seen := make(map[string]struct{}, len(paths))
+	for i, path := range paths {
+		if !filepath.IsAbs(path) {
+			return fmt.Errorf("bench_paths[%d] must be absolute", i)
+		}
+		if len(path) > 4096 || strings.ContainsAny(path, ":\x00\r\n") {
+			return fmt.Errorf("bench_paths[%d] is invalid", i)
+		}
+		if _, exists := seen[path]; exists {
+			return fmt.Errorf("bench_paths contains duplicate %q", path)
+		}
+		seen[path] = struct{}{}
+	}
+	return nil
+}
+
+func validateLabels(labels map[string]string) error {
+	if len(labels) > 32 {
+		return errors.New("labels must contain at most 32 entries")
+	}
+	for key, value := range labels {
+		if err := validateTextField("label key", key, 64, false); err != nil {
+			return err
+		}
+		if err := validateTextField("label value", value, 256, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type serverDTO struct {
@@ -112,12 +209,21 @@ func toDTO(s *storage.Server) serverDTO {
 
 func (h *serverHandlers) create(w http.ResponseWriter, r *http.Request) {
 	var req createServerReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if req.Name == "" || req.Hostname == "" || req.SSHKeyPath == "" {
-		writeErr(w, http.StatusBadRequest, "name, hostname, ssh_key_path are required")
+	req.Name = strings.TrimSpace(req.Name)
+	req.Hostname = strings.TrimSpace(req.Hostname)
+	req.SSHUser = strings.TrimSpace(req.SSHUser)
+	req.SSHKeyPath = strings.TrimSpace(req.SSHKeyPath)
+	req.BenchPaths = cleanBenchPaths(req.BenchPaths)
+	if err := validateTextField("name", req.Name, 128, false); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateHostname(req.Hostname); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.SSHUser == "" {
@@ -126,14 +232,44 @@ func (h *serverHandlers) create(w http.ResponseWriter, r *http.Request) {
 	if req.SSHPort == 0 {
 		req.SSHPort = 22
 	}
+	if req.SSHPort < 1 || req.SSHPort > 65535 {
+		writeErr(w, http.StatusBadRequest, "ssh_port must be between 1 and 65535")
+		return
+	}
+	if err := validateTextField("ssh_user", req.SSHUser, 64, false); err != nil || strings.ContainsAny(req.SSHUser, " \t") {
+		if err == nil {
+			err = errors.New("ssh_user must not contain whitespace")
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateTextField("ssh_key_path", req.SSHKeyPath, 4096, false); err != nil || !filepath.IsAbs(req.SSHKeyPath) {
+		if err == nil {
+			err = errors.New("ssh_key_path must be absolute")
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateBenchPaths(req.BenchPaths); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateLabels(req.Labels); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	s, err := h.store.CreateServer(r.Context(), storage.NewServer{
 		Name: req.Name, Hostname: req.Hostname, SSHUser: req.SSHUser,
 		SSHPort: req.SSHPort, SSHKeyPath: req.SSHKeyPath,
-		BenchPaths: cleanBenchPaths(req.BenchPaths),
+		BenchPaths: req.BenchPaths,
 		Labels:     req.Labels,
 	})
 	if errors.Is(err, storage.ErrDuplicateHostname) {
 		writeErr(w, http.StatusConflict, "hostname already exists")
+		return
+	}
+	if errors.Is(err, storage.ErrDuplicateName) {
+		writeErr(w, http.StatusConflict, "server name already exists")
 		return
 	}
 	if err != nil {
@@ -198,18 +334,62 @@ func (h *serverHandlers) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req patchServerReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if req.SSHPort != nil && *req.SSHPort <= 0 {
-		writeErr(w, http.StatusBadRequest, "ssh_port must be positive")
+	if req.Name != nil {
+		*req.Name = strings.TrimSpace(*req.Name)
+		if err := validateTextField("name", *req.Name, 128, false); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.Hostname != nil {
+		*req.Hostname = strings.TrimSpace(*req.Hostname)
+		if err := validateHostname(*req.Hostname); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.SSHUser != nil {
+		*req.SSHUser = strings.TrimSpace(*req.SSHUser)
+		if err := validateTextField("ssh_user", *req.SSHUser, 64, false); err != nil || strings.ContainsAny(*req.SSHUser, " \t") {
+			if err == nil {
+				err = errors.New("ssh_user must not contain whitespace")
+			}
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.SSHKeyPath != nil {
+		*req.SSHKeyPath = strings.TrimSpace(*req.SSHKeyPath)
+		if err := validateTextField("ssh_key_path", *req.SSHKeyPath, 4096, false); err != nil || !filepath.IsAbs(*req.SSHKeyPath) {
+			if err == nil {
+				err = errors.New("ssh_key_path must be absolute")
+			}
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.SSHPort != nil && (*req.SSHPort < 1 || *req.SSHPort > 65535) {
+		writeErr(w, http.StatusBadRequest, "ssh_port must be between 1 and 65535")
 		return
 	}
 	var benchPathsClean *[]string
 	if req.BenchPaths != nil {
 		c := cleanBenchPaths(*req.BenchPaths)
+		if err := validateBenchPaths(c); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		benchPathsClean = &c
+	}
+	if req.Labels != nil {
+		if err := validateLabels(*req.Labels); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	updated, err := h.store.UpdateServer(r.Context(), id, storage.UpdateServer{
 		Name:       req.Name,
@@ -228,9 +408,16 @@ func (h *serverHandlers) patch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "hostname already exists")
 		return
 	}
+	if errors.Is(err, storage.ErrDuplicateName) {
+		writeErr(w, http.StatusConflict, "server name already exists")
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.onServerUpdated != nil {
+		h.onServerUpdated(id)
 	}
 	writeJSON(w, http.StatusOK, toDTO(updated))
 }
@@ -291,6 +478,13 @@ type testConnectionResp struct {
 	ErrorKind string `json:"error_kind,omitempty"` // "auth" | "dial" | "timeout" | "unknown"
 }
 
+type testDraftConnectionReq struct {
+	Hostname   string `json:"hostname"`
+	SSHUser    string `json:"ssh_user"`
+	SSHPort    int    `json:"ssh_port"`
+	SSHKeyPath string `json:"ssh_key_path"`
+}
+
 // classifyPingError maps the ssh package's typed sentinels into the
 // stable string set returned to clients. Unknown errors land in "unknown"
 // rather than panicking, so the field is always meaningful when present.
@@ -302,9 +496,64 @@ func classifyPingError(err error) string {
 		return "dial"
 	case errors.Is(err, sshpkg.ErrTimeout):
 		return "timeout"
+	case errors.Is(err, sshpkg.ErrHostKey):
+		return "host_key"
+	case errors.Is(err, sshpkg.ErrKey):
+		return "key"
 	default:
 		return "unknown"
 	}
+}
+
+// testDraftConnection lets the onboarding form verify credentials before a
+// server record exists. It executes only `echo ok`; no target state is changed.
+func (h *serverHandlers) testDraftConnection(w http.ResponseWriter, r *http.Request) {
+	var req testDraftConnectionReq
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	req.Hostname = strings.TrimSpace(req.Hostname)
+	req.SSHUser = strings.TrimSpace(req.SSHUser)
+	req.SSHKeyPath = strings.TrimSpace(req.SSHKeyPath)
+	if err := validateHostname(req.Hostname); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.SSHUser == "" {
+		req.SSHUser = "monitor"
+	}
+	if req.SSHPort == 0 {
+		req.SSHPort = 22
+	}
+	if req.SSHPort < 1 || req.SSHPort > 65535 {
+		writeErr(w, http.StatusBadRequest, "ssh_port must be between 1 and 65535")
+		return
+	}
+	if err := validateTextField("ssh_user", req.SSHUser, 64, false); err != nil || strings.ContainsAny(req.SSHUser, " \t") {
+		if err == nil {
+			err = errors.New("ssh_user must not contain whitespace")
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateTextField("ssh_key_path", req.SSHKeyPath, 4096, false); err != nil || !filepath.IsAbs(req.SSHKeyPath) {
+		if err == nil {
+			err = errors.New("ssh_key_path must be absolute")
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	latency, err := sshpkg.Ping(r.Context(), h.exec, sshpkg.Target{
+		Host: req.Hostname, Port: req.SSHPort, User: req.SSHUser, KeyPath: req.SSHKeyPath,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusOK, testConnectionResp{
+			Reachable: false, Error: err.Error(), ErrorKind: classifyPingError(err),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, testConnectionResp{Reachable: true, LatencyMs: latency.Milliseconds()})
 }
 
 func (h *serverHandlers) testConnection(w http.ResponseWriter, r *http.Request) {
@@ -346,51 +595,6 @@ func (h *serverHandlers) testConnection(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, testConnectionResp{
 		Reachable: true,
 		LatencyMs: lat.Milliseconds(),
-	})
-}
-
-type deployCollectorResp struct {
-	Deployed bool `json:"deployed"`
-	// Version is the version of the *deployed* collector — the value
-	// from the embedded scripts.CollectorVersion(). It is not probed
-	// from the remote target; the SSH exec returning success is taken
-	// as proof that the deployment landed.
-	Version string `json:"version"`
-}
-
-// deployCollector pipes the embedded collector script to the target via
-// SSH and chmods it executable. Returns 200 on success with the deployed
-// version. SSH failures map to 502 / 504 / 500 per statusForSSHError.
-func (h *serverHandlers) deployCollector(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(chi.URLParam(r, "id"))
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	srv, err := h.store.GetServer(r.Context(), id)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "server not found")
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// Install into the SSH user's home dir so deploy doesn't need root.
-	// mkdir -p is idempotent; chmod is run after the write completes so
-	// a partial script can't be exec'd. $HOME expands on the remote
-	// shell side as the SSH user.
-	const cmd = `mkdir -p "$HOME/.frappe-monitor" && ` +
-		`cat > "$HOME/.frappe-monitor/frappe-monitor-collect.sh" && ` +
-		`chmod +x "$HOME/.frappe-monitor/frappe-monitor-collect.sh"`
-	if _, err := h.exec.RunWithInput(r.Context(), tgtFromServer(srv), cmd, scripts.CollectorScript); err != nil {
-		writeErr(w, statusForSSHError(err), "deploy failed: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, deployCollectorResp{
-		Deployed: true,
-		Version:  scripts.CollectorVersion(),
 	})
 }
 

@@ -9,13 +9,20 @@ import (
 
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (r *statusRecorder) WriteHeader(c int) {
+	if r.wroteHeader {
+		return
+	}
+	r.wroteHeader = true
 	r.status = c
 	r.ResponseWriter.WriteHeader(c)
 }
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

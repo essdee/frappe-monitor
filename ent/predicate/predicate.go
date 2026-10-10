@@ -6,6 +6,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 )
 
+// AlertIncident is the predicate function for alertincident builders.
+type AlertIncident func(*sql.Selector)
+
 // AlertState is the predicate function for alertstate builders.
 type AlertState func(*sql.Selector)
 

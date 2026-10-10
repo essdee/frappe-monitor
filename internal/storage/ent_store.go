@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"frappe-monitor/ent"
+	entalertincident "frappe-monitor/ent/alertincident"
 	entalertstate "frappe-monitor/ent/alertstate"
 	entlogcursor "frappe-monitor/ent/logcursor"
 	entserver "frappe-monitor/ent/server"
@@ -31,13 +33,96 @@ func OpenEntStore(ctx context.Context, dsn string) (*EntStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(1) // SQLite: one writer. WAL still allows concurrent readers via separate conn later.
+	// WAL allows readers to proceed while the single SQLite writer commits.
+	// A one-connection pool serialized dashboard reads behind slow writes and
+	// became visible once alerts, cursors, and snapshots ran concurrently.
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(4)
+	if renamed, err := repairDuplicateServerNames(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("repair duplicate server names: %w", err)
+	} else if renamed > 0 {
+		slog.Warn("storage: renamed duplicate server labels before unique-index migration", "count", renamed)
+	}
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := ent.NewClient(ent.Driver(drv))
 	if err := client.Schema.Create(ctx); err != nil {
+		_ = client.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	return &EntStore{client: client, sqlDB: db}, nil
+}
+
+// repairDuplicateServerNames is a one-time compatibility migration for
+// databases created before `servers.name` became the canonical unique
+// telemetry label. The first row keeps its name; later duplicates receive a
+// deterministic `-server-ID` suffix that cannot collide with any existing
+// value. It runs before Ent creates the unique index.
+func repairDuplicateServerNames(ctx context.Context, db *sql.DB) (int, error) {
+	var exists int
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='servers'`).Scan(&exists); err != nil {
+		return 0, err
+	}
+	if exists == 0 {
+		return 0, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `SELECT id, name FROM servers ORDER BY id`)
+	if err != nil {
+		return 0, err
+	}
+	type row struct {
+		id   int
+		name string
+	}
+	var all []row
+	used := map[string]struct{}{}
+	for rows.Next() {
+		var item row
+		if err := rows.Scan(&item.id, &item.name); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		all = append(all, item)
+		used[item.name] = struct{}{}
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	seen := map[string]struct{}{}
+	renamed := 0
+	for _, item := range all {
+		if _, duplicate := seen[item.name]; !duplicate {
+			seen[item.name] = struct{}{}
+			continue
+		}
+		candidate := fmt.Sprintf("%s-server-%d", item.name, item.id)
+		for suffix := 2; ; suffix++ {
+			if _, collision := used[candidate]; !collision {
+				break
+			}
+			candidate = fmt.Sprintf("%s-server-%d-%d", item.name, item.id, suffix)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE servers SET name = ? WHERE id = ?`, candidate, item.id); err != nil {
+			return 0, err
+		}
+		used[candidate] = struct{}{}
+		renamed++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return renamed, nil
 }
 
 func (s *EntStore) Close() error {
@@ -60,6 +145,9 @@ func (s *EntStore) CreateServer(ctx context.Context, in NewServer) (*Server, err
 	}
 	created, err := b.Save(ctx)
 	if err != nil {
+		if isUniqueFieldViolation(err, "name") {
+			return nil, ErrDuplicateName
+		}
 		if isUniqueHostnameViolation(err) {
 			return nil, ErrDuplicateHostname
 		}
@@ -70,14 +158,25 @@ func (s *EntStore) CreateServer(ctx context.Context, in NewServer) (*Server, err
 
 // isUniqueHostnameViolation detects the SQLite UNIQUE constraint failure on
 // servers.hostname. ent does not expose typed errors per-column, so this
-// matches on the error string. The combination of ent.IsConstraintError +
-// substring "hostname" is specific enough since no other column shares that
-// substring in our schema.
+// tokenizes the driver error and matches the exact qualified column name.
 func isUniqueHostnameViolation(err error) bool {
+	return isUniqueFieldViolation(err, "hostname")
+}
+
+func isUniqueFieldViolation(err error, field string) bool {
 	if !ent.IsConstraintError(err) {
 		return false
 	}
-	return strings.Contains(err.Error(), "hostname")
+	want := "servers." + field
+	for _, token := range strings.FieldsFunc(err.Error(), func(r rune) bool {
+		return !(r == '.' || r == '_' || r >= 'a' && r <= 'z' ||
+			r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+	}) {
+		if token == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *EntStore) GetServer(ctx context.Context, id int) (*Server, error) {
@@ -137,15 +236,18 @@ func (s *EntStore) UpdateServer(ctx context.Context, id int, in UpdateServer) (*
 		if isUniqueHostnameViolation(err) {
 			return nil, ErrDuplicateHostname
 		}
+		if isUniqueFieldViolation(err, "name") {
+			return nil, ErrDuplicateName
+		}
 		return nil, err
 	}
 	return entToServer(row), nil
 }
 
-// DeleteServer removes the server. The schema's edge cascade removes
-// associated log cursors. Alert states (Phase 6) are not edge-tied;
-// they age out on the next reconciliation cycle when their series
-// disappears from the rule's result.
+// DeleteServer removes the server. Schema edge cascades remove associated
+// cursors and system snapshots. The evaluator separately filters/prunes alert
+// state by the authoritative server registry because alerts store VM labels,
+// not a relational server edge.
 func (s *EntStore) DeleteServer(ctx context.Context, id int) error {
 	err := s.client.Server.DeleteOneID(id).Exec(ctx)
 	if err != nil {
@@ -187,10 +289,11 @@ func (s *EntStore) GetLogCursor(ctx context.Context, serverID int, logPath strin
 		return nil, err
 	}
 	out := &LogCursor{
-		ServerID:   serverID,
-		LogPath:    row.LogPath,
-		ByteOffset: row.ByteOffset,
-		LastSeenAt: row.LastSeenAt,
+		ServerID:     serverID,
+		LogPath:      row.LogPath,
+		FileIdentity: row.FileIdentity,
+		ByteOffset:   row.ByteOffset,
+		LastSeenAt:   row.LastSeenAt,
 	}
 	return out, nil
 }
@@ -209,12 +312,14 @@ func (s *EntStore) UpsertLogCursor(ctx context.Context, c LogCursor) error {
 	if ent.IsNotFound(err) {
 		_, err = s.client.LogCursor.Create().
 			SetLogPath(c.LogPath).
+			SetFileIdentity(c.FileIdentity).
 			SetByteOffset(c.ByteOffset).
 			SetServerID(c.ServerID).
 			Save(ctx)
 		return err
 	}
 	_, err = s.client.LogCursor.UpdateOneID(existing.ID).
+		SetFileIdentity(c.FileIdentity).
 		SetByteOffset(c.ByteOffset).
 		SetLastSeenAt(time.Now().UTC()).
 		Save(ctx)
@@ -260,8 +365,16 @@ func (s *EntStore) UpsertSystemSnapshot(ctx context.Context, in SystemSnapshot) 
 		return err
 	}
 	if ent.IsNotFound(err) {
+		payload := in.Payload
+		if payload == nil {
+			// payload is NOT NULL in the schema, but the first capture can
+			// legitimately fail before any good inventory exists. Store an
+			// empty blob alongside last_error; GET intentionally omits invalid
+			// or empty JSON until a successful refresh replaces it.
+			payload = []byte{}
+		}
 		_, err = s.client.SystemSnapshot.Create().
-			SetPayload(in.Payload).
+			SetPayload(payload).
 			SetLastError(in.LastError).
 			SetServerID(in.ServerID).
 			Save(ctx)
@@ -386,6 +499,100 @@ func entToAlertState(e *ent.AlertState) *AlertState {
 		out.Labels = map[string]string{}
 	}
 	return out
+}
+
+// UpsertOpenAlertIncident records the current value of an existing open
+// episode or creates a new episode after a previous one was resolved.
+func (s *EntStore) UpsertOpenAlertIncident(ctx context.Context, in AlertIncident) (*AlertIncident, error) {
+	existing, err := s.client.AlertIncident.Query().
+		Where(entalertincident.RuleName(in.RuleName)).
+		Where(entalertincident.Fingerprint(in.Fingerprint)).
+		Where(entalertincident.StatusEQ(entalertincident.StatusFiring)).
+		Order(entalertincident.ByStartedAt(entsql.OrderDesc())).
+		First(ctx)
+	if err != nil && !ent.IsNotFound(err) {
+		return nil, err
+	}
+	if ent.IsNotFound(err) {
+		create := s.client.AlertIncident.Create().
+			SetRuleName(in.RuleName).
+			SetFingerprint(in.Fingerprint).
+			SetSeverity(firstNonEmpty(in.Severity, "warning")).
+			SetStatus(entalertincident.StatusFiring).
+			SetValue(in.Value)
+		if in.Labels != nil {
+			create.SetLabels(in.Labels)
+		}
+		if !in.StartedAt.IsZero() {
+			create.SetStartedAt(in.StartedAt)
+		}
+		if in.LastNotifiedAt != nil && !in.LastNotifiedAt.IsZero() {
+			create.SetLastNotifiedAt(*in.LastNotifiedAt)
+		}
+		row, err := create.Save(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return entToAlertIncident(row), nil
+	}
+
+	update := s.client.AlertIncident.UpdateOneID(existing.ID).
+		SetValue(in.Value).
+		SetSeverity(firstNonEmpty(in.Severity, existing.Severity))
+	if in.Labels != nil {
+		update.SetLabels(in.Labels)
+	}
+	if in.LastNotifiedAt != nil && !in.LastNotifiedAt.IsZero() {
+		update.SetLastNotifiedAt(*in.LastNotifiedAt)
+	}
+	row, err := update.Save(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return entToAlertIncident(row), nil
+}
+
+func (s *EntStore) ResolveOpenAlertIncident(ctx context.Context, ruleName, fingerprint string, value float64, resolvedAt time.Time) error {
+	_, err := s.client.AlertIncident.Update().
+		Where(entalertincident.RuleName(ruleName)).
+		Where(entalertincident.Fingerprint(fingerprint)).
+		Where(entalertincident.StatusEQ(entalertincident.StatusFiring)).
+		SetStatus(entalertincident.StatusResolved).
+		SetValue(value).
+		SetResolvedAt(resolvedAt).
+		Save(ctx)
+	return err
+}
+
+func (s *EntStore) ListAlertIncidents(ctx context.Context, limit int) ([]*AlertIncident, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 250
+	}
+	rows, err := s.client.AlertIncident.Query().
+		Order(entalertincident.ByStartedAt(entsql.OrderDesc())).
+		Limit(limit).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*AlertIncident, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, entToAlertIncident(row))
+	}
+	return out, nil
+}
+
+func entToAlertIncident(e *ent.AlertIncident) *AlertIncident {
+	labels := e.Labels
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	return &AlertIncident{
+		ID: e.ID, RuleName: e.RuleName, Fingerprint: e.Fingerprint,
+		Severity: e.Severity, Labels: labels, Status: string(e.Status), Value: e.Value,
+		StartedAt: e.StartedAt, ResolvedAt: e.ResolvedAt,
+		LastNotifiedAt: e.LastNotifiedAt, UpdatedAt: e.UpdatedAt,
+	}
 }
 
 func firstNonEmpty(a, b string) string {

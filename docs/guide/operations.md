@@ -88,6 +88,7 @@ sudo ./deploy/install.sh
 The install script:
 
 - Rebuilds the binary (npm + vite + go).
+- Validates the production config with the candidate binary before changing the installation.
 - Atomically replaces `/usr/local/bin/frappe-monitor` (so an in-flight upgrade can't land a half-deployed binary).
 - Reinstalls systemd units only if changed.
 - Restarts `frappe-monitor.service`.
@@ -95,17 +96,25 @@ The install script:
 
 Roll back: `git checkout <previous-tag-or-sha>` then re-run the installer. SQLite migrations are forward-only via `ent` — major schema changes get a release note in `docs/YYYY-MM-DD/N.md` with the rollback story.
 
+Validate an edited config without starting services or opening network/SSH
+connections:
+
+```bash
+sudo /usr/local/bin/frappe-monitor \
+  --config /etc/frappe-monitor/monitor.yaml --check-config
+```
+
 ## Backups
 
 Three things to back up (in priority order):
 
 1. **`/etc/frappe-monitor/monitor.yaml`** — your config. Tiny.
-2. **`/var/lib/frappe-monitor/monitor.db`** — server registry + log cursors. SQLite, single file, restartable.
+2. **`/var/lib/frappe-monitor/monitor.db`** — server registry, snapshots, log cursors, and alert reconciliation state.
 3. **VM + Loki volumes** — historical metrics + logs. Larger; restore is "best-effort" since the collector will repopulate from the next cycle anyway.
 
 ```bash
-# Snapshot config + sqlite (consistent — sqlite uses WAL but a file copy of the
-# main DB is atomic enough for backup; for absolute correctness use `.backup`).
+# Snapshot config + SQLite. Use SQLite's backup command because copying only
+# the main file while WAL writes are active can omit committed pages.
 sudo install -m 0640 /etc/frappe-monitor/monitor.yaml /backup/monitor.yaml.$(date +%F)
 sudo sqlite3 /var/lib/frappe-monitor/monitor.db ".backup '/backup/monitor.db.$(date +%F)'"
 
@@ -120,12 +129,12 @@ Restore: reverse the order (extract volumes, replace sqlite/config, start servic
 
 ## Capacity & sizing
 
-| Workload | Per pull cycle (15 min default) |
+| Workload | Per pull cycle (60s default) |
 |---|---|
-| SSH connections | 1 per server (pooled, max 2 concurrent per host) |
+| SSH sessions | 1 short command per server; plus 1 persistent session when streaming is selected |
 | Bytes ingested to VM | ~5 KB per server + ~3 KB per bench + ~2 KB per site |
-| Bytes ingested to Loki | depends on log volume; bounded by `MaxBytesPerCycle` (1 MiB per file) |
-| SQLite writes | one row per server status update + one row per log cursor |
+| Bytes ingested to Loki | depends on configured streamed files and their append rate |
+| SQLite writes | server status per pull; cursor per successful live-log batch; alert transitions |
 
 Disk growth (rough — heavily depends on cardinality):
 
@@ -133,15 +142,20 @@ Disk growth (rough — heavily depends on cardinality):
 - Loki: ~10–500 MB per server per day, depending on log noise.
 - SQLite: stays under 100 MB even with hundreds of servers.
 
-Tune `metrics.vm_url`'s `--retentionPeriod` (set in `deploy/docker-compose.prod.yml`, default 90d) to fit your disk. For ≤ 25 servers on a 50 GB SSD, defaults are fine for years.
+VictoriaMetrics retains 90 days by default (`--retentionPeriod` in
+`deploy/docker-compose.prod.yml`). Loki retains 30 days using the embedded
+Compactor settings in that Compose file; this matches the UI's longest query
+range. Loki retention is time-based rather than a hard disk quota, so monitor
+the volume and shorten both periods for unusually high-volume fleets. For ≤25
+servers on a 50 GB SSD, the defaults leave substantial headroom.
 
 ## Scheduler tuning
 
-`scheduler.default_interval_seconds` (default 900s = 15 min) is the per-server pull cadence. Floor: 60s — anything lower and you're hammering the bench host's SSH daemon. Phase 7 will add a per-server override via the API.
+`scheduler.default_interval_seconds` (default 60s) is the global per-server pull cadence. Pulls also run immediately at startup and target registration. The validated floor is one second, but 60 seconds is the production default; large fleets should increase it or tune `max_parallel` after measuring the collector load. Per-server cadence overrides are not implemented.
 
 `scheduler.max_parallel` (default 10) caps simultaneous pulls. Bump if you have lots of servers and the cycle overlaps; lower if SSHing all of them at once is causing load spikes on the monitor host.
 
-`scheduler.per_job_timeout_seconds` (default 30) — kill any single pull that hangs longer than this. P99 of a healthy cycle is well under 5s; 30s is a generous safety margin.
+`scheduler.per_job_timeout_seconds` (default 45) bounds SSH, parsing, site probes, and the VictoriaMetrics push together. It must be at least the sum of the SSH dial, SSH command, and VM push timeouts. The site collector has its own smaller safety budget and emits unexecuted probes as unknown instead of returning torn output.
 
 ## Resource hardening
 
@@ -157,6 +171,6 @@ Score should be in the 1–3 range (lower is better; 1.0 is "exposed", 9.x is "u
 
 - **Server status badges**: updated on every successful (or failed) pull cycle, persisted to SQLite. Worst case staleness is `default_interval_seconds`.
 - **Server / bench / site charts**: query VM in real time via the monitor's `/api/v1/metrics/query` proxy. The dev compose sets `-search.latencyOffset=0s` so freshly pushed samples are immediately visible; production compose does the same.
-- **Site-detail log feed**: queries Loki via `/api/v1/logs/query`, scoped to `{server, bench, log_type="error"}`. Ingest delay is typically < 5s.
+- **Site-detail log feed**: queries Loki via `/api/v1/logs/query`, scoped to `{server, bench, log_type="error"}`. It requires streaming entries with matching metadata. Ingest delay is typically the configured one-second flush interval.
 
 If a chart shows "no data in this window" but you expect data, see [`troubleshooting.md`](troubleshooting.md).

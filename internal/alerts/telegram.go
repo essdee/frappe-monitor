@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,12 +19,13 @@ import (
 // emoji, bolding, breadcrumb derivation. The evaluator only knows about
 // the rule, the firing sample, and whether this is a fire or a resolve.
 type Notification struct {
-	Severity string            // "critical" | "warning" | "info" | ""
-	RuleName string            // e.g. "site_unhealthy"
-	Body     string            // pre-rendered message (Rule.Message template output)
-	Labels   map[string]string // sample labels — used for the breadcrumb
-	Resolved bool              // true when this is a recovery message
-	Time     time.Time         // when the event happened (fire or clear)
+	Severity    string            // "critical" | "warning" | "info" | ""
+	RuleName    string            // e.g. "site_unhealthy"
+	Fingerprint string            // stable per rule/alert occurrence
+	Body        string            // pre-rendered message (Rule.Message template output)
+	Labels      map[string]string // sample labels — used for the breadcrumb
+	Resolved    bool              // true when this is a recovery message
+	Time        time.Time         // when the event happened (fire or clear)
 }
 
 // Notifier is the outbound side of the alert pipeline. The real
@@ -42,16 +45,61 @@ func (f NotifierFunc) Notify(ctx context.Context, n Notification) error {
 // MultiNotifier fans out to a list of underlying Notifiers. Used to
 // fan out one alert to N admin chat IDs. Errors are joined so a
 // single chat outage doesn't silently drop the others.
-type MultiNotifier []Notifier
+type MultiNotifier struct {
+	targets   []Notifier
+	mu        sync.Mutex
+	delivered map[string]map[int]struct{}
+}
 
-func (m MultiNotifier) Notify(ctx context.Context, n Notification) error {
+func NewMultiNotifier(targets ...Notifier) *MultiNotifier {
+	return &MultiNotifier{targets: append([]Notifier(nil), targets...), delivered: map[string]map[int]struct{}{}}
+}
+
+func (m *MultiNotifier) Notify(ctx context.Context, n Notification) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := notificationDeliveryKey(n)
+	succeeded := m.delivered[key]
+	if succeeded == nil {
+		succeeded = map[int]struct{}{}
+		m.delivered[key] = succeeded
+	}
 	var errs []error
-	for _, x := range m {
+	for i, x := range m.targets {
+		if _, alreadySent := succeeded[i]; alreadySent {
+			continue
+		}
 		if err := x.Notify(ctx, n); err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		succeeded[i] = struct{}{}
+	}
+	if len(errs) == 0 {
+		delete(m.delivered, key)
 	}
 	return errors.Join(errs...)
+}
+
+func notificationDeliveryKey(n Notification) string {
+	if n.Fingerprint != "" {
+		return n.RuleName + "\x00" + n.Fingerprint + "\x00" + fmt.Sprint(n.Resolved)
+	}
+	keys := make([]string, 0, len(n.Labels))
+	for key := range n.Labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(n.RuleName)
+	fmt.Fprintf(&b, "\x00%t", n.Resolved)
+	for _, key := range keys {
+		b.WriteByte(0)
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(n.Labels[key])
+	}
+	return b.String()
 }
 
 // TelegramClient sends one chat's worth of messages.
@@ -60,6 +108,7 @@ type TelegramClient struct {
 	ChatID   string
 	HTTP     *http.Client
 	APIBase  string // override for tests; default https://api.telegram.org
+	Location *time.Location
 }
 
 // NewTelegramClient builds a client targeting a single chat.
@@ -69,6 +118,7 @@ func NewTelegramClient(botToken, chatID string, timeout time.Duration) *Telegram
 		ChatID:   chatID,
 		HTTP:     &http.Client{Timeout: timeout},
 		APIBase:  "https://api.telegram.org",
+		Location: time.UTC,
 	}
 }
 
@@ -98,7 +148,7 @@ func (c *TelegramClient) Notify(ctx context.Context, n Notification) error {
 	}
 	body, _ := json.Marshal(telegramSendReq{
 		ChatID:             c.ChatID,
-		Text:               formatMessage(n),
+		Text:               formatMessageInLocation(n, c.Location),
 		ParseMode:          "HTML",
 		DisableLinkPreview: true,
 	})
@@ -106,12 +156,12 @@ func (c *TelegramClient) Notify(ctx context.Context, n Notification) error {
 	url := fmt.Sprintf("%s/bot%s/sendMessage", api, c.BotToken)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("telegram: build request: %w", err)
+		return fmt.Errorf("telegram: build request: %s", c.redact(err.Error()))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram: send: %w", err)
+		return fmt.Errorf("telegram: send: %s", c.redact(err.Error()))
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -119,16 +169,24 @@ func (c *TelegramClient) Notify(ctx context.Context, n Notification) error {
 	}()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("telegram: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("telegram: HTTP %d: %s", resp.StatusCode,
+			c.redact(strings.TrimSpace(string(body))))
 	}
 	var out telegramSendResp
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return fmt.Errorf("telegram: decode: %w", err)
 	}
 	if !out.OK {
-		return fmt.Errorf("telegram: api error: %s", out.Description)
+		return fmt.Errorf("telegram: api error: %s", c.redact(out.Description))
 	}
 	return nil
+}
+
+func (c *TelegramClient) redact(message string) string {
+	if c.BotToken == "" {
+		return message
+	}
+	return strings.ReplaceAll(message, c.BotToken, "<redacted>")
 }
 
 // formatMessage renders one Notification as Telegram HTML. The shape:
@@ -145,12 +203,20 @@ func (c *TelegramClient) Notify(ctx context.Context, n Notification) error {
 // Keep this function deterministic — the same Notification must
 // produce the same bytes (for testability and idempotency).
 func formatMessage(n Notification) string {
+	return formatMessageInLocation(n, time.UTC)
+}
+
+func formatMessageInLocation(n Notification, location *time.Location) string {
 	icon, head, verb := severityVisuals(n)
 
 	when := n.Time
 	if when.IsZero() {
-		when = time.Now()
+		when = time.Now().UTC()
 	}
+	if location == nil {
+		location = time.UTC
+	}
+	when = when.In(location)
 	footer := fmt.Sprintf("%s %s", verb, when.Format("15:04 MST"))
 
 	body := strings.TrimSpace(n.Body)
@@ -159,6 +225,7 @@ func formatMessage(n Notification) string {
 		// a useful card instead of a blank one.
 		body = fmt.Sprintf("%s triggered.", n.RuleName)
 	}
+	body = truncateRunes(body, 3000)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s <b>%s</b> — <i>%s</i>\n\n",
@@ -169,6 +236,14 @@ func formatMessage(n Notification) string {
 	}
 	fmt.Fprintf(&b, "\n<code>%s</code>", escapeHTML(footer))
 	return b.String()
+}
+
+func truncateRunes(value string, max int) string {
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	return string(runes[:max]) + "…"
 }
 
 // severityVisuals picks the leading icon, the bolded headline, and the

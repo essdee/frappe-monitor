@@ -23,8 +23,14 @@
 package streamer
 
 import (
+	"strconv"
 	"strings"
 )
+
+// ProtocolVersion is shared with scripts/frappe-monitor-stream.sh. Version 9
+// adds file identity and absolute offsets so reconnects and rotations cannot
+// corrupt a cursor by treating bytes from different files as one sequence.
+const ProtocolVersion = "9.2.0"
 
 // EventType discriminates the parsed line. The session loop handles
 // each variant; unknown lines are logged and ignored so a forward-
@@ -38,7 +44,11 @@ const (
 	EventUnknown EventType = iota
 	// EventVersion is the first line: "##V=<semver>".
 	EventVersion
-	// EventLine is a per-file content line: "##F=<id>|<content>".
+	// EventOffset announces the current file identity and the byte offset
+	// from which subsequent lines start: "##O=<id>|<identity>|<offset>".
+	EventOffset
+	// EventLine is a per-file content line with its absolute end position:
+	// "##F=<id>|<identity>|<end_offset>|<content>".
 	EventLine
 	// EventFileError is a per-file error sentinel: "##F=<id> ##E=<token>".
 	EventFileError
@@ -56,6 +66,14 @@ type Event struct {
 	// matches whatever the operator configured for this server.
 	FileID string
 
+	// FileIdentity is the remote device/inode pair. It changes when a log is
+	// rotated and is present on EventOffset and EventLine.
+	FileIdentity string
+
+	// Offset is the starting offset for EventOffset and the exclusive end
+	// offset for EventLine.
+	Offset int64
+
 	// Content is set on EventLine only — the raw source line as it
 	// appeared in the source log file (without the trailing LF).
 	Content string
@@ -65,19 +83,9 @@ type Event struct {
 	ErrorToken string
 }
 
-// SourceByteLen returns how many bytes the Content represents in the
-// source log file: len(Content) + 1 for the LF terminator. The
-// session uses this to advance the per-file cursor as it processes
-// lines. Only meaningful for EventLine.
-func (e Event) SourceByteLen() int {
-	if e.Type != EventLine {
-		return 0
-	}
-	return len(e.Content) + 1
-}
-
 const (
 	versionPrefix    = "##V="
+	offsetPrefix     = "##O="
 	filePrefix       = "##F="
 	errorMarker      = "##E="
 	contentSeparator = '|'
@@ -96,14 +104,27 @@ func ParseLine(line string) Event {
 	if rest, ok := strings.CutPrefix(line, versionPrefix); ok {
 		return Event{Type: EventVersion, Version: strings.TrimSpace(rest)}
 	}
+	if rest, ok := strings.CutPrefix(line, offsetPrefix); ok {
+		parts := strings.SplitN(rest, "|", 3)
+		if len(parts) != 3 || parts[0] == "" || parts[1] == "" {
+			return Event{Type: EventUnknown}
+		}
+		offset, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil || offset < 0 {
+			return Event{Type: EventUnknown}
+		}
+		return Event{
+			Type:         EventOffset,
+			FileID:       parts[0],
+			FileIdentity: parts[1],
+			Offset:       offset,
+		}
+	}
 
 	if !strings.HasPrefix(line, filePrefix) {
 		return Event{Type: EventUnknown}
 	}
 
-	// "##F=<id>|<content>" — the FIRST '|' is the protocol delimiter;
-	// any '|' after that belongs to the content. We split on the first
-	// pipe, not on every pipe.
 	rest := line[len(filePrefix):]
 
 	// "##F=<id> ##E=<token>" form (no pipe). Detect by the literal
@@ -118,13 +139,21 @@ func ParseLine(line string) Event {
 		}
 	}
 
-	pipeIdx := strings.IndexByte(rest, contentSeparator)
-	if pipeIdx < 0 {
-		// "##F=<id>" with no separator and no error marker — not a
-		// shape this protocol version emits. Log + skip upstream.
+	parts := strings.SplitN(rest, string(contentSeparator), 4)
+	if len(parts) != 4 || parts[0] == "" || parts[1] == "" {
+		// Deliberately reject the pre-v9 "id|content" shape. Advancing a
+		// cursor without a file identity and absolute offset is unsafe.
 		return Event{Type: EventUnknown}
 	}
-	fid := rest[:pipeIdx]
-	content := rest[pipeIdx+1:]
-	return Event{Type: EventLine, FileID: fid, Content: content}
+	endOffset, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || endOffset < 0 {
+		return Event{Type: EventUnknown}
+	}
+	return Event{
+		Type:         EventLine,
+		FileID:       parts[0],
+		FileIdentity: parts[1],
+		Offset:       endOffset,
+		Content:      parts[3],
+	}
 }

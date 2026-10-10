@@ -7,12 +7,36 @@ Every key, default, and meaning. The full schema lives in `internal/config/confi
 | Where it runs | Path |
 |---|---|
 | Production (after `install.sh`) | `/etc/frappe-monitor/monitor.yaml` |
-| Dev (`make run`) | `./config/monitor.yaml` |
-| Override at startup | `frappe-monitor --config /any/path.yaml` |
+| Dev (`make run`) | `./deploy/config/monitor.yaml.example` |
+| Alternate YAML file | `frappe-monitor --config /any/path.yaml` |
 
 ## Reload behavior
 
-Config is read once at boot. To pick up a change: `sudo systemctl restart frappe-monitor` (≤15s). There is no SIGHUP reload; the trade-off is simpler internal wiring (no live-config plumbing in the scheduler / SSH pool / handlers).
+Open **Settings** in the monitoring console to manage the HTTP service, local
+database path, SSH policy, collection schedule, VictoriaMetrics, Loki,
+authentication, Telegram, alert rules, and log streaming. The form validates
+the complete configuration before writing it. Secrets are write-only: the
+browser receives only a `configured` flag and a blank field means “keep the
+current value.”
+
+Settings are written atomically to the YAML file passed through `--config`.
+Unknown keys are retained and the immediately previous file is saved beside it
+as `monitor.yaml.bak`. Long-running services keep their boot-time settings, so
+the UI shows a restart-required banner after a save:
+
+```bash
+sudo systemctl restart frappe-monitor
+```
+
+Server registrations are the exception: add, edit, test, and delete operations
+apply immediately because the scheduler and stream manager update their local
+registries live. None of these operations modifies a monitored host.
+
+The YAML below remains the recovery/bootstrap interface and is useful for
+automation. It is the single source of runtime settings: environment variables
+and command-line arguments cannot override its listen port, backend URLs,
+timeouts, credentials, or collection behavior. `--config` only selects which
+YAML file to read; `--check-config` only validates that file and exits.
 
 ## Full reference
 
@@ -26,6 +50,17 @@ server:
   # /api/v1/metrics/query proxy; tune against your VM's response time.
   read_timeout_seconds: 15
   write_timeout_seconds: 15
+
+  # Forwarded client IP/protocol headers are accepted only from these direct
+  # peers. Defaults support a same-host reverse proxy; add a remote proxy CIDR
+  # explicitly rather than trusting arbitrary X-Forwarded-* headers.
+  trusted_proxy_cidrs: ["127.0.0.1/32", "::1/128"]
+
+display:
+  # IANA timezone used by dashboard dates, charts, logs, and Telegram alert
+  # footers. Storage and API timestamps remain UTC so multiple servers and
+  # daylight-saving transitions stay comparable.
+  timezone: "Asia/Kolkata"
 
 database:
   # SQLite path. Production install rewrites this to /var/lib/frappe-monitor/.
@@ -42,16 +77,19 @@ ssh:
   # The collector itself self-throttles its site-probe phase against an
   # internal 20s budget (env: SITE_PROBE_BUDGET_S) so a bench with 30+
   # sites doesn't overrun this timeout. Sites past the budget are
-  # emitted with is_healthy=0 / http_status_code=0 so the parser still
-  # gets a complete output instead of being killed mid-loop. If your
-  # benches consistently host more sites than fit in 20s, raise this
-  # ceiling AND export SITE_PROBE_BUDGET_S on the bench host before the
-  # next deploy-collector cycle.
+  # emitted with is_healthy=-1 and a reason code so they stay unknown rather
+  # than becoming false outage alerts. If your
+  # benches consistently host more sites than fit in 20s, tune the embedded
+  # collector budget in source and keep this outer ceiling above it.
   command_timeout_seconds: 30
 
   # Pool: max simultaneous SSH connections per remote host. Two is
-  # enough for parallel metrics + log pulls within a single cycle.
+  # the minimum when streaming is enabled: one live stream plus commands.
   max_connections_per_host: 2
+
+  # Strict host-key database. The process refuses unknown or changed keys.
+  # The production installer creates this file for the service user.
+  known_hosts_path: "/var/lib/frappe-monitor/.ssh/known_hosts"
 
 log:
   # Minimum level emitted. "info" in prod; "debug" temporarily for
@@ -64,7 +102,10 @@ log:
 
 metrics:
   # VictoriaMetrics root URL. The collector appends /write for pushes;
-  # the dashboard's query proxy forwards to /api/v1/query_range.
+  # the dashboard's query proxy forwards to /api/v1/query_range. A custom
+  # VictoriaMetrics deployment MUST start with -influxSkipSingleField so the
+  # stored metric names match the PromQL queries. The bundled Compose stack
+  # already enables this flag.
   vm_url: "http://127.0.0.1:8428"
 
   # Push timeout per cycle. The collector's payload is a few KB; failure
@@ -86,9 +127,9 @@ logs:
   query_timeout_seconds: 15
 
 scheduler:
-  # Default per-server pull interval. Master plan §5: do not go below
-  # 5 min over real SSH; 60s is the practical floor in dev.
-  default_interval_seconds: 900
+  # Per-server pull interval. The scheduler also runs once immediately at
+  # startup and registration. Overlapping pulls are skipped.
+  default_interval_seconds: 60
 
   # Cap on simultaneously-running pull jobs across the whole monitor.
   # Bump for large fleets; lower if pulls are saturating the host's
@@ -96,19 +137,36 @@ scheduler:
   max_parallel: 10
 
   # Per-job ctx timeout. Pick well above P99(ssh + parse + push).
-  # 30s is generous for healthy clusters.
-  per_job_timeout_seconds: 30
+  # This must include the bounded site-probe phase.
+  per_job_timeout_seconds: 45
 
-# --- Phase 7 auth -------------------------------------------------------
+# Monitor-side public checks. These complement the internal SSH/localhost
+# probe with DNS, TLS, reverse-proxy, and browser-path coverage.
+public_probes:
+  enabled: false
+  auto_discover: true
+  default_scheme: "https"
+  path: "/api/method/ping"
+  timeout_seconds: 5
+  max_parallel: 10
+  allow_private_targets: false
+  require_pong: true
+  targets:
+    # Exact URL override or disabled=true for one discovered site.
+    # - server: Production
+    #   bench: frappe-bench
+    #   site: erp.example.com
+    #   url: https://edge.example.net/api/method/ping
+    #   disabled: false
+
+# --- Authentication ----------------------------------------------------
 auth:
-  # Empty disables auth (dev or behind-internal-network deploys).
-  # Non-empty applies HTTP basic auth to /api/v1/* and the SPA root —
-  # browsers handle the prompt natively. /healthz stays open.
-  # Username is ignored; only the password must match.
+  # Empty disables auth. Non-empty enables the SPA login page and a signed,
+  # HttpOnly seven-day session cookie. API automation may use HTTP basic auth;
+  # its username is ignored. /healthz and the SPA shell stay open.
   password: ""
 
-  # Realm shown in the browser credential prompt. Use a stable value;
-  # browsers cache credentials per (origin, realm).
+  # Stable realm used for API basic-auth compatibility.
   realm: "frappe-monitor"
 
 # --- Phase 6 alerts -----------------------------------------------------
@@ -140,7 +198,8 @@ alerts:
   # wants total control. Most deployments leave this false.
   disable_defaults: false
 
-  # Custom rules merged with the defaults (unless disable_defaults).
+  # Custom rules merge with the defaults. A custom rule with the same name
+  # replaces that bundled default, so thresholds are directly overrideable.
   rules:
     # - name: cpu_saturated
     #   expr: 100 * (1 - rate(frappe_server_cpu_idle[5m]) /
@@ -153,10 +212,8 @@ alerts:
     #   message: "CPU on {{.Labels.server}} is {{printf \"%.1f\" .Value}}% used."
 
 # --- Phase 8 streaming (per-event capture) -----------------------------
-# Long-lived SSH session per server that tails Frappe + MariaDB log
-# files via tail -F and pushes lines to Loki as they arrive. Disabled
-# by default — opt in once the streamer script is deployed to the
-# bench (see docs/guide/usage.md → "Enable per-event streaming").
+# A long-lived SSH session per selected server runs the embedded resumable
+# streamer protocol and pushes appended lines to Loki. Disabled by default.
 streaming:
   enabled: false
 
@@ -164,29 +221,39 @@ streaming:
   # deployments don't collide. Empty is fine for single-monitor setups.
   monitor_id: ""
 
-  # Absolute path on each bench where frappe-monitor-stream.sh lives.
-  # Phase 8b.1 expects you to deploy it there manually (or via a
-  # config-management tool); auto-deploy from the monitor lands in 8b.2.
-  script_path: "/home/frappe/.frappe-monitor/stream.sh"
+  # Deprecated compatibility key. The embedded script is executed through
+  # SSH stdin and this value is ignored.
+  script_path: ".frappe-monitor/frappe-monitor-stream.sh"
 
-  # Files the streamer should tail. Every server tails the same set in
-  # 8b.1; per-server overrides arrive post-v1. The id appears as the
-  # log_type label in Loki.
+  # Empty files enables read-only discovery of standard bench/site log paths.
+  # server_id=0 (or omitted) applies an explicit entry globally. A positive server_id
+  # targets one stable database row and supports heterogeneous bench roots.
+  # IDs must be unique within the set that applies to a server. log_type,
+  # bench, and site become Loki labels; site requires bench.
   files:
-    # - id:   web
-    #   path: /home/frappe/frappe-bench/logs/web.log
-    # - id:   err
+    # - server_id: 1
+    #   id: prod_web_error
     #   path: /home/frappe/frappe-bench/logs/web.error.log
-    # - id:   slowq
-    #   path: /var/log/mysql/mariadb-slow.log
+    #   log_type: error
+    #   bench: frappe-bench
+    # - server_id: 2
+    #   id: staging_web_error
+    #   path: /srv/bench/logs/web.error.log
+    #   log_type: error
+    #   bench: bench
 
   # How often the LokiSink flushes buffered entries. Lower = lower
   # dashboard latency, higher = bigger Loki batches. Default 1s.
   flush_interval_seconds: 1
 
-  # Per-stream buffer ceiling. Reaching this triggers an early flush
-  # so a burst doesn't grow buffers unbounded. Default 500.
+  # Hard per-stream memory ceiling. On Loki failure, the reader applies
+  # SSH/TCP backpressure; the remote file remains durable and cursors do not
+  # advance until the batch commits. Default 500.
   max_batch_lines: 500
+
+  # Global outage bounds across every discovered/configured log file.
+  max_buffered_lines: 5000
+  max_buffered_bytes: 33554432
 
   # Per-push timeout for Loki + VM. Default 10s.
   push_timeout_seconds: 10
@@ -205,45 +272,27 @@ The binary refuses to start if any of these are wrong:
 |---|---|
 | `database.path` non-empty | Required — there's no in-memory mode. |
 | `server.listen_addr` non-empty | Same. |
+| Every `server.trusted_proxy_cidrs` value is a CIDR | Forwarded identity must have an explicit trust boundary. |
 | `log.level ∈ {debug,info,warn,error}` | Enforced by slog; bad values would silently default. |
 | `log.format ∈ {json,text}` | Same. |
 | All `*_timeout_seconds` ≥ 1 | Zero-second timeouts are bugs disguised as features. |
 | `metrics.vm_url` non-empty | Phase 2+ requires it. |
 | `logs.loki_url` non-empty | Phase 3+ requires it. |
 | `scheduler.*` ≥ 1 | Same reasoning. |
+| `scheduler.per_job_timeout_seconds` ≥ SSH dial + command + VM push timeouts | The outer deadline must not cancel a valid inner operation first. |
 | `alerts.evaluation_interval_seconds` ≥ 15 (when enabled) | Anything lower is a tight loop on VM. |
 | `alerts.telegram.bot_token` non-empty (when enabled) | Without it, no notification can land. |
 | `alerts.telegram.chat_ids` non-empty (when enabled) | Same — fan-out target required. |
-| `streaming.script_path` non-empty (when enabled) | Required — sessions can't exec an empty path. |
-| `streaming.files` non-empty (when enabled) | Required — at least one (id, path) pair to tail. |
+| `ssh.max_connections_per_host` ≥ 2 (when streaming) | Keeps one session available for metric collection beside the live stream. |
+| Streaming file IDs/paths unique per applicable server | Prevents ambiguous protocol cursors and duplicate tailers. |
+| `streaming.files[].server_id` ≥ 0 | Zero means global; positive IDs select one server. |
 | `streaming.flush_interval_seconds` ≥ 1 (when enabled) | Subsecond flushes burn CPU for no gain. |
 | `streaming.max_batch_lines` ≥ 1 (when enabled) | Zero would mean "flush on every line" — same problem. |
+| `streaming.max_buffered_lines` ≥ `max_batch_lines` (when enabled) | Guarantees at least one complete batch can be retried. |
+| `streaming.max_buffered_bytes` ≥ 1 MiB (when enabled) | Prevents an accidentally tiny cap from permanently stalling normal log lines. |
 | `streaming.max_backoff_seconds` ≥ `min_backoff_seconds` (when enabled) | Otherwise reconnect would jitter forever. |
 
 The error message names the offending key, e.g. `metrics.push_timeout_seconds must be >= 1, got 0`.
-
-## Env-var overrides
-
-Any key can be overridden by an environment variable. Pattern:
-
-```
-MONITOR_<SECTION>__<KEY>
-```
-
-Double-underscore separates levels. Example:
-
-```bash
-# Override scheduler.default_interval_seconds without editing yaml:
-sudo systemctl edit frappe-monitor
-# In the editor:
-[Service]
-Environment=MONITOR_SCHEDULER__DEFAULT_INTERVAL_SECONDS=300
-# Save, exit, reload:
-sudo systemctl daemon-reload
-sudo systemctl restart frappe-monitor
-```
-
-Useful for one-off troubleshooting (`MONITOR_LOG__LEVEL=debug`) without committing changes to `monitor.yaml`.
 
 ## Layered configs (multi-environment)
 
@@ -274,6 +323,7 @@ ExecStart=/usr/local/bin/frappe-monitor --config /etc/frappe-monitor/monitor.sta
 |---|---|
 | Dashboard charts feel stale | `scheduler.default_interval_seconds: 300` (5 min) |
 | Pulls pile up at top of the hour | `scheduler.max_parallel: 20` (or higher) |
-| SSH timeouts on a slow bench host | `ssh.command_timeout_seconds: 60` |
-| VM eating disk too fast | edit `--retentionPeriod=30d` in `deploy/docker-compose.prod.yml`, then restart the stack unit |
+| SSH timeouts on a slow bench host | `ssh.command_timeout_seconds: 60` and `scheduler.per_job_timeout_seconds: 75` or higher |
+| VM eating disk too fast | shorten `--retentionPeriod` in `deploy/docker-compose.prod.yml`, then restart the stack unit |
+| Loki eating disk too fast | shorten the embedded Loki `limits_config.retention_period` and `max_query_lookback` together in `deploy/docker-compose.prod.yml`, then restart the stack unit |
 | Need verbose collector output | `log.level: "debug"` (revert when done — high volume) |

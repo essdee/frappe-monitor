@@ -1,221 +1,153 @@
-/* Forced-dark theme — single accent, classy, high contrast.
-   Two-color philosophy: a neutral charcoal scale + one indigo accent.
-   Status colors (reachable / unreachable) stay functional but
-   desaturated so they don't shout. */
-
 :root {
   color-scheme: dark;
-
-  /* Neutrals (cool charcoal) */
-  --bg:           #0b0c0f;
-  --bg-elevated:  #14161b;
-  --bg-hover:     #1c1f26;
-  --card-bg:      #14161b;
-  --card-border:  #262a33;
-  --card-shadow:  0 1px 2px rgba(0, 0, 0, 0.5),
-                  0 4px 12px rgba(0, 0, 0, 0.35);
-
-  /* Foreground */
-  --fg:        #ecedef;
-  --fg-strong: #ffffff;
-  --muted:     #9aa0aa;
-  --muted-2:   #6b7280;
-
-  /* The accent. Used for links, primary buttons, focus rings, the
-     active sidebar route. Indigo reads well on the dark bg without
-     being neon. */
-  --accent:        #818cf8;
-  --accent-strong: #a5afff;
-  --accent-soft:   rgba(129, 140, 248, 0.12);
-
-  /* Status — desaturated so they don't dominate. */
-  --status-reachable:    #4ade80;
-  --status-unreachable:  #f87171;
-  --status-unknown:      #6b7280;
-  --status-warning:      #fbbf24;
-
-  /* Sidebar (kept just slightly different from page bg). */
-  --sidebar-bg:     #0b0c0f;
-  --sidebar-fg:     #ecedef;
-  --sidebar-active: var(--accent-soft);
-
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
-               Roboto, "Helvetica Neue", system-ui, sans-serif;
-  font-feature-settings: "ss01", "ss02", "cv01", "cv02";
-
-  /* Override OS preference. The user explicitly asked for dark only. */
+  --bg: #080b10;
+  --bg-elevated: #10151d;
+  --bg-hover: #171e29;
+  --card-bg: #0e131b;
+  --card-border: #202a38;
+  --card-border-strong: #2d3a4d;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, .32), 0 16px 40px rgba(0, 0, 0, .18);
+  --fg: #dce4ee;
+  --fg-strong: #f7f9fc;
+  --muted: #8d9aad;
+  --muted-2: #5e6b7e;
+  --accent: #7388ff;
+  --accent-strong: #91a0ff;
+  --accent-soft: rgba(115, 136, 255, .13);
+  --status-reachable: #37d996;
+  --status-unreachable: #ff667a;
+  --status-unknown: #7d899b;
+  --status-warning: #ffb648;
+  --sidebar-bg: #090d13;
+  --sidebar-fg: #dce4ee;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
 }
 
-@media (prefers-color-scheme: light) {
-  /* Intentionally do nothing — we override the OS pref. */
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html {
-  font-size: 15px;
-}
-
-html, body {
-  margin: 0;
-  padding: 0;
-  background: var(--bg);
+* { box-sizing: border-box; }
+html { font-size: 15px; background: var(--bg); }
+html, body, #app { margin: 0; min-height: 100%; }
+body {
   color: var(--fg);
+  background:
+    radial-gradient(circle at 78% -10%, rgba(83, 100, 210, .12), transparent 30rem),
+    var(--bg);
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  /* Hard guard: nothing inside the app should ever push the page
-     horizontally past the viewport. Per-component scroll containers
-     (tables, the timeline-filter preset strip) use overflow-x:auto
-     on themselves, NOT on the page. `clip` is preferred over
-     `hidden` because it doesn't create a containing block for
-     position:sticky / position:fixed descendants. */
   overflow-x: hidden;
-  overflow-x: clip;
-  max-width: 100vw;
 }
-
-a {
-  color: var(--accent);
-  text-decoration: none;
-  transition: color 120ms ease;
-}
-a:hover {
-  color: var(--accent-strong);
-}
-
-::selection {
-  background: var(--accent);
-  color: var(--fg-strong);
-}
-
-input, textarea, select, button {
-  color: var(--fg);
-  font-family: inherit;
-}
-input::placeholder,
-textarea::placeholder {
-  color: var(--muted-2);
-}
-
-/* Code spans get a subtle tint so paths/identifiers pop. */
-code {
-  background: var(--bg-hover);
-  border: 1px solid var(--card-border);
-  padding: 0.05em 0.4em;
-  border-radius: 4px;
-  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.85em;
-}
-
-/* Custom scrollbar, dark-friendly. */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-track {
-  background: var(--bg);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--card-border);
-  border-radius: 5px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--muted-2);
-}
-
-/* Focus ring for keyboard nav. */
-:focus-visible {
+a { color: inherit; text-decoration: none; }
+button, input, select, textarea { color: inherit; font: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 4px;
 }
-
-/* Lucide icons render as inline-block SVGs; align them with text. */
-.lucide {
-  display: inline-block;
-  vertical-align: -0.15em;
-  flex-shrink: 0;
-}
-
-/* ----- Mobile responsive baseline ---------------------------------- */
-/* Every <table> in a card scrolls horizontally on small screens by
-   default — no per-component CSS needed. Per-view CSS may opt out
-   (Alerts.vue rewrites tables as cards instead). */
-
-/* Long hostnames, paths, JWTs and URLs are everywhere in a monitoring
-   UI. Defaulting <code> to break aggressively prevents a single long
-   token from pushing the layout wider than the viewport on a phone. */
-code {
+::selection { color: white; background: var(--accent); }
+code, .mono {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
+code { padding: .08em .34em; color: #c8d2ff; background: var(--accent-soft); border-radius: 4px; font-size: .86em; }
 
-/* Charts (ECharts canvases), responsive grids, and pre-formatted
-   blocks all need their flex/grid parents to be shrink-safe — without
-   `min-width: 0` a child claims its intrinsic width and forces a
-   horizontal scrollbar on the whole page. */
-.charts,
-.grid,
-.summary,
-.firing-list,
-.proc-grid {
-  min-width: 0;
+.page { min-width: 0; }
+.page-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.4rem;
 }
+.page-heading h1 { margin: 0; font-size: clamp(1.45rem, 2vw, 1.85rem); line-height: 1.15; letter-spacing: -.035em; color: var(--fg-strong); }
+.page-heading p { margin: .42rem 0 0; color: var(--muted); font-size: .9rem; line-height: 1.5; max-width: 680px; }
+.eyebrow { display: block; color: var(--accent-strong); font-size: .68rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; margin-bottom: .42rem; }
+.page-actions { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; }
+.button {
+  min-height: 40px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: .42rem;
+  padding: .52rem .85rem;
+  border: 1px solid var(--card-border-strong);
+  border-radius: 9px;
+  background: var(--card-bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: .84rem;
+  font-weight: 650;
+  transition: 140ms ease;
+}
+.button:hover:not(:disabled) { border-color: var(--accent); background: var(--bg-hover); transform: translateY(-1px); }
+.button.primary { color: white; border-color: var(--accent); background: linear-gradient(135deg, var(--accent), #596fe6); box-shadow: 0 8px 24px rgba(81, 102, 223, .2); }
+.button.danger { color: var(--status-unreachable); border-color: color-mix(in srgb, var(--status-unreachable) 40%, var(--card-border)); }
+.button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.icon-button { width: 40px; padding: 0; }
+.spin { animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
+.panel {
+  background: linear-gradient(145deg, color-mix(in srgb, var(--card-bg) 96%, white), var(--card-bg));
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+}
+.panel-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.1rem; border-bottom: 1px solid var(--card-border); }
+.panel-title { display: flex; align-items: center; gap: .5rem; margin: 0; color: var(--fg-strong); font-size: .94rem; }
+.panel-body { padding: 1rem 1.1rem; }
+.summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; }
+.summary-card { padding: 1rem 1.05rem; position: relative; overflow: hidden; }
+.summary-card::after { content: ''; position: absolute; width: 88px; height: 88px; right: -38px; top: -38px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.summary-label { color: var(--muted); font-size: .73rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.summary-value { margin-top: .42rem; color: var(--fg-strong); font-size: 1.72rem; font-weight: 730; letter-spacing: -.04em; }
+.summary-note { margin-top: .22rem; color: var(--muted); font-size: .76rem; }
+.section-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1.8rem 0 .75rem; }
+.section-heading h2 { margin: 0; color: var(--fg-strong); font-size: 1rem; letter-spacing: -.015em; }
+.section-heading p { margin: .2rem 0 0; color: var(--muted); font-size: .78rem; }
+
+.status-pill { display: inline-flex; align-items: center; gap: .38rem; padding: .25rem .55rem; border-radius: 999px; font-size: .72rem; font-weight: 720; text-transform: capitalize; border: 1px solid currentColor; background: color-mix(in srgb, currentColor 7%, transparent); }
+.status-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 13%, transparent); }
+.status-pill.reachable, .status-pill.healthy { color: var(--status-reachable); }
+.status-pill.unreachable, .status-pill.unhealthy, .status-pill.critical { color: var(--status-unreachable); }
+.status-pill.unknown { color: var(--status-unknown); }
+.status-pill.warning { color: var(--status-warning); }
+
+.notice { display: flex; align-items: flex-start; gap: .65rem; padding: .8rem .9rem; border: 1px solid var(--card-border); border-radius: 10px; margin: .8rem 0; color: var(--muted); background: var(--card-bg); font-size: .84rem; line-height: 1.45; }
+.notice.error { color: #ff9aaa; border-color: color-mix(in srgb, var(--status-unreachable) 34%, var(--card-border)); background: color-mix(in srgb, var(--status-unreachable) 7%, var(--card-bg)); }
+.notice.success { color: #7de8b9; border-color: color-mix(in srgb, var(--status-reachable) 30%, var(--card-border)); background: color-mix(in srgb, var(--status-reachable) 6%, var(--card-bg)); }
+.notice.warning { color: #ffd18c; border-color: color-mix(in srgb, var(--status-warning) 30%, var(--card-border)); background: color-mix(in srgb, var(--status-warning) 6%, var(--card-bg)); }
+.muted { color: var(--muted); }
+.empty-state { padding: 2.4rem 1.25rem; text-align: center; color: var(--muted); }
+.empty-state svg { color: var(--muted-2); margin-bottom: .65rem; }
+.empty-state h3 { color: var(--fg); margin: 0 0 .35rem; font-size: 1rem; }
+.empty-state p { margin: 0 auto; max-width: 460px; font-size: .84rem; line-height: 1.55; }
+
+.data-table-wrap { overflow-x: auto; }
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table th { color: var(--muted-2); font-size: .67rem; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; text-align: left; padding: .72rem 1rem; border-bottom: 1px solid var(--card-border); white-space: nowrap; }
+.data-table td { padding: .78rem 1rem; border-bottom: 1px solid var(--card-border); font-size: .84rem; }
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table tbody tr:hover { background: color-mix(in srgb, var(--bg-hover) 65%, transparent); }
+.table-link { display: inline-flex; align-items: center; gap: .45rem; color: var(--fg-strong); font-weight: 650; }
+.table-link:hover { color: var(--accent-strong); }
+.count-badge { min-width: 1.5rem; height: 1.5rem; padding: 0 .45rem; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: var(--bg-hover); color: var(--muted); font-size: .72rem; font-weight: 700; }
+.breadcrumbs { display: flex; align-items: center; gap: .4rem; margin-bottom: .75rem; color: var(--muted-2); font-size: .76rem; }
+.breadcrumbs a:hover { color: var(--accent-strong); }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #263143; border-radius: 999px; }
+
+@media (max-width: 1000px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) {
   html { font-size: 14px; }
-  table {
-    display: block;
-    overflow-x: auto;
-    white-space: nowrap;
-    -webkit-overflow-scrolling: touch;
-    max-width: 100%;
-  }
-  /* Page headers: stack title and actions vertically so the count
-     pill + refresh button don't crash into each other. */
-  section > header,
-  .page-header {
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    align-items: flex-start;
-  }
-  /* Action button rows wrap by default — Test SSH / Deploy / Delete
-     should stack instead of overflowing the viewport. */
-  .actions {
-    flex-wrap: wrap;
-  }
-  /* Inputs / selects / buttons render at iOS-recommended >=40px tap
-     height once the viewport is touch-sized. Without this the
-     filter dropdowns are uncomfortably small. */
-  button,
-  input,
-  select,
-  textarea {
-    min-height: 40px;
-  }
-  /* iOS Safari zooms <input>/<select> when font-size < 16px on
-     focus, which kicks the keyboard up and the rest of the page
-     into a zoomed state. Force the form-control font (NOT the
-     buttons that just say "Refresh" — they don't trigger zoom)
-     to 16px to suppress it. */
-  input,
-  select,
-  textarea {
-    font-size: 16px;
-  }
-}
-
-@media (max-width: 480px) {
-  .content,
-  main { padding: 0.75rem !important; }
-  /* Page-headers in single-column mode: title row, then full-width
-     action buttons. Counter pill stays inline with the title. */
-  .page-header > * {
-    width: 100%;
-  }
-  .page-header .title {
-    width: auto;
-  }
+  .page-heading { flex-direction: column; }
+  .page-actions { width: 100%; }
+  .page-actions .button { flex: 1; }
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+  .summary-card { padding: .85rem; }
+  .summary-value { font-size: 1.4rem; }
+  .panel { border-radius: 12px; }
+  .data-table th, .data-table td { padding: .7rem .8rem; }
+  input, select, textarea { font-size: 16px; }
 }

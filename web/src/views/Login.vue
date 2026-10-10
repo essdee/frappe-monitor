@@ -2,7 +2,8 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Activity, Lock, AlertCircle, CheckCircle2 } from 'lucide-vue-next'
-import { login, whoami } from '../api'
+import { login } from '../api'
+import { authChecked, authenticated, markAuthenticated, refreshAuth } from '../authState'
 
 const router = useRouter()
 const route = useRoute()
@@ -11,17 +12,17 @@ const submitting = ref(false)
 const error = ref<string | null>(null)
 const justSignedOut = computed(() => route.query.signed_out === '1')
 
-// If we're already authed (e.g. someone bookmarked /login), bounce
-// straight to the next page instead of showing the form.
-//
-// Skip the bounce when `?signed_out=1` is present — the user just
-// clicked Sign out and any whoami() that still answers 200 (cookie
-// cache, in-flight request, server-side delay) would yank them back
-// into the dashboard, making logout look like a no-op.
+// If we're already authenticated, or auth is intentionally disabled, do not
+// show a password form. The logout request is awaited before navigation, so
+// an enabled server answers 401 here after a successful sign-out.
 onMounted(async () => {
-  if (justSignedOut.value) return
-  if (await whoami()) {
-    redirectNext()
+  try {
+		if (!authChecked.value) await refreshAuth()
+    if (authenticated.value) {
+      redirectNext()
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
   }
 })
 
@@ -41,6 +42,7 @@ async function submit() {
   error.value = null
   try {
     await login(password.value)
+		markAuthenticated(true)
     redirectNext()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -68,6 +70,7 @@ async function submit() {
       </p>
 
       <form @submit.prevent="submit">
+        <input class="sr-only" name="username" autocomplete="username" value="monitor" tabindex="-1" aria-hidden="true" />
         <label>
           <span><Lock :size="14" :stroke-width="2" /> Password</span>
           <input
@@ -168,6 +171,17 @@ input {
 input:focus {
   outline: none;
   border-color: var(--accent);
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .primary {

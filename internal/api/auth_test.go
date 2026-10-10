@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -96,4 +97,45 @@ func TestRouter_APIRequiresAuthWhenPasswordSet(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestRouter_WhoamiReportsAuthenticationMode(t *testing.T) {
+	tests := []struct {
+		name          string
+		password      string
+		useBasic      bool
+		authEnabled   bool
+		authenticated bool
+	}{
+		{name: "disabled", authEnabled: false, authenticated: true},
+		{name: "enabled unauthenticated", password: "secret", authEnabled: true, authenticated: false},
+		{name: "enabled authenticated", password: "secret", useBasic: true, authEnabled: true, authenticated: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(NewRouter(Deps{AuthPassword: tt.password}))
+			defer ts.Close()
+
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/whoami", nil)
+			require.NoError(t, err)
+			if tt.useBasic {
+				req.SetBasicAuth("admin", tt.password)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+
+			var body struct {
+				Authenticated bool   `json:"authenticated"`
+				AuthEnabled   bool   `json:"auth_enabled"`
+				Timezone      string `json:"timezone"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			require.Equal(t, tt.authenticated, body.Authenticated)
+			require.Equal(t, tt.authEnabled, body.AuthEnabled)
+			require.Equal(t, "UTC", body.Timezone)
+		})
+	}
 }

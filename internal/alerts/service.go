@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,15 @@ type Config struct {
 	// DisableDefaults skips DefaultRules(). Use when an operator
 	// wants total control over what fires.
 	DisableDefaults bool `koanf:"disable_defaults"`
+
+	// QueryLookback is derived from the scheduler interval by main. It is
+	// not a separate YAML knob: one cadence must define both collection and
+	// query freshness semantics.
+	QueryLookback time.Duration
+
+	// Timezone controls presentation in outbound notifications only. Alert
+	// evaluation and incident storage remain UTC.
+	Timezone string
 }
 
 type TelegramConfig struct {
@@ -51,6 +61,11 @@ type TelegramConfig struct {
 	ChatIDs            []string `koanf:"chat_ids"`
 	SendTimeoutSeconds int      `koanf:"send_timeout_seconds"`
 }
+
+var (
+	telegramBotTokenPattern = regexp.MustCompile(`^[0-9]{6,}:[A-Za-z0-9_-]{20,}$`)
+	telegramChatIDPattern   = regexp.MustCompile(`^-?[0-9]+$`)
+)
 
 // Validate ensures the config is sound when alerts are enabled. When
 // disabled, all checks are skipped — defaults are fine.
@@ -66,8 +81,15 @@ func (c Config) Validate() error {
 		return fmt.Errorf("alerts.vm_query_timeout_seconds must be >= 1, got %d",
 			c.VMQueryTimeoutSeconds)
 	}
-	if strings.TrimSpace(c.Telegram.BotToken) == "" {
+	if c.NotifyRepeatSeconds < 0 {
+		return fmt.Errorf("alerts.notify_repeat_seconds must be >= 0, got %d", c.NotifyRepeatSeconds)
+	}
+	botToken := strings.TrimSpace(c.Telegram.BotToken)
+	if botToken == "" {
 		return fmt.Errorf("alerts.telegram.bot_token is required when alerts.enabled is true")
+	}
+	if !telegramBotTokenPattern.MatchString(botToken) {
+		return fmt.Errorf("alerts.telegram.bot_token has an invalid Telegram bot-token format")
 	}
 	if len(c.Telegram.ChatIDs) == 0 {
 		return fmt.Errorf("alerts.telegram.chat_ids must contain at least one entry when alerts.enabled is true")
@@ -81,6 +103,27 @@ func (c Config) Validate() error {
 			return fmt.Errorf("alerts.rules[%d]: %w", i, err)
 		}
 	}
+	seenNames := make(map[string]struct{}, len(c.Rules))
+	for _, rule := range c.Rules {
+		if _, exists := seenNames[rule.Name]; exists {
+			return fmt.Errorf("duplicate user alert rule name %q", rule.Name)
+		}
+		seenNames[rule.Name] = struct{}{}
+	}
+	seenChats := make(map[string]struct{}, len(c.Telegram.ChatIDs))
+	for i, chatID := range c.Telegram.ChatIDs {
+		chatID = strings.TrimSpace(chatID)
+		if chatID == "" {
+			return fmt.Errorf("alerts.telegram.chat_ids[%d] is empty", i)
+		}
+		if !telegramChatIDPattern.MatchString(chatID) {
+			return fmt.Errorf("alerts.telegram.chat_ids[%d] must be a numeric Telegram chat ID, got %q", i, chatID)
+		}
+		if _, exists := seenChats[chatID]; exists {
+			return fmt.Errorf("alerts.telegram.chat_ids contains duplicate %q", chatID)
+		}
+		seenChats[chatID] = struct{}{}
+	}
 	return nil
 }
 
@@ -90,9 +133,11 @@ type Service struct {
 	evaluator *Evaluator
 	interval  time.Duration
 
-	logger *slog.Logger
-	stop   chan struct{}
-	wg     sync.WaitGroup
+	logger    *slog.Logger
+	stop      chan struct{}
+	wg        sync.WaitGroup
+	startOnce sync.Once
+	stopOnce  sync.Once
 }
 
 // New builds a Service from config + dependencies. Returns nil + nil
@@ -105,26 +150,46 @@ func New(cfg Config, vmBaseURL string, store storage.Store, logger *slog.Logger)
 		return nil, nil
 	}
 
-	rules := append([]Rule{}, cfg.Rules...)
-	if !cfg.DisableDefaults {
-		rules = append(DefaultRules(), rules...)
+	rules := EffectiveRules(cfg)
+	seenRules := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		if err := rule.Validate(); err != nil {
+			return nil, err
+		}
+		if _, exists := seenRules[rule.Name]; exists {
+			return nil, fmt.Errorf("duplicate alert rule name %q", rule.Name)
+		}
+		seenRules[rule.Name] = struct{}{}
 	}
 
 	vm := NewHTTPVMClient(vmBaseURL, time.Duration(cfg.VMQueryTimeoutSeconds)*time.Second)
+	if cfg.QueryLookback > 0 {
+		vm.Lookback = cfg.QueryLookback
+	}
 
-	notifiers := make(MultiNotifier, 0, len(cfg.Telegram.ChatIDs))
+	notifiers := make([]Notifier, 0, len(cfg.Telegram.ChatIDs))
+	location := time.UTC
+	if cfg.Timezone != "" {
+		var err error
+		location, err = time.LoadLocation(cfg.Timezone)
+		if err != nil {
+			return nil, fmt.Errorf("alerts timezone %q: %w", cfg.Timezone, err)
+		}
+	}
 	for _, id := range cfg.Telegram.ChatIDs {
-		notifiers = append(notifiers, NewTelegramClient(
+		client := NewTelegramClient(
 			cfg.Telegram.BotToken, id,
 			time.Duration(cfg.Telegram.SendTimeoutSeconds)*time.Second,
-		))
+		)
+		client.Location = location
+		notifiers = append(notifiers, client)
 	}
 
 	ev := &Evaluator{
 		Rules:            rules,
 		VM:               vm,
 		Store:            store,
-		Notifier:         notifiers,
+		Notifier:         NewMultiNotifier(notifiers...),
 		NotifyRepeatTime: time.Duration(cfg.NotifyRepeatSeconds) * time.Second,
 		Logger:           logger,
 	}
@@ -137,37 +202,74 @@ func New(cfg Config, vmBaseURL string, store storage.Store, logger *slog.Logger)
 	}, nil
 }
 
-// Start launches the evaluation loop. Non-blocking. Safe to call
-// multiple times only by the same goroutine; concurrent calls would
-// panic on the closed `stop` channel.
+// EffectiveRules returns the rule set an enabled evaluator would use. The API
+// uses it while notifications are disabled so operators can still review the
+// bundled and configured detection policy before enabling delivery.
+func EffectiveRules(cfg Config) []Rule {
+	return mergeRules(cfg.Rules, cfg.DisableDefaults)
+}
+
+// Start launches the evaluation loop. Non-blocking and idempotent; startOnce
+// makes concurrent calls safe.
 func (s *Service) Start(ctx context.Context) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		// Tick once at startup so a freshly-deployed monitor doesn't
-		// wait a whole interval before its first evaluation.
-		s.evaluator.EvaluateOnce(ctx)
-		t := time.NewTicker(s.interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				s.logger.Info("alerts: stopping (ctx canceled)")
-				return
-			case <-s.stop:
-				s.logger.Info("alerts: stopping (Stop called)")
-				return
-			case <-t.C:
-				s.evaluator.EvaluateOnce(ctx)
+	s.startOnce.Do(func() {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			// Tick once at startup so a freshly-deployed monitor doesn't
+			// wait a whole interval before its first evaluation.
+			s.evaluator.EvaluateOnce(ctx)
+			t := time.NewTicker(s.interval)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					s.logger.Info("alerts: stopping (ctx canceled)")
+					return
+				case <-s.stop:
+					s.logger.Info("alerts: stopping (Stop called)")
+					return
+				case <-t.C:
+					s.evaluator.EvaluateOnce(ctx)
+				}
 			}
-		}
-	}()
+		}()
+	})
 }
 
 // Stop signals the loop to exit and waits for it. Safe to call once.
 func (s *Service) Stop() {
-	close(s.stop)
+	s.stopOnce.Do(func() { close(s.stop) })
 	s.wg.Wait()
+}
+
+// mergeRules lets an operator replace a bundled rule by using the same name,
+// while preserving deterministic default order and appending new rules.
+func mergeRules(user []Rule, disableDefaults bool) []Rule {
+	if disableDefaults {
+		return append([]Rule(nil), user...)
+	}
+	overrides := make(map[string]Rule, len(user))
+	for _, rule := range user {
+		overrides[rule.Name] = rule
+	}
+	defaults := DefaultRules()
+	out := make([]Rule, 0, len(defaults)+len(user))
+	for _, rule := range defaults {
+		if override, ok := overrides[rule.Name]; ok {
+			out = append(out, override)
+			delete(overrides, rule.Name)
+		} else {
+			out = append(out, rule)
+		}
+	}
+	for _, rule := range user {
+		if _, ok := overrides[rule.Name]; ok {
+			out = append(out, rule)
+			delete(overrides, rule.Name)
+		}
+	}
+	return out
 }
 
 // Rules returns a copy of the rules the evaluator runs. Used by the

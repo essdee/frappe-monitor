@@ -9,14 +9,18 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
-	"frappe-monitor/internal/logs"
+	"frappe-monitor/internal/metrics"
 	"frappe-monitor/internal/parser"
+	"frappe-monitor/internal/probes"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
+	"frappe-monitor/scripts"
 )
 
 // Pusher abstracts the metrics-backend write so the pipeline can be tested
@@ -25,10 +29,8 @@ type Pusher interface {
 	Push(ctx context.Context, body string) error
 }
 
-// LogPusher abstracts the Loki-side write so the pipeline can be tested
-// without standing up Loki. logs.LokiClient implements it.
-type LogPusher interface {
-	Push(ctx context.Context, streams []logs.Stream) error
+type PublicProber interface {
+	ProbeSites(ctx context.Context, sites []probes.Site) []probes.Result
 }
 
 // Pipeline owns the per-server pull. The exec, push, and store
@@ -37,38 +39,30 @@ type Pipeline struct {
 	Store  storage.Store
 	Exec   sshpkg.Executor
 	Push   Pusher
+	Public PublicProber
 	Logger *slog.Logger
 }
 
-// CollectorPath is the location of the deployed bash collector on each
-// bench server. Lives in the SSH user's home directory so deploy +
-// invoke don't need root. The literal "$HOME" survives interpolation:
-// every shell we exec under (bash, dash, zsh) expands it for the
-// remote user before the collector is invoked.
-const CollectorPath = "$HOME/.frappe-monitor/frappe-monitor-collect.sh"
-
 // buildCollectCmd returns the shell command to run the collector,
-// optionally with BENCH_PATHS preset so the bash side skips its
-// auto-discovery and uses the operator-supplied paths instead. When
-// benchPaths is empty, the bash side falls back to scanning standard
-// locations.
+// optionally with BENCH_PATHS preset. The embedded collector is piped over
+// SSH stdin and executed with bash; nothing is installed on the target.
 //
 // Paths are joined with ':' (matching the bash collector's parser)
 // and shell-escaped via single-quote wrapping so paths with spaces
 // or quotes don't break the command line.
 func buildCollectCmd(benchPaths []string) string {
 	if len(benchPaths) == 0 {
-		return CollectorPath
+		return "bash -s"
 	}
 	joined := strings.Join(benchPaths, ":")
 	// Single-quote escape: ' → '\'' (close, escape, reopen).
 	escaped := "'" + strings.ReplaceAll(joined, "'", `'\''`) + "'"
-	return "BENCH_PATHS=" + escaped + " " + CollectorPath
+	return "BENCH_PATHS=" + escaped + " bash -s"
 }
 
 // PullOnce runs one full cycle for the server with the given id:
 //
-//	store.GetServer  → ssh.Run(CollectorPath)
+//	store.GetServer  → ssh.RunWithInput("bash -s", embedded collector)
 //	→ parser.Tokenize → parser.ServerFromSections
 //	→ metrics.ServerMetrics.LineProtocol → push.Push
 //	→ store.SetServerStatus("reachable" | "unreachable", err)
@@ -83,6 +77,7 @@ func buildCollectCmd(benchPaths []string) string {
 //   - All paths return the underlying error (or nil) so the scheduler can
 //     log + count outcomes.
 func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
+	startedAt := time.Now()
 	srv, err := p.Store.GetServer(ctx, serverID)
 	if err != nil {
 		// Don't write status; if we can't even find the row, there's nothing to update.
@@ -92,17 +87,18 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 	target := sshpkg.Target{
 		Host: srv.Hostname, Port: srv.SSHPort, User: srv.SSHUser, KeyPath: srv.SSHKeyPath,
 	}
-	stdout, runErr := p.Exec.Run(ctx, target, buildCollectCmd(srv.BenchPaths))
+	stdout, runErr := p.Exec.RunWithInput(ctx, target, buildCollectCmd(srv.BenchPaths), scripts.CollectorScript)
 	if runErr != nil {
 		wrapped := fmt.Errorf("ssh: %w", runErr)
-		_ = p.markUnreachable(ctx, serverID, wrapped)
+		_ = p.markUnreachable(ctx, srv, wrapped)
 		return wrapped
 	}
+	sshFinishedAt := time.Now()
 
 	out, parseErr := parser.Tokenize(stdout)
 	if parseErr != nil {
 		wrapped := fmt.Errorf("parse: %w", parseErr)
-		_ = p.markUnreachable(ctx, serverID, wrapped)
+		_ = p.markUnreachable(ctx, srv, wrapped)
 		return wrapped
 	}
 
@@ -113,14 +109,14 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		exitCode := errSec.KVs["exit_code"]
 		line := errSec.KVs["line"]
 		wrapped := fmt.Errorf("collector script error (exit=%s line=%s)", exitCode, line)
-		_ = p.markUnreachable(ctx, serverID, wrapped)
+		_ = p.markUnreachable(ctx, srv, wrapped)
 		return wrapped
 	}
 
 	m, convErr := parser.ServerFromSections(out)
 	if convErr != nil {
 		wrapped := fmt.Errorf("parse: %w", convErr)
-		_ = p.markUnreachable(ctx, serverID, wrapped)
+		_ = p.markUnreachable(ctx, srv, wrapped)
 		return wrapped
 	}
 
@@ -135,7 +131,7 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 	// inventory without losing reachability state.
 	if len(m.Disks) == 0 && len(m.Net) == 0 {
 		wrapped := fmt.Errorf("parse: empty disks AND net — collector output looks torn")
-		_ = p.markUnreachable(ctx, serverID, wrapped)
+		_ = p.markUnreachable(ctx, srv, wrapped)
 		return wrapped
 	}
 	if len(m.Disks) == 0 || len(m.Net) == 0 {
@@ -151,6 +147,7 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 	// the rest of the pull.
 	var body strings.Builder
 	body.WriteString(m.LineProtocol(srv.Name))
+	body.WriteString(metrics.ReachabilityLineProtocol(srv.Name, true, time.Now().UTC()))
 
 	benchOK, benchErr := 0, 0
 	for _, benchName := range parser.BenchNames(out) {
@@ -168,6 +165,7 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 	}
 
 	siteOK, siteErr := 0, 0
+	publicSites := make([]probes.Site, 0)
 	for _, pair := range parser.SiteNamesFor(out) {
 		benchName, siteName := pair[0], pair[1]
 		sm, err := parser.SiteFromSections(out, benchName, siteName)
@@ -180,10 +178,12 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		sm.Timestamp = m.Timestamp
 		sm.Server = srv.Name
 		body.WriteString(sm.LineProtocol(srv.Name))
+		publicSites = append(publicSites, probes.Site{Server: srv.Name, Bench: benchName, Site: siteName})
 		siteOK++
 	}
 
 	bodyStr := body.String()
+	pushStartedAt := time.Now()
 	if pushErr := p.Push.Push(ctx, bodyStr); pushErr != nil {
 		// Server is reachable; the metrics backend failed. Mark reachable
 		// (the probe succeeded) and log the push error loudly so operators
@@ -197,10 +197,42 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		}
 		return fmt.Errorf("push: %w", pushErr)
 	}
+	internalPushDuration := time.Since(pushStartedAt)
 
 	if err := p.Store.SetServerStatus(ctx, serverID, "reachable", ""); err != nil {
 		p.Logger.Error("collector: set status reachable", "server_id", serverID, "err", err)
 		return fmt.Errorf("status: %w", err)
+	}
+
+	// Public checks are deliberately a second, non-fatal phase. The SSH and
+	// internal site metrics above are already durable, so DNS/TLS latency or a
+	// public-probe timeout can never make a reachable server appear offline.
+	publicOK, publicFailed := 0, 0
+	var publicProbeDuration time.Duration
+	if p.Public != nil && len(publicSites) > 0 && ctx.Err() == nil {
+		publicStartedAt := time.Now()
+		results := p.Public.ProbeSites(ctx, publicSites)
+		var publicBody strings.Builder
+		for _, result := range results {
+			pm := metrics.PublicSiteMetrics{
+				Timestamp: result.Timestamp, Server: result.Server, Bench: result.Bench, Site: result.Site,
+				HTTPStatusCode: result.HTTPStatusCode, HTTPResponseMs: result.HTTPResponseMs,
+				IsHealthy: result.IsHealthy, FailureReasonCode: result.FailureReasonCode,
+				TLSCertExpiryTimestamp: result.TLSCertExpiryTimestamp,
+			}
+			publicBody.WriteString(pm.LineProtocol())
+			if result.IsHealthy == 1 {
+				publicOK++
+			} else {
+				publicFailed++
+			}
+		}
+		if publicBody.Len() > 0 {
+			if err := p.Push.Push(ctx, publicBody.String()); err != nil {
+				p.Logger.Warn("collector: public probe metrics push failed", "server_id", serverID, "err", err)
+			}
+		}
+		publicProbeDuration = time.Since(publicStartedAt)
 	}
 	p.Logger.Info("collector: pull ok",
 		"server_id", serverID,
@@ -209,126 +241,47 @@ func (p *Pipeline) PullOnce(ctx context.Context, serverID int) error {
 		"benches_ok", benchOK,
 		"benches_err", benchErr,
 		"sites_ok", siteOK,
-		"sites_err", siteErr)
+		"sites_err", siteErr,
+		"public_sites_ok", publicOK,
+		"public_sites_failed", publicFailed,
+		"ssh_ms", sshFinishedAt.Sub(startedAt).Milliseconds(),
+		"parse_ms", pushStartedAt.Sub(sshFinishedAt).Milliseconds(),
+		"push_ms", internalPushDuration.Milliseconds(),
+		"public_probe_ms", publicProbeDuration.Milliseconds(),
+		"total_ms", time.Since(startedAt).Milliseconds())
 	return nil
-}
-
-// PullLogsOnce tails the supplied log files for the given server and
-// pushes any new entries to the configured LogPusher (Loki). For each
-// file it advances the per-(server, path) cursor in storage on success.
-//
-// Per-file failures are logged at warn-level and skipped — one bad file
-// shouldn't block the rest. Returns the number of files that succeeded
-// (advanced their cursor) and the number that errored. A single Loki
-// push covers all files in this cycle (one HTTP request).
-//
-// Caller supplies the LogFile list — typically derived from the bench
-// list reported by the most recent metrics pull, plus any server-wide
-// files like the MariaDB slow query log. Phase 3 v1 doesn't auto-
-// discover log paths server-side.
-func (p *Pipeline) PullLogsOnce(
-	ctx context.Context,
-	serverID int,
-	logPusher LogPusher,
-	tailer *LogTailer,
-	files []LogTailFile,
-) (ok int, errs int, err error) {
-	srv, err := p.Store.GetServer(ctx, serverID)
-	if err != nil {
-		return 0, 0, fmt.Errorf("collector logs: get server %d: %w", serverID, err)
-	}
-	target := sshpkg.Target{
-		Host: srv.Hostname, Port: srv.SSHPort, User: srv.SSHUser, KeyPath: srv.SSHKeyPath,
-	}
-
-	// Tail every file; collect (TailResult, file) pairs for the ones
-	// that yielded entries so we can push in one shot at the end.
-	var streams []logs.Stream
-	type pendingCursor struct {
-		path   string
-		offset int64
-	}
-	var pending []pendingCursor
-
-	for _, f := range files {
-		labels := map[string]string{
-			"server":   srv.Name,
-			"log_type": f.Type,
-		}
-		if f.Bench != "" {
-			labels["bench"] = f.Bench
-		}
-
-		res, terr := tailer.TailFile(ctx, target, serverID, labels, LogFile{
-			Path: f.Path, Type: f.Type,
-		})
-		if terr != nil {
-			errs++
-			p.Logger.Warn("collector: log tail failed (skipped)",
-				"server_id", serverID, "path", f.Path, "err", terr)
-			continue
-		}
-
-		if len(res.Stream.Entries) > 0 {
-			streams = append(streams, res.Stream)
-		}
-		pending = append(pending, pendingCursor{path: f.Path, offset: res.NewOffset})
-		ok++
-	}
-
-	// One Loki push covers all files in this cycle. Empty input is a
-	// no-op in LokiClient.Push, so the call is safe regardless.
-	if pushErr := logPusher.Push(ctx, streams); pushErr != nil {
-		// Don't advance any cursors on push failure — re-pushing the
-		// same entries on the next cycle is preferable to losing them.
-		p.Logger.Error("collector: loki push failed",
-			"server_id", serverID, "files", len(pending), "err", pushErr)
-		return ok, errs, fmt.Errorf("loki push: %w", pushErr)
-	}
-
-	// Push succeeded — advance every cursor.
-	for _, pc := range pending {
-		if cerr := p.Store.UpsertLogCursor(ctx, storage.LogCursor{
-			ServerID:   serverID,
-			LogPath:    pc.path,
-			ByteOffset: pc.offset,
-		}); cerr != nil {
-			p.Logger.Error("collector: cursor update failed",
-				"server_id", serverID, "path", pc.path, "err", cerr)
-			// Don't return — best-effort cursor advance.
-		}
-	}
-
-	p.Logger.Info("collector: logs pulled",
-		"server_id", serverID,
-		"server_name", srv.Name,
-		"files_ok", ok,
-		"files_err", errs,
-		"streams_pushed", len(streams))
-	return ok, errs, nil
-}
-
-// LogTailFile is one entry in the list passed to PullLogsOnce. Bench is
-// optional — server-wide files (like MariaDB's slow query log) leave it
-// empty so the resulting Loki stream has no `bench` label.
-type LogTailFile struct {
-	Path  string
-	Type  string // "error" | "slow_query" | etc.
-	Bench string // "" for server-wide files
 }
 
 // markUnreachable updates the server's status row, capping the recorded
 // last_error so a multi-MB SSH stderr doesn't bloat the SQLite row.
-func (p *Pipeline) markUnreachable(ctx context.Context, serverID int, cause error) error {
+func (p *Pipeline) markUnreachable(ctx context.Context, srv *storage.Server, cause error) error {
+	// A caller cancellation (normally process shutdown) is not evidence that
+	// the remote server failed. A per-job deadline, however, is a real failed
+	// collection and must be persisted/reported using a short cleanup context.
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return ctx.Err()
+	}
+	statusCtx := ctx
+	cancel := func() {}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		statusCtx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	}
+	defer cancel()
+
 	const maxErrLen = 4096
 	msg := cause.Error()
 	if len(msg) > maxErrLen {
 		msg = msg[:maxErrLen]
 	}
-	if err := p.Store.SetServerStatus(ctx, serverID, "unreachable", msg); err != nil {
+	if err := p.Store.SetServerStatus(statusCtx, srv.ID, "unreachable", msg); err != nil {
 		p.Logger.Error("collector: set status unreachable",
-			"server_id", serverID, "err", err)
+			"server_id", srv.ID, "err", err)
 		return err
+	}
+	if err := p.Push.Push(statusCtx,
+		metrics.ReachabilityLineProtocol(srv.Name, false, time.Now().UTC())); err != nil {
+		p.Logger.Error("collector: push unreachable status failed",
+			"server_id", srv.ID, "server_name", srv.Name, "err", err)
 	}
 	return nil
 }

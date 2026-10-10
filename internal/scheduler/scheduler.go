@@ -35,7 +35,10 @@ type Scheduler struct {
 	parentCtx    context.Context
 	parentCancel context.CancelFunc
 
-	wg sync.WaitGroup
+	wg      sync.WaitGroup
+	runMu   sync.Mutex
+	running map[int]struct{}
+	stopped bool
 
 	// entries tracks the cron EntryID for each keyed job so the
 	// caller can remove a job (e.g. on server delete). Add() is the
@@ -72,6 +75,7 @@ func New(maxParallel int, perJobTimeout time.Duration, logger *slog.Logger) *Sch
 		parentCtx:    pctx,
 		parentCancel: pcancel,
 		entries:      map[int]cron.EntryID{},
+		running:      map[int]struct{}{},
 	}
 }
 
@@ -127,10 +131,21 @@ func (s *Scheduler) Start() {
 	s.cron.Start()
 }
 
+// RunNow starts a job immediately through the same timeout, parallelism, and
+// per-server overlap guards as scheduled executions. It is used at startup
+// and after adding a server so operators do not wait a full interval for the
+// first health result.
+func (s *Scheduler) RunNow(j Job) {
+	go s.runOnce(j)
+}
+
 // Stop cancels the scheduler's parent context (so in-flight jobs see
 // ctx.Done()), stops the cron from firing new entries, and blocks until
 // all running goroutines return — or until ctx expires, whichever first.
 func (s *Scheduler) Stop(ctx context.Context) error {
+	s.runMu.Lock()
+	s.stopped = true
+	s.runMu.Unlock()
 	s.parentCancel()
 	cronCtx := s.cron.Stop()
 
@@ -153,8 +168,25 @@ func (s *Scheduler) Stop(ctx context.Context) error {
 // runOnce is the body of every fired cron entry: track via wg, gate on
 // the semaphore, build the per-job timeout context, and call Job.Run.
 func (s *Scheduler) runOnce(j Job) {
+	s.runMu.Lock()
+	if s.stopped {
+		s.runMu.Unlock()
+		return
+	}
+	if _, exists := s.running[j.ServerID]; exists {
+		s.runMu.Unlock()
+		s.logger.Warn("scheduler: skipped overlapping job", "server_id", j.ServerID)
+		return
+	}
+	s.running[j.ServerID] = struct{}{}
 	s.wg.Add(1)
-	defer s.wg.Done()
+	s.runMu.Unlock()
+	defer func() {
+		s.runMu.Lock()
+		delete(s.running, j.ServerID)
+		s.runMu.Unlock()
+		s.wg.Done()
+	}()
 
 	// Acquire the parallelism semaphore. Bail if we're already shutting down.
 	select {

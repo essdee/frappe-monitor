@@ -174,6 +174,26 @@ func TestParseServer_RejectsHalfPairDisk(t *testing.T) {
 	require.Contains(t, err.Error(), "missing")
 }
 
+func TestSplitLabeledKey_HandlesEscapesAndCommas(t *testing.T) {
+	base, labels, ok := splitLabeledKey(`metric{mount="/data/a,b\\\"c",role="db"}`)
+	require.True(t, ok)
+	require.Equal(t, "metric", base)
+	require.Equal(t, `/data/a,b\"c`, labels["mount"])
+	require.Equal(t, "db", labels["role"])
+}
+
+func TestSplitLabeledKey_RejectsMalformedOrDuplicateLabels(t *testing.T) {
+	for _, key := range []string{
+		`metric{mount="unterminated}`,
+		`metric{mount="a",mount="b"}`,
+		`metric{mount="a" trailing}`,
+		`{mount="a"}`,
+	} {
+		_, _, ok := splitLabeledKey(key)
+		require.False(t, ok, key)
+	}
+}
+
 // --- helpers ---
 
 func minimalSeverBodyMap(overrides map[string]string) map[string]string {
@@ -184,7 +204,7 @@ func minimalSeverBodyMap(overrides map[string]string) map[string]string {
 		"mem_free_kb": "4000000", "mem_buffers_kb": "500000", "mem_cached_kb": "2000000",
 		"swap_total_kb": "1000", "swap_free_kb": "500",
 		"load_1m": "1.0", "load_5m": "0.5", "load_15m": "0.2",
-		"uptime_seconds": "42.5",
+		"uptime_seconds":              "42.5",
 		`disk_used_bytes{mount="/"}`:  "100",
 		`disk_total_bytes{mount="/"}`: "1000",
 		`net_rx_bytes{iface="eth0"}`:  "11",

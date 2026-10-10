@@ -6,26 +6,25 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"frappe-monitor/internal/logs"
+	"frappe-monitor/internal/probes"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 )
 
-func itoa(n int64) string { return strconv.FormatInt(n, 10) }
-
 // fakePusher captures the most recent body and lets tests inject errors.
 type fakePusher struct {
-	mu       sync.Mutex
-	body     string
-	pushErr  error
-	calls    int
+	mu      sync.Mutex
+	body    string
+	pushErr error
+	calls   int
+	bodies  []string
 }
 
 func (f *fakePusher) Push(_ context.Context, body string) error {
@@ -33,7 +32,14 @@ func (f *fakePusher) Push(_ context.Context, body string) error {
 	defer f.mu.Unlock()
 	f.calls++
 	f.body = body
+	f.bodies = append(f.bodies, body)
 	return f.pushErr
+}
+
+type fakePublicProber struct{ results []probes.Result }
+
+func (f fakePublicProber) ProbeSites(_ context.Context, _ []probes.Site) []probes.Result {
+	return f.results
 }
 
 func (f *fakePusher) Body() string {
@@ -97,6 +103,7 @@ func TestPullOnce_HappyPath(t *testing.T) {
 	// Spot-check: at least 5 of the expected metric families are present,
 	// each tagged with server=prod-1.
 	for _, name := range []string{
+		"frappe_server_reachable,server=prod-1 value=1",
 		"frappe_server_load_1m,server=prod-1",
 		"frappe_server_cpu_user,server=prod-1",
 		"frappe_server_mem_total_bytes,server=prod-1",
@@ -113,6 +120,25 @@ func TestPullOnce_HappyPath(t *testing.T) {
 	require.Empty(t, refreshed.LastError)
 }
 
+func TestPullOnce_PublicProbeIsSeparateNonFatalPhase(t *testing.T) {
+	p, push, exec, store := newTestPipeline(t)
+	srv := makeServer(t, store, "prod-public", "host-public")
+	full, err := os.ReadFile("../parser/testdata/full-hierarchy.txt")
+	require.NoError(t, err)
+	exec.SetResponse("host-public", string(full), nil)
+	p.Public = fakePublicProber{results: []probes.Result{{
+		Server: "prod-public", Bench: "production", Site: "client-a.com",
+		Timestamp: time.Unix(1714363200, 0).UTC(), HTTPStatusCode: 200,
+		HTTPResponseMs: 42.5, IsHealthy: 1, FailureReasonCode: probes.ReasonOK,
+	}}}
+
+	require.NoError(t, p.PullOnce(context.Background(), srv.ID))
+	require.Equal(t, 2, push.Calls(), "internal metrics must be durable before the public phase")
+	require.Contains(t, push.bodies[0], "frappe_server_reachable,server=prod-public value=1")
+	require.NotContains(t, push.bodies[0], "frappe_site_public_")
+	require.Contains(t, push.bodies[1], "frappe_site_public_is_healthy,server=prod-public,bench=production,site=client-a.com value=1")
+}
+
 func TestPullOnce_SSHFailure(t *testing.T) {
 	p, push, exec, store := newTestPipeline(t)
 	srv := makeServer(t, store, "prod-2", "host-b")
@@ -123,7 +149,8 @@ func TestPullOnce_SSHFailure(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ssh:")
 	require.Contains(t, err.Error(), "connection refused")
-	require.Equal(t, 0, push.Calls(), "no push on SSH failure")
+	require.Equal(t, 1, push.Calls(), "SSH failure must push an explicit unreachable sample")
+	require.Contains(t, push.Body(), "frappe_server_reachable,server=prod-2 value=0")
 
 	refreshed, err := store.GetServer(context.Background(), srv.ID)
 	require.NoError(t, err)
@@ -142,7 +169,8 @@ func TestPullOnce_ParseFailure(t *testing.T) {
 	err := p.PullOnce(context.Background(), srv.ID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "parse:")
-	require.Equal(t, 0, push.Calls(), "no push on parse failure")
+	require.Equal(t, 1, push.Calls(), "parse failure must push an explicit unreachable sample")
+	require.Contains(t, push.Body(), "frappe_server_reachable,server=prod-3 value=0")
 
 	refreshed, err := store.GetServer(context.Background(), srv.ID)
 	require.NoError(t, err)
@@ -170,7 +198,8 @@ func TestPullOnce_ScriptErrorSectionSurfacesExitCode(t *testing.T) {
 	require.Contains(t, err.Error(), "collector script error")
 	require.Contains(t, err.Error(), "exit=42")
 	require.Contains(t, err.Error(), "line=137")
-	require.Equal(t, 0, push.Calls())
+	require.Equal(t, 1, push.Calls())
+	require.Contains(t, push.Body(), "frappe_server_reachable,server=prod-3b value=0")
 
 	refreshed, err := store.GetServer(context.Background(), srv.ID)
 	require.NoError(t, err)
@@ -265,7 +294,8 @@ func TestPullOnce_EmptyDisksAndNetRejected(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "parse:")
 	require.Contains(t, err.Error(), "empty disks AND net")
-	require.Equal(t, 0, push.Calls())
+	require.Equal(t, 1, push.Calls())
+	require.Contains(t, push.Body(), "frappe_server_reachable,server=prod-6 value=0")
 
 	refreshed, err := store.GetServer(context.Background(), srv.ID)
 	require.NoError(t, err)
@@ -336,138 +366,6 @@ func TestPullOnce_FullHierarchy_PerSectionParseErrorsLogged(t *testing.T) {
 	body := push.Body()
 	require.Contains(t, body, "bench=frappe-bench") // good bench landed
 	require.NotContains(t, body, "bench=malformed") // bad bench skipped
-}
-
-// fakeLogPusher captures pushed streams for assertion + lets tests inject errors.
-type fakeLogPusher struct {
-	streams [][]logs.Stream
-	pushErr error
-}
-
-func (f *fakeLogPusher) Push(_ context.Context, streams []logs.Stream) error {
-	f.streams = append(f.streams, streams)
-	return f.pushErr
-}
-
-func newTailer(t *testing.T, exec *sshpkg.FakeExecutor, store storage.Store) *LogTailer {
-	t.Helper()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return &LogTailer{Store: store, Exec: exec, Logger: logger}
-}
-
-func TestPullLogsOnce_HappyPath_AdvancesCursorsAndPushes(t *testing.T) {
-	p, _, exec, store := newTestPipeline(t)
-	srv := makeServer(t, store, "prod-1", "logs-host")
-
-	// Two files, each with a fresh-cycle response (no prior cursor).
-	body1 := "err one\nerr two\n"
-	body2 := "slow query 1\n"
-	exec.SetResponse("logs-host", "SIZE:"+itoa(int64(len(body1)))+"\n"+body1, nil)
-	tailer := newTailer(t, exec, store)
-	pusher := &fakeLogPusher{}
-
-	// First call: tail the error log.
-	ok, errs, err := p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
-		[]LogTailFile{{Path: "/var/log/web.error.log", Type: "error", Bench: "b1"}})
-	require.NoError(t, err)
-	require.Equal(t, 1, ok)
-	require.Equal(t, 0, errs)
-	require.Len(t, pusher.streams, 1)
-	require.Len(t, pusher.streams[0], 1)
-	require.Equal(t, "b1", pusher.streams[0][0].Labels["bench"])
-	require.Equal(t, "error", pusher.streams[0][0].Labels["log_type"])
-	require.Equal(t, "prod-1", pusher.streams[0][0].Labels["server"])
-
-	// Cursor advanced to len(body1).
-	cur, err := store.GetLogCursor(context.Background(), srv.ID, "/var/log/web.error.log")
-	require.NoError(t, err)
-	require.Equal(t, int64(len(body1)), cur.ByteOffset)
-
-	// Second call: tail a slow-query log (server-wide, no bench label).
-	exec.SetResponse("logs-host", "SIZE:"+itoa(int64(len(body2)))+"\n"+body2, nil)
-	pusher.streams = nil
-	ok, errs, err = p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
-		[]LogTailFile{{Path: "/var/log/mysql/slow.log", Type: "slow_query"}})
-	require.NoError(t, err)
-	require.Equal(t, 1, ok)
-	require.Equal(t, 0, errs)
-	require.Len(t, pusher.streams[0], 1)
-	require.Equal(t, "slow_query", pusher.streams[0][0].Labels["log_type"])
-	_, hasBench := pusher.streams[0][0].Labels["bench"]
-	require.False(t, hasBench, "server-wide log must not carry a bench label")
-}
-
-func TestPullLogsOnce_NoNewBytes_NoStreamPushed(t *testing.T) {
-	p, _, exec, store := newTestPipeline(t)
-	srv := makeServer(t, store, "prod-2", "quiet-host")
-	require.NoError(t, store.UpsertLogCursor(context.Background(), storage.LogCursor{
-		ServerID: srv.ID, LogPath: "/var/log/x.log", ByteOffset: 100,
-	}))
-	exec.SetResponse("quiet-host", "SIZE:100\n", nil)
-
-	tailer := newTailer(t, exec, store)
-	pusher := &fakeLogPusher{}
-
-	ok, errs, err := p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
-		[]LogTailFile{{Path: "/var/log/x.log", Type: "error", Bench: "b1"}})
-	require.NoError(t, err)
-	require.Equal(t, 1, ok)
-	require.Equal(t, 0, errs)
-	// Push was called once with empty streams (no-op in LokiClient).
-	require.Len(t, pusher.streams, 1)
-	require.Empty(t, pusher.streams[0])
-}
-
-func TestPullLogsOnce_PushFailureKeepsCursors(t *testing.T) {
-	p, _, exec, store := newTestPipeline(t)
-	srv := makeServer(t, store, "prod-3", "loki-down-host")
-	body := "alpha\nbeta\n"
-	exec.SetResponse("loki-down-host", "SIZE:"+itoa(int64(len(body)))+"\n"+body, nil)
-
-	tailer := newTailer(t, exec, store)
-	pusher := &fakeLogPusher{pushErr: errors.New("loki is down")}
-
-	_, _, err := p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
-		[]LogTailFile{{Path: "/var/log/y.log", Type: "error", Bench: "b1"}})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "loki push")
-
-	// Cursor must NOT have advanced — re-pushing on the next cycle is
-	// preferable to silently dropping the entries.
-	_, err = store.GetLogCursor(context.Background(), srv.ID, "/var/log/y.log")
-	require.ErrorIs(t, err, storage.ErrNotFound)
-}
-
-func TestPullLogsOnce_PerFileTailFailureSkipsButContinues(t *testing.T) {
-	// First file's TailFile fails (FakeExecutor returns no canned response
-	// for the host AT ALL — simulates a malformed response). Second file
-	// returns a valid SIZE header. The good file should still push and
-	// advance.
-
-	p, _, exec, store := newTestPipeline(t)
-	srv := makeServer(t, store, "prod-4", "mixed-host")
-
-	// Set canned response that returns malformed output (no SIZE header)
-	// — TailFile will return an error, but we want one bad file to skip
-	// and the cycle to continue.
-	exec.SetResponse("mixed-host", "garbage no header\n", nil)
-
-	tailer := newTailer(t, exec, store)
-	pusher := &fakeLogPusher{}
-
-	// Two files; both will hit the same canned response (FakeExecutor
-	// keys by host, not cmd). So both will fail. We expect errs=2, ok=0.
-	ok, errs, err := p.PullLogsOnce(context.Background(), srv.ID, pusher, tailer,
-		[]LogTailFile{
-			{Path: "/var/log/a.log", Type: "error"},
-			{Path: "/var/log/b.log", Type: "error"},
-		})
-	require.NoError(t, err) // outer call succeeds; per-file errors don't fail it
-	require.Equal(t, 0, ok)
-	require.Equal(t, 2, errs)
-	// Empty Loki push happened (no streams accumulated).
-	require.Len(t, pusher.streams, 1)
-	require.Empty(t, pusher.streams[0])
 }
 
 func TestPullOnce_BodyContainsSSHTargetData(t *testing.T) {

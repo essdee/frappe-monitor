@@ -19,36 +19,55 @@ export function useMetricsRange(
   const result = ref<MetricsQueryResponse | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+	let requestSequence = 0
 
   async function refresh() {
-    if (!query.value) return
+		const requestID = ++requestSequence
+		const querySnapshot = query.value
+		if (!querySnapshot) {
+			result.value = null
+			error.value = null
+			return
+		}
+		const rangeSnapshot = range.value
     loading.value = true
     error.value = null
     try {
-      result.value = await queryMetrics(query.value, range.value)
+			const response = await queryMetrics(querySnapshot, rangeSnapshot)
+			if (requestID === requestSequence) result.value = response
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
+			if (requestID === requestSequence) {
+				error.value = e instanceof Error ? e.message : String(e)
+			}
     } finally {
-      loading.value = false
+			if (requestID === requestSequence) loading.value = false
     }
   }
 
-  let timer: ReturnType<typeof setInterval> | null = null
+	let timer: ReturnType<typeof setTimeout> | null = null
+	let armedSeconds = 0
   function arm(secs: number) {
     if (timer) {
-      clearInterval(timer)
+			clearTimeout(timer)
       timer = null
     }
-    if (secs > 0) {
-      timer = setInterval(refresh, secs * 1000)
-    }
+		armedSeconds = secs
+		if (secs > 0) scheduleNext()
+	}
+	function scheduleNext() {
+		timer = setTimeout(async () => {
+			await refresh()
+			if (armedSeconds > 0) scheduleNext()
+		}, armedSeconds * 1000)
   }
 
   watch([query, range], refresh, { immediate: true })
   watch(refreshSec, (s) => arm(s), { immediate: true })
 
   onScopeDispose(() => {
-    if (timer) clearInterval(timer)
+		requestSequence++
+		armedSeconds = 0
+		if (timer) clearTimeout(timer)
   })
 
   return { result, loading, error, refresh }

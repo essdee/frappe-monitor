@@ -58,6 +58,9 @@ func Tokenize(input string) (Output, error) {
 		if line == "" {
 			continue
 		}
+		if hadEnd {
+			return Output{}, fmt.Errorf("line %d: content after ###END", lineNo)
+		}
 
 		if line == "###END" {
 			if current != nil {
@@ -65,7 +68,7 @@ func Tokenize(input string) (Output, error) {
 				current = nil
 			}
 			hadEnd = true
-			break
+			continue
 		}
 
 		if strings.HasPrefix(line, "###") {
@@ -92,6 +95,9 @@ func Tokenize(input string) (Output, error) {
 		if err != nil {
 			return Output{}, fmt.Errorf("line %d: %w", lineNo, err)
 		}
+		if _, duplicate := current.KVs[key]; duplicate {
+			return Output{}, fmt.Errorf("line %d: duplicate key %q in section %q", lineNo, key, current.Name)
+		}
 		current.KVs[key] = value
 	}
 
@@ -107,8 +113,25 @@ func Tokenize(input string) (Output, error) {
 func splitKV(line string) (key, value string, err error) {
 	depth := 0
 	eq := -1
+	inQuotes := false
+	escaped := false
 scan:
 	for i := 0; i < len(line); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inQuotes && line[i] == '\\' {
+			escaped = true
+			continue
+		}
+		if line[i] == '"' {
+			inQuotes = !inQuotes
+			continue
+		}
+		if inQuotes {
+			continue
+		}
 		switch line[i] {
 		case '{':
 			depth++
@@ -123,8 +146,11 @@ scan:
 			}
 		}
 	}
-	if eq < 0 {
+	if eq < 0 || depth != 0 || inQuotes || escaped {
 		return "", "", fmt.Errorf("malformed (no '=' at brace-depth zero): %q", line)
+	}
+	if eq == 0 {
+		return "", "", fmt.Errorf("malformed empty key: %q", line)
 	}
 	return line[:eq], line[eq+1:], nil
 }

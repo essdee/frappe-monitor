@@ -9,16 +9,17 @@ import (
 var (
 	ErrNotFound          = errors.New("storage: not found")
 	ErrDuplicateHostname = errors.New("storage: hostname already exists")
+	ErrDuplicateName     = errors.New("storage: server name already exists")
 )
 
-// LogCursor records the byte offset of the last log read for a given
-// (server, log_path) pair. Used by the log-tailing pipeline to read
-// only the bytes appended since the previous cycle.
+// LogCursor records the remote file identity and exclusive byte offset last
+// committed to Loki for a (server,log_path) stream.
 type LogCursor struct {
-	ServerID   int
-	LogPath    string
-	ByteOffset int64
-	LastSeenAt time.Time
+	ServerID     int
+	LogPath      string
+	FileIdentity string
+	ByteOffset   int64
+	LastSeenAt   time.Time
 }
 
 type Server struct {
@@ -82,6 +83,30 @@ type AlertState struct {
 	FirstFiredAt   time.Time
 	LastNotifiedAt time.Time
 	UpdatedAt      time.Time
+}
+
+// AlertIncident is an immutable episode identity with mutable resolution
+// metadata. Unlike AlertState, resolved incidents are retained for diagnosis.
+type AlertIncident struct {
+	ID             int
+	RuleName       string
+	Fingerprint    string
+	Severity       string
+	Labels         map[string]string
+	Status         string
+	Value          float64
+	StartedAt      time.Time
+	ResolvedAt     *time.Time
+	LastNotifiedAt *time.Time
+	UpdatedAt      time.Time
+}
+
+// AlertIncidentStore is optional so lightweight evaluator test stores and
+// alternative Store implementations remain compatible. EntStore implements it.
+type AlertIncidentStore interface {
+	UpsertOpenAlertIncident(ctx context.Context, in AlertIncident) (*AlertIncident, error)
+	ResolveOpenAlertIncident(ctx context.Context, ruleName, fingerprint string, value float64, resolvedAt time.Time) error
+	ListAlertIncidents(ctx context.Context, limit int) ([]*AlertIncident, error)
 }
 
 type Store interface {

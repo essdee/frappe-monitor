@@ -33,10 +33,18 @@ make build >/dev/null
 [ -x "$BINARY" ] || fail "binary not produced at $BINARY"
 ok "$BINARY built (with embedded SPA)"
 
-# Confirm CGO disabled — readelf works on stripped Go binaries to look for
-# libc dependency. Statically-linked Go binary has no NEEDED entries.
-if readelf -d "$BINARY" 2>/dev/null | grep -q NEEDED; then
-    fail "binary has dynamic dependencies — expected CGO_ENABLED=0 build"
+# Confirm CGO disabled. Use readelf when available, otherwise fall back to
+# ldd; never claim success merely because a verification tool was missing.
+if command -v readelf >/dev/null 2>&1; then
+    if readelf -d "$BINARY" 2>/dev/null | grep -q NEEDED; then
+        fail "binary has dynamic dependencies — expected CGO_ENABLED=0 build"
+    fi
+elif command -v ldd >/dev/null 2>&1; then
+    if ldd "$BINARY" 2>&1 | grep -q '=> /'; then
+        fail "binary has dynamic dependencies — expected CGO_ENABLED=0 build"
+    fi
+else
+    fail "cannot verify static linkage: install readelf (binutils) or ldd"
 fi
 ok "binary is statically linked (CGO_ENABLED=0)"
 
@@ -130,8 +138,8 @@ ok "GET /api/v1/servers/99999 → 404"
 
 # 5. POST /api/v1/servers/{id}/test-connection
 # The fake key path doesn't exist, so loadKey fails → reachable=false +
-# error_kind="unknown" (no sentinel matched). The HTTP status must still
-# be 200 (diagnostic-endpoint contract).
+# error_kind="key". The HTTP status must still be 200
+# (diagnostic-endpoint contract).
 TC=$(curl -fsS -X POST "$BASE/api/v1/servers/$ID/test-connection")
 REACH=$(echo "$TC" | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["reachable"]).lower())')
 [ "$REACH" = "false" ] || fail "expected reachable=false, got: $TC"

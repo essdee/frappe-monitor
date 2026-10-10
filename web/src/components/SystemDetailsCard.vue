@@ -186,31 +186,31 @@ const swapUsedPct = computed(() => {
         <HardDrive :size="14" :stroke-width="2" />
         Disks
       </h4>
-      <table>
-        <thead>
-          <tr>
-            <th>Mount</th>
-            <th>Filesystem</th>
-            <th class="num">Used</th>
-            <th class="num">Total</th>
-            <th>Usage</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="d in snapshot.payload.disks" :key="d.mount">
-            <td class="mono">{{ d.mount }}</td>
-            <td class="mono muted">{{ d.device }}</td>
-            <td class="num">{{ bytes(d.used_bytes) }}</td>
-            <td class="num">{{ bytes(d.total_bytes) }}</td>
-            <td class="bar-cell">
-              <div class="bar inline">
-                <span :style="{ width: d.use_pct + '%' }" />
-              </div>
-              <span class="pct">{{ d.use_pct }}%</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+			<table class="disk-table">
+				<thead>
+					<tr>
+						<th>Mount</th>
+						<th>Filesystem</th>
+						<th class="num">Used</th>
+						<th class="num">Total</th>
+						<th>Usage</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr v-for="d in snapshot.payload.disks" :key="d.mount">
+						<td class="mono">{{ d.mount }}</td>
+						<td class="mono muted">{{ d.device }}</td>
+						<td class="num">{{ bytes(d.used_bytes) }}</td>
+						<td class="num">{{ bytes(d.total_bytes) }}</td>
+						<td class="bar-cell">
+							<div class="bar inline"><span :style="{ width: d.use_pct + '%' }" /></div>
+							<span class="pct">{{ d.use_pct }}%</span>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+      </div>
     </div>
 
     <!-- Top processes -->
@@ -445,6 +445,7 @@ th {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.table-scroll { max-width: 100%; overflow-x: auto; }
 
 .proc-grid {
   display: grid;
@@ -472,6 +473,8 @@ th {
   /* Process tables horizontal-scroll on phone (inherits from style.css);
      the inline disk usage bar shrinks. */
   .bar.inline { width: 50px; }
+  .disk-table { min-width: 520px; }
+  .disk-table th, .disk-table td { white-space: nowrap; }
   table { font-size: 0.8rem; }
   th, td { padding: 0.4rem 0.55rem; }
   .proc-grid { grid-template-columns: 1fr; }

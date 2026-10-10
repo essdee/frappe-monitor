@@ -1,446 +1,113 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
-import {
-  Bell,
-  BellOff,
-  RefreshCw,
-  AlertTriangle,
-  CheckCircle2,
-  Info,
-} from 'lucide-vue-next'
-import { fetchAlerts, type AlertsResponse } from '../api'
+import { computed, ref } from 'vue'
+import { RouterLink } from 'vue-router'
+import { AlertTriangle, Bell, BellOff, CheckCircle2, Clock3, ExternalLink, History, RefreshCw, ShieldAlert } from 'lucide-vue-next'
+import { fetchAlerts, type AlertIncident, type AlertsResponse } from '../api'
+import { usePolling } from '../composables/usePolling'
 import { useTimeRange } from '../composables/useTimeRange'
 
 const { refreshSec } = useTimeRange()
 const data = ref<AlertsResponse | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+const statusFilter = ref<'all' | 'firing' | 'resolved'>('all')
 
 async function refresh() {
   loading.value = true
   error.value = null
-  try {
-    data.value = await fetchAlerts()
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    loading.value = false
-  }
+  try { data.value = await fetchAlerts() }
+  catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+  finally { loading.value = false }
 }
-
-let timer: ReturnType<typeof setInterval> | null = null
-function arm(secs: number) {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
-  if (secs > 0) timer = setInterval(refresh, secs * 1000)
-}
-watch(refreshSec, (s) => arm(s), { immediate: true })
-onScopeDispose(() => {
-  if (timer) clearInterval(timer)
-})
-onMounted(refresh)
+const { refresh: refreshNow } = usePolling(refresh, refreshSec)
 
 const enabled = computed(() => data.value?.enabled ?? false)
-const rules = computed(() => data.value?.rules ?? [])
 const firing = computed(() => data.value?.firing ?? [])
+const rules = computed(() => data.value?.rules ?? [])
+const incidents = computed(() => data.value?.incidents ?? [])
+const filteredIncidents = computed(() => statusFilter.value === 'all' ? incidents.value : incidents.value.filter((item) => item.status === statusFilter.value))
+const critical = computed(() => firing.value.filter((item) => severityFor(item.rule_name) === 'critical').length)
+const resolvedToday = computed(() => incidents.value.filter((item) => item.resolved_at && Date.now() - new Date(item.resolved_at).getTime() < 86_400_000).length)
 
-function severityColor(sev: string): string {
-  switch (sev) {
-    case 'critical':
-      return 'var(--status-unreachable)'
-    case 'warning':
-      return 'var(--status-warning)'
-    case 'info':
-      return 'var(--accent)'
-    default:
-      return 'var(--muted)'
-  }
+function severityFor(ruleName: string) { return rules.value.find((rule) => rule.name === ruleName)?.severity ?? 'warning' }
+function relativeTime(iso?: string) {
+  if (!iso) return '—'
+  const age = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000))
+  if (age < 60) return `${age}s ago`
+  if (age < 3600) return `${Math.floor(age / 60)}m ago`
+  if (age < 86400) return `${Math.floor(age / 3600)}h ago`
+  return `${Math.floor(age / 86400)}d ago`
 }
-
-function relativeTime(iso: string): string {
-  const ts = new Date(iso).getTime()
-  if (Number.isNaN(ts)) return ''
-  const ageSec = Math.floor((Date.now() - ts) / 1000)
-  if (ageSec < 60) return `${ageSec}s ago`
-  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`
-  if (ageSec < 86400) return `${Math.floor(ageSec / 3600)}h ago`
-  return `${Math.floor(ageSec / 86400)}d ago`
+function duration(item: AlertIncident) {
+  const end = item.resolved_at ? new Date(item.resolved_at).getTime() : Date.now()
+  const seconds = Math.max(0, Math.floor((end - new Date(item.started_at).getTime()) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+  return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`
 }
-
-function formatLabels(labels: Record<string, string>): string {
-  return Object.entries(labels)
-    .filter(([k]) => k !== '__name__')
-    .map(([k, v]) => `${k}=${v}`)
-    .join(' · ')
+function target(labels: Record<string, string>) { return [labels.server, labels.bench, labels.site || labels.service].filter(Boolean).join(' / ') || 'Fleet' }
+function humanRule(name: string) { return name.replace(/_/g, ' ') }
+function logLink(labels: Record<string, string>) {
+  const query = new URLSearchParams()
+  if (labels.server) query.set('server', labels.server)
+  if (labels.bench) query.set('bench', labels.bench)
+  if (labels.site) query.set('q', labels.site)
+	if (labels.identity_hash && /^[0-9a-f]{24}$/.test(labels.identity_hash)) {
+		query.delete('q')
+		query.set('type', 'slow-query-event')
+		query.set('identity', labels.identity_hash)
+	}
+  return `/logs?${query.toString()}`
+}
+function targetLink(labels: Record<string, string>) {
+	if (labels.server && labels.bench && labels.site) return `/sites/${encodeURIComponent(labels.server)}/${encodeURIComponent(labels.bench)}/${encodeURIComponent(labels.site)}`
+	if (labels.server && labels.bench) return `/benches/${encodeURIComponent(labels.server)}/${encodeURIComponent(labels.bench)}`
+	return '/servers'
 }
 </script>
 
 <template>
-  <section>
-    <header class="page-header">
-      <div class="title">
-        <Bell :size="22" :stroke-width="2.25" class="title-icon" />
-        <h2>Alerts</h2>
-        <span class="count">{{ firing.length }}</span>
-      </div>
-      <button class="refresh-btn" :disabled="loading" @click="refresh">
-        <RefreshCw :size="14" :stroke-width="2" :class="{ spin: loading }" />
-        {{ loading ? 'Refreshing' : 'Refresh' }}
-      </button>
+  <section class="page incidents-page">
+    <header class="page-heading">
+      <div><span class="eyebrow">Detection & history</span><h1>Incidents</h1><p>Current failures and retained incident history from server, service, worker, queue, and site-health rules.</p></div>
+      <div class="page-actions"><button class="button" :disabled="loading" @click="refreshNow"><RefreshCw :size="15" :class="{ spin: loading }" />{{ loading ? 'Refreshing' : 'Refresh' }}</button></div>
     </header>
 
-    <p v-if="error" class="error">Failed to load alerts: {{ error }}</p>
+    <div v-if="error" class="notice error"><AlertTriangle :size="18" />Failed to load incidents: {{ error }}</div>
+    <div v-if="data && !enabled" class="notice warning"><BellOff :size="18" /><span><strong>Alert evaluation is disabled.</strong> Metrics remain visible, but Telegram notifications and new incident records require <code>alerts.enabled</code> in the monitor configuration.</span></div>
 
-    <!-- Enabled banner -->
-    <div v-if="data" class="banner" :class="enabled ? 'on' : 'off'">
-      <component :is="enabled ? Bell : BellOff" :size="18" :stroke-width="2" />
-      <div class="banner-text">
-        <strong>{{ enabled ? 'Alerts active' : 'Alerts disabled' }}</strong>
-        <span v-if="enabled">— Telegram notifications fire on every rule match.</span>
-        <span v-else>
-          —
-          enable in <code>/etc/frappe-monitor/monitor.yaml</code>:
-          set <code>alerts.enabled: true</code> with a bot token + chat IDs,
-          then <code>sudo systemctl restart frappe-monitor</code>.
-        </span>
-      </div>
+    <div class="summary-grid">
+      <div class="panel summary-card"><ShieldAlert :size="18" /><div class="summary-label">Open incidents</div><div class="summary-value" :class="{ danger: firing.length }">{{ firing.length }}</div><div class="summary-note">Failing now</div></div>
+      <div class="panel summary-card"><AlertTriangle :size="18" /><div class="summary-label">Critical</div><div class="summary-value" :class="{ danger: critical }">{{ critical }}</div><div class="summary-note">Immediate attention</div></div>
+      <div class="panel summary-card"><CheckCircle2 :size="18" /><div class="summary-label">Resolved in 24h</div><div class="summary-value">{{ resolvedToday }}</div><div class="summary-note">Recovery recorded</div></div>
+      <div class="panel summary-card"><Bell :size="18" /><div class="summary-label">Detection rules</div><div class="summary-value">{{ rules.length }}</div><div class="summary-note">{{ enabled ? 'Evaluation active' : 'Evaluation disabled' }}</div></div>
     </div>
 
-    <!-- Firing right now -->
-    <h3 class="section-title">
-      <AlertTriangle :size="16" :stroke-width="2.25" />
-      Currently firing
-    </h3>
-    <p v-if="firing.length === 0" class="empty">
-      <CheckCircle2 :size="16" :stroke-width="2" />
-      Nothing firing — system is healthy.
-    </p>
-    <div v-else class="firing-list">
-      <div v-for="a in firing" :key="a.id" class="firing-card">
-        <div class="firing-head">
-          <span
-            class="rule-name"
-            :style="{ color: severityColor(rules.find((r) => r.name === a.rule_name)?.severity ?? '') }"
-          >
-            {{ a.rule_name }}
-          </span>
-          <span class="fp" :title="`Fingerprint: ${a.fingerprint}`">
-            {{ formatLabels(a.labels) || a.fingerprint }}
-          </span>
-        </div>
-        <div class="firing-meta">
-          <span>value: <code>{{ a.value }}</code></span>
-          <span>first fired: {{ relativeTime(a.first_fired_at) }}</span>
-          <span>last paged: {{ relativeTime(a.last_notified_at) }}</span>
-        </div>
-      </div>
+    <div class="section-heading"><div><h2>Needs attention</h2><p>Live conditions that are currently violating a rule.</p></div></div>
+    <div v-if="firing.length" class="firing-grid">
+      <article v-for="item in firing" :key="item.id" class="panel incident-card" :class="severityFor(item.rule_name)">
+        <div class="incident-head"><span class="status-pill" :class="severityFor(item.rule_name)">{{ severityFor(item.rule_name) }}</span><span class="age"><Clock3 :size="12" />{{ relativeTime(item.first_fired_at) }}</span></div>
+        <h3>{{ humanRule(item.rule_name) }}</h3><p>{{ target(item.labels) }}</p>
+        <div class="incident-meta"><span>Observed value <strong>{{ item.value }}</strong></span><span>Last Telegram attempt {{ relativeTime(item.last_notified_at) }}</span></div>
+        <div class="incident-actions"><RouterLink :to="targetLink(item.labels)" class="diagnose-link">Open affected target <ExternalLink :size="13" /></RouterLink><RouterLink :to="logLink(item.labels)" class="diagnose-link">Investigate related logs <ExternalLink :size="13" /></RouterLink></div>
+      </article>
     </div>
+    <div v-else class="panel empty-state"><CheckCircle2 :size="29" /><h3>No active incidents</h3><p>{{ enabled ? 'Every evaluated rule is currently healthy.' : 'Enable alert evaluation to continuously detect and record failures.' }}</p></div>
 
-    <!-- Configured rules -->
-    <h3 class="section-title rule-title">
-      <Info :size="16" :stroke-width="2.25" />
-      Configured rules
-    </h3>
-    <p v-if="rules.length === 0" class="empty muted">
-      No rules configured. Edit <code>alerts.rules</code> in
-      <code>/etc/frappe-monitor/monitor.yaml</code> or rely on the bundled defaults
-      (<code>alerts.disable_defaults: false</code>).
-    </p>
-    <table v-else class="rules-table">
-      <thead>
-        <tr>
-          <th>Severity</th>
-          <th>Name</th>
-          <th>Expression</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="r in rules" :key="r.name">
-          <td data-label="Severity">
-            <span class="badge" :style="{ color: severityColor(r.severity), borderColor: severityColor(r.severity) }">
-              {{ r.severity || 'info' }}
-            </span>
-          </td>
-          <td class="rule-name-cell" data-label="Name">{{ r.name }}</td>
-          <td class="expr" data-label="Expression"><code>{{ r.expr }}</code></td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="section-heading history-heading"><div><h2>Incident history</h2><p>Resolved episodes are retained instead of disappearing after recovery.</p></div><div class="segmented"><button :class="{ active: statusFilter === 'all' }" @click="statusFilter = 'all'">All</button><button :class="{ active: statusFilter === 'firing' }" @click="statusFilter = 'firing'">Open</button><button :class="{ active: statusFilter === 'resolved' }" @click="statusFilter = 'resolved'">Resolved</button></div></div>
+    <section class="panel history-panel">
+      <div v-if="filteredIncidents.length" class="data-table-wrap"><table class="data-table"><thead><tr><th>Status</th><th>Incident</th><th>Target</th><th>Started</th><th>Duration</th><th></th></tr></thead><tbody>
+        <tr v-for="item in filteredIncidents" :key="item.id"><td><span class="status-pill" :class="item.status === 'firing' ? item.severity : 'healthy'">{{ item.status }}</span></td><td><strong class="rule-title">{{ humanRule(item.rule_name) }}</strong><small>{{ item.severity }}</small></td><td>{{ target(item.labels) }}</td><td>{{ relativeTime(item.started_at) }}</td><td>{{ duration(item) }}</td><td><RouterLink :to="logLink(item.labels)" class="table-link">Logs <ExternalLink :size="12" /></RouterLink></td></tr>
+      </tbody></table></div>
+      <div v-else class="empty-state"><History :size="26" /><h3>No recorded incidents</h3><p>New alert episodes will appear here and remain available after they recover.</p></div>
+    </section>
+
+    <details class="panel rules-panel"><summary><span><Bell :size="15" />Detection rules</span><span>{{ rules.length }} configured</span></summary><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Severity</th><th>Name</th><th>PromQL expression</th></tr></thead><tbody><tr v-for="rule in rules" :key="rule.name"><td><span class="status-pill" :class="rule.severity">{{ rule.severity }}</span></td><td>{{ rule.name }}</td><td><code>{{ rule.expr }}</code></td></tr></tbody></table></div></details>
   </section>
 </template>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.25rem;
-}
-.title {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-.title-icon { color: var(--accent); }
-.title h2 {
-  margin: 0;
-  font-size: 1.35rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-.count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.6rem;
-  height: 1.4rem;
-  padding: 0 0.4rem;
-  background: var(--bg-hover);
-  color: var(--muted);
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 600;
-}
-.refresh-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: var(--card-bg);
-  color: var(--fg);
-  border: 1px solid var(--card-border);
-  padding: 0.45rem 0.9rem;
-  border-radius: 6px;
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.88rem;
-  font-weight: 500;
-}
-.refresh-btn:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--bg-hover);
-}
-.refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.spin { animation: spin 0.9s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.banner {
-  display: flex;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--card-border);
-  border-radius: 8px;
-  margin-bottom: 1.5rem;
-  align-items: flex-start;
-}
-.banner.on {
-  border-color: color-mix(in srgb, var(--status-reachable) 35%, var(--card-border));
-  background: color-mix(in srgb, var(--status-reachable) 8%, transparent);
-}
-.banner.on > svg { color: var(--status-reachable); }
-.banner.off {
-  border-color: color-mix(in srgb, var(--status-warning) 35%, var(--card-border));
-  background: color-mix(in srgb, var(--status-warning) 8%, transparent);
-}
-.banner.off > svg { color: var(--status-warning); }
-.banner-text {
-  font-size: 0.9rem;
-  line-height: 1.45;
-}
-
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.95rem;
-  margin: 1.5rem 0 0.6rem;
-  color: var(--muted);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.rule-title {
-  margin-top: 2rem;
-}
-
-.empty {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: var(--muted);
-  font-size: 0.9rem;
-  padding: 0.65rem 0.85rem;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 6px;
-}
-
-.firing-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-.firing-card {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 8px;
-  padding: 0.85rem 1rem;
-  box-shadow: var(--card-shadow);
-}
-.firing-head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-.rule-name {
-  font-weight: 600;
-  font-size: 0.95rem;
-}
-.fp {
-  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-.firing-meta {
-  display: flex;
-  gap: 1.25rem;
-  margin-top: 0.4rem;
-  font-size: 0.78rem;
-  color: var(--muted);
-  flex-wrap: wrap;
-}
-
-.rules-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: var(--card-shadow);
-}
-.rules-table th, .rules-table td {
-  padding: 0.65rem 0.9rem;
-  text-align: left;
-  border-bottom: 1px solid var(--card-border);
-  font-size: 0.88rem;
-  vertical-align: top;
-}
-.rules-table tbody tr:last-child td { border-bottom: none; }
-.rules-table th {
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  color: var(--muted);
-  letter-spacing: 0.08em;
-  background: var(--bg);
-  font-weight: 600;
-}
-.rule-name-cell {
-  font-weight: 600;
-}
-.expr code {
-  font-size: 0.8rem;
-  background: var(--bg-hover);
-}
-.badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.15rem 0.55rem;
-  border-radius: 999px;
-  border: 1px solid;
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.error {
-  padding: 0.6rem 0.85rem;
-  background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--status-unreachable) 35%, transparent);
-  color: var(--status-unreachable);
-  border-radius: 6px;
-}
-
-/* ----- Mobile (≤720px) — cards instead of cramped tables ----- */
-@media (max-width: 720px) {
-  .page-header { flex-wrap: wrap; gap: 0.5rem; }
-  .banner {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
-    padding: 0.75rem;
-  }
-  .banner-text {
-    font-size: 0.85rem;
-    word-break: break-word;
-  }
-  .banner-text code {
-    word-break: break-all;
-  }
-  .firing-card { padding: 0.7rem 0.85rem; }
-  .firing-head {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.2rem;
-  }
-  .fp {
-    word-break: break-word;
-    white-space: normal;
-  }
-  .firing-meta {
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-
-  /* Rules table → vertical card list. Each <tr> becomes a card,
-     each <td> a labeled row. The cramped 3-column grid gives way
-     to readable full-width fields. */
-  .rules-table { display: block; border: none; background: transparent; box-shadow: none; }
-  .rules-table thead { display: none; }
-  .rules-table tbody { display: block; }
-  .rules-table tr {
-    display: block;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 8px;
-    padding: 0.6rem 0.8rem;
-    margin-bottom: 0.6rem;
-    box-shadow: var(--card-shadow);
-  }
-  .rules-table td {
-    display: block;
-    padding: 0.2rem 0;
-    border: none;
-    font-size: 0.85rem;
-  }
-  /* Synthetic labels via attr(data-label). We add data-label in the
-     template. */
-  .rules-table td::before {
-    content: attr(data-label);
-    display: block;
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
-    font-weight: 600;
-    margin-bottom: 0.15rem;
-  }
-  .rules-table .rule-name-cell { font-size: 0.95rem; }
-  .expr code {
-    display: block;
-    font-size: 0.78rem;
-    line-height: 1.45;
-    word-break: break-word;
-    white-space: pre-wrap;
-    padding: 0.45rem 0.55rem;
-  }
-  .badge {
-    font-size: 0.68rem;
-    padding: 0.1rem 0.45rem;
-  }
-}
+.summary-card svg{float:right;color:var(--muted-2)}.danger{color:var(--status-unreachable)!important}.firing-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}.incident-card{padding:1rem;border-left:3px solid var(--status-warning)}.incident-card.critical{border-left-color:var(--status-unreachable)}.incident-head{display:flex;align-items:center;justify-content:space-between}.age{display:flex;align-items:center;gap:.3rem;color:var(--muted);font-size:.7rem}.incident-card h3{margin:.85rem 0 .25rem;color:var(--fg-strong);font-size:1rem;text-transform:capitalize}.incident-card>p{margin:0;color:var(--muted);font-size:.78rem}.incident-meta{display:flex;gap:1rem;flex-wrap:wrap;margin:.8rem 0;color:var(--muted-2);font-size:.69rem}.incident-meta strong{color:var(--fg)}.incident-actions{display:flex;gap:.8rem;flex-wrap:wrap}.diagnose-link{display:inline-flex;align-items:center;gap:.35rem;color:var(--accent-strong);font-size:.74rem;font-weight:650}.history-heading{margin-top:2rem}.segmented{display:flex;padding:3px;border:1px solid var(--card-border);border-radius:8px;background:var(--card-bg)}.segmented button{padding:.32rem .62rem;border:0;border-radius:5px;background:transparent;color:var(--muted);cursor:pointer;font-size:.7rem}.segmented button.active{background:var(--bg-hover);color:var(--fg)}.history-panel{overflow:hidden}.rule-title{display:block;color:var(--fg);text-transform:capitalize}.history-panel td small{display:block;margin-top:.16rem;color:var(--muted-2);font-size:.64rem}.rules-panel{margin-top:1rem;overflow:hidden}.rules-panel summary{display:flex;align-items:center;justify-content:space-between;padding:.9rem 1rem;cursor:pointer;color:var(--muted);font-size:.78rem}.rules-panel summary span:first-child{display:flex;align-items:center;gap:.45rem;color:var(--fg);font-weight:650}.rules-panel[open] summary{border-bottom:1px solid var(--card-border)}
+@media(max-width:850px){.firing-grid{grid-template-columns:1fr}}@media(max-width:720px){.history-heading{align-items:flex-start;flex-direction:column}.segmented{width:100%}.segmented button{flex:1}.firing-grid{gap:.55rem}}
 </style>

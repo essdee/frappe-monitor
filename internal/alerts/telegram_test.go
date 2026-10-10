@@ -130,17 +130,19 @@ func TestTelegram_BreadcrumbOmittedWhenNoHierarchyLabels(t *testing.T) {
 }
 
 func TestTelegram_FailsOnNon2xx(t *testing.T) {
+	const token = "123456:SUPERSECRET"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		http.Error(w, "rate limited "+token, http.StatusTooManyRequests)
 	}))
 	defer upstream.Close()
 	tc := &TelegramClient{
-		BotToken: "T", ChatID: "C",
+		BotToken: token, ChatID: "C",
 		HTTP: &http.Client{Timeout: time.Second}, APIBase: upstream.URL,
 	}
 	err := tc.Notify(context.Background(), Notification{Severity: "info", RuleName: "x", Body: "y"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "429")
+	require.NotContains(t, err.Error(), token)
 }
 
 func TestTelegram_FailsOnAPIError(t *testing.T) {
@@ -160,17 +162,61 @@ func TestTelegram_FailsOnAPIError(t *testing.T) {
 func TestMultiNotifier_FansOutAndJoinsErrors(t *testing.T) {
 	n1ok := false
 	n2ok := false
-	mn := MultiNotifier{
+	mn := NewMultiNotifier(
 		NotifierFunc(func(_ context.Context, _ Notification) error { n1ok = true; return nil }),
 		NotifierFunc(func(_ context.Context, _ Notification) error { n2ok = true; return errors.New("boom") }),
 		NotifierFunc(func(_ context.Context, _ Notification) error { return errors.New("kaboom") }),
-	}
+	)
 	err := mn.Notify(context.Background(), Notification{Severity: "info", RuleName: "rule", Body: "msg"})
 	require.Error(t, err)
 	require.True(t, n1ok)
 	require.True(t, n2ok)
 	require.Contains(t, err.Error(), "boom")
 	require.Contains(t, err.Error(), "kaboom")
+}
+
+func TestMultiNotifier_RetryOnlyTargetsThatFailed(t *testing.T) {
+	firstCalls := 0
+	secondCalls := 0
+	failSecond := true
+	mn := NewMultiNotifier(
+		NotifierFunc(func(_ context.Context, _ Notification) error {
+			firstCalls++
+			return nil
+		}),
+		NotifierFunc(func(_ context.Context, _ Notification) error {
+			secondCalls++
+			if failSecond {
+				return errors.New("temporary")
+			}
+			return nil
+		}),
+	)
+	n := Notification{RuleName: "site_unhealthy", Fingerprint: "abc", Body: "down"}
+	require.Error(t, mn.Notify(context.Background(), n))
+	failSecond = false
+	require.NoError(t, mn.Notify(context.Background(), n))
+	require.Equal(t, 1, firstCalls, "successful chats must not get duplicate retries")
+	require.Equal(t, 2, secondCalls)
+
+	// Once the aggregate delivery completes, a later cooldown repeat should
+	// fan out to every target again.
+	require.NoError(t, mn.Notify(context.Background(), n))
+	require.Equal(t, 2, firstCalls)
+	require.Equal(t, 3, secondCalls)
+}
+
+func TestTelegram_TransportErrorsRedactBotToken(t *testing.T) {
+	token := "123456:SUPERSECRET"
+	tc := &TelegramClient{
+		BotToken: token,
+		ChatID:   "C",
+		HTTP:     &http.Client{Timeout: 100 * time.Millisecond},
+		APIBase:  "http://127.0.0.1:1",
+	}
+	err := tc.Notify(context.Background(), Notification{RuleName: "x", Body: "y"})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), token)
 }
 
 func TestEscapeHTML(t *testing.T) {
@@ -196,4 +242,14 @@ func TestFormatMessage_EscapesUntrustedFields(t *testing.T) {
 func TestFormatMessage_FallbackBodyWhenEmpty(t *testing.T) {
 	out := formatMessage(Notification{Severity: "critical", RuleName: "noisy_rule"})
 	require.Contains(t, out, "noisy_rule triggered.")
+}
+
+func TestFormatMessage_UsesConfiguredTimezone(t *testing.T) {
+	location, err := time.LoadLocation("Asia/Kolkata")
+	require.NoError(t, err)
+	out := formatMessageInLocation(Notification{
+		Severity: "warning", RuleName: "clock", Body: "test",
+		Time: time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+	}, location)
+	require.Contains(t, out, "17:30 IST")
 }

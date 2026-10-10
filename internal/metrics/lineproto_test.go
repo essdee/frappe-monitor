@@ -104,11 +104,30 @@ func TestBenchMetrics_ToLineProtocol(t *testing.T) {
 	require.Contains(t, out,
 		"frappe_bench_supervisor_running,server=prod-1,bench=production value=12 1714363200000000000\n")
 	require.Contains(t, out,
+		"frappe_bench_snapshot_timestamp_seconds,server=prod-1,bench=production value=1714363200 1714363200000000000\n")
+	require.Contains(t, out,
 		"frappe_bench_info,server=prod-1,bench=production,frappe_version=15.0.0 value=1 1714363200000000000\n")
 	require.Contains(t, out,
 		"frappe_bench_redis_queue_depth,server=prod-1,bench=production,queue=short value=3 1714363200000000000\n")
 	require.Contains(t, out,
 		"frappe_bench_redis_queue_depth,server=prod-1,bench=production,queue=long value=0 1714363200000000000\n")
+}
+
+func TestBenchMetrics_ServiceSnapshotMembership(t *testing.T) {
+	m := BenchMetrics{
+		Timestamp: time.Unix(1714363200, 0).UTC(),
+		Bench:     "production",
+		Services: []ServiceMetric{
+			{Name: "worker-1", Kind: "worker", Queue: "default", State: 1},
+			{Name: "web-worker-1", Kind: "web-worker", Queue: "all", State: 1},
+			{Name: "web-worker-2", Kind: "web-worker", Queue: "all", State: 3},
+		},
+	}
+	out := m.LineProtocol("prod-1")
+	require.Contains(t, out,
+		"frappe_bench_web_workers_running,server=prod-1,bench=production value=1 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_bench_service_observed_at_seconds,server=prod-1,bench=production,service=worker-1,kind=worker,queue=default value=1714363200 1714363200000000000\n")
 }
 
 func TestBenchMetrics_OmitsInfoWhenVersionEmpty(t *testing.T) {
@@ -125,12 +144,16 @@ func TestBenchMetrics_OmitsInfoWhenVersionEmpty(t *testing.T) {
 
 func TestSiteMetrics_ToLineProtocol(t *testing.T) {
 	m := SiteMetrics{
-		Timestamp:      time.Unix(1714363200, 0).UTC(),
-		Bench:          "production",
-		Site:           "client-a.com",
-		HTTPStatusCode: 200,
-		HTTPResponseMs: 234.5,
-		IsHealthy:      1,
+		Timestamp:            time.Unix(1714363200, 0).UTC(),
+		Bench:                "production",
+		Site:                 "client-a.com",
+		HTTPStatusCode:       200,
+		HTTPResponseMs:       234.5,
+		IsHealthy:            1,
+		FailureReasonCode:    0,
+		NativeMonitorEnabled: 1,
+		DatabaseHash:         "0123456789abcdef01234567",
+		DatabaseUserHash:     "89abcdef0123456789abcdef",
 	}
 	out := m.LineProtocol("prod-1")
 
@@ -140,6 +163,36 @@ func TestSiteMetrics_ToLineProtocol(t *testing.T) {
 		"frappe_site_http_response_ms,server=prod-1,bench=production,site=client-a.com value=234.5 1714363200000000000\n")
 	require.Contains(t, out,
 		"frappe_site_is_healthy,server=prod-1,bench=production,site=client-a.com value=1 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_site_failure_reason_code,server=prod-1,bench=production,site=client-a.com value=0 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_site_native_monitor_enabled,server=prod-1,bench=production,site=client-a.com value=1 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_site_database_identity,server=prod-1,bench=production,site=client-a.com,identity_hash=0123456789abcdef01234567,identity_kind=database value=1 1714363200000000000\n")
+	require.Contains(t, out,
+		"frappe_site_database_identity,server=prod-1,bench=production,site=client-a.com,identity_hash=89abcdef0123456789abcdef,identity_kind=user value=1 1714363200000000000\n")
+}
+
+func TestPublicSiteMetrics_ToLineProtocol(t *testing.T) {
+	m := PublicSiteMetrics{
+		Timestamp: time.Unix(1714363200, 0).UTC(), Server: "prod-1", Bench: "production", Site: "client-a.com",
+		HTTPStatusCode: 200, HTTPResponseMs: 87.25, IsHealthy: 1,
+		FailureReasonCode: 0, TLSCertExpiryTimestamp: 1735689600,
+	}
+	out := m.LineProtocol()
+	require.Contains(t, out, "frappe_site_public_http_status_code,server=prod-1,bench=production,site=client-a.com value=200 1714363200000000000\n")
+	require.Contains(t, out, "frappe_site_public_http_response_ms,server=prod-1,bench=production,site=client-a.com value=87.25 1714363200000000000\n")
+	require.Contains(t, out, "frappe_site_public_is_healthy,server=prod-1,bench=production,site=client-a.com value=1 1714363200000000000\n")
+	require.Contains(t, out, "frappe_site_public_tls_cert_expiry_timestamp_seconds,server=prod-1,bench=production,site=client-a.com value=1735689600 1714363200000000000\n")
+}
+
+func TestReachabilityLineProtocol(t *testing.T) {
+	at := time.Unix(1714363200, 0).UTC()
+	require.Equal(t,
+		"frappe_server_reachable,server=prod-1 value=1 1714363200000000000\n",
+		ReachabilityLineProtocol("prod-1", true, at))
+	require.Contains(t, ReachabilityLineProtocol("prod 2", false, at),
+		"frappe_server_reachable,server=prod\\ 2 value=0")
 }
 
 func TestServerMetrics_LineCountMatches(t *testing.T) {

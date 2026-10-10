@@ -60,6 +60,11 @@ func LogPath(v string) predicate.LogCursor {
 	return predicate.LogCursor(sql.FieldEQ(FieldLogPath, v))
 }
 
+// FileIdentity applies equality check predicate on the "file_identity" field. It's identical to FileIdentityEQ.
+func FileIdentity(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldEQ(FieldFileIdentity, v))
+}
+
 // ByteOffset applies equality check predicate on the "byte_offset" field. It's identical to ByteOffsetEQ.
 func ByteOffset(v int64) predicate.LogCursor {
 	return predicate.LogCursor(sql.FieldEQ(FieldByteOffset, v))
@@ -133,6 +138,71 @@ func LogPathEqualFold(v string) predicate.LogCursor {
 // LogPathContainsFold applies the ContainsFold predicate on the "log_path" field.
 func LogPathContainsFold(v string) predicate.LogCursor {
 	return predicate.LogCursor(sql.FieldContainsFold(FieldLogPath, v))
+}
+
+// FileIdentityEQ applies the EQ predicate on the "file_identity" field.
+func FileIdentityEQ(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldEQ(FieldFileIdentity, v))
+}
+
+// FileIdentityNEQ applies the NEQ predicate on the "file_identity" field.
+func FileIdentityNEQ(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldNEQ(FieldFileIdentity, v))
+}
+
+// FileIdentityIn applies the In predicate on the "file_identity" field.
+func FileIdentityIn(vs ...string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldIn(FieldFileIdentity, vs...))
+}
+
+// FileIdentityNotIn applies the NotIn predicate on the "file_identity" field.
+func FileIdentityNotIn(vs ...string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldNotIn(FieldFileIdentity, vs...))
+}
+
+// FileIdentityGT applies the GT predicate on the "file_identity" field.
+func FileIdentityGT(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldGT(FieldFileIdentity, v))
+}
+
+// FileIdentityGTE applies the GTE predicate on the "file_identity" field.
+func FileIdentityGTE(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldGTE(FieldFileIdentity, v))
+}
+
+// FileIdentityLT applies the LT predicate on the "file_identity" field.
+func FileIdentityLT(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldLT(FieldFileIdentity, v))
+}
+
+// FileIdentityLTE applies the LTE predicate on the "file_identity" field.
+func FileIdentityLTE(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldLTE(FieldFileIdentity, v))
+}
+
+// FileIdentityContains applies the Contains predicate on the "file_identity" field.
+func FileIdentityContains(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldContains(FieldFileIdentity, v))
+}
+
+// FileIdentityHasPrefix applies the HasPrefix predicate on the "file_identity" field.
+func FileIdentityHasPrefix(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldHasPrefix(FieldFileIdentity, v))
+}
+
+// FileIdentityHasSuffix applies the HasSuffix predicate on the "file_identity" field.
+func FileIdentityHasSuffix(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldHasSuffix(FieldFileIdentity, v))
+}
+
+// FileIdentityEqualFold applies the EqualFold predicate on the "file_identity" field.
+func FileIdentityEqualFold(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldEqualFold(FieldFileIdentity, v))
+}
+
+// FileIdentityContainsFold applies the ContainsFold predicate on the "file_identity" field.
+func FileIdentityContainsFold(v string) predicate.LogCursor {
+	return predicate.LogCursor(sql.FieldContainsFold(FieldFileIdentity, v))
 }
 
 // ByteOffsetEQ applies the EQ predicate on the "byte_offset" field.

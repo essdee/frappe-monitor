@@ -1,7 +1,5 @@
-// Package logs holds the typed value model for log streams plus the
-// Loki push client. Phase 3 wires log tailing on the bench server through
-// here; future log-querying (Phase 4 dashboard) goes through the API
-// proxy and not directly through this client.
+// Package logs holds the typed stream model and Loki push client used by the
+// resumable SSH streamer. Dashboard reads go through the API query proxy.
 package logs
 
 import (

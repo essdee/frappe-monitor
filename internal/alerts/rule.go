@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"text/template"
 )
 
 // Rule is one alert definition. Loaded from YAML or supplied as part
@@ -61,6 +62,21 @@ func (r Rule) Validate() error {
 			return fmt.Errorf("rule[%s].severity must be one of critical|warning|info, got %q",
 				r.Name, r.Severity)
 		}
+	}
+	if r.Message != "" {
+		if _, err := template.New(r.Name).Parse(r.Message); err != nil {
+			return fmt.Errorf("rule[%s].message template: %w", r.Name, err)
+		}
+	}
+	seenLabels := make(map[string]struct{}, len(r.FingerprintLabels))
+	for _, label := range r.FingerprintLabels {
+		if strings.TrimSpace(label) == "" {
+			return fmt.Errorf("rule[%s].fingerprint_labels contains an empty label", r.Name)
+		}
+		if _, exists := seenLabels[label]; exists {
+			return fmt.Errorf("rule[%s].fingerprint_labels contains duplicate %q", r.Name, label)
+		}
+		seenLabels[label] = struct{}{}
 	}
 	return nil
 }

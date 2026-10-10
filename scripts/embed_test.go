@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -36,10 +37,12 @@ func TestStreamerScript_Embedded(t *testing.T) {
 		"embedded streamer should start with bash shebang")
 	// The header line on stdout is the load-bearing protocol contract;
 	// keep it as a literal so the monitor's parser doesn't go out of sync.
-	require.Contains(t, StreamerScript, `'##V=%s\n'`,
+	require.Contains(t, StreamerScript, `"##V="`,
 		"streamer must emit a ##V=<version> header line")
-	require.Contains(t, StreamerScript, `'##F=%s|%s\n'`,
-		"streamer must emit per-line ##F=<id>|<content> records")
+	require.Contains(t, StreamerScript, `"##O=%s|%s|%d"`,
+		"streamer must emit absolute cursor origins")
+	require.Contains(t, StreamerScript, `"##F=%s|%s|%d|%s"`,
+		"streamer must emit identity + absolute offset with every line")
 }
 
 func TestStreamerVersion_ReadsVersionLine(t *testing.T) {
@@ -80,8 +83,7 @@ func TestStreamer_TailsAndPrefixes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
 	defer func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		stopCommand(cmd)
 	}()
 
 	scanner := bufio.NewScanner(stdout)
@@ -103,15 +105,15 @@ func TestStreamer_TailsAndPrefixes(t *testing.T) {
 	}()
 
 	// Wait for the version header before appending anything — the
-	// streamer's tail processes haven't necessarily finished spinning
-	// up before we see the header, but waiting for the header guarantees
+	// streamer's polling loop may not have opened every file before we see
+	// the header, but waiting for the header guarantees
 	// the script has at least cleared its argument-parsing phase.
 	requireLineMatching(t, &mu, &lines, func(s string) bool {
 		return strings.HasPrefix(s, "##V=")
 	}, 2*time.Second, "expected ##V= header line")
 
-	// Give tail processes a moment to attach to the files. Without this,
-	// fast appends can land before tail's inotify watch is set up,
+	// Give the polling loop a moment to open the files. Without this,
+	// fast appends can land before the first scan,
 	// which would leave us with no events to assert on.
 	time.Sleep(300 * time.Millisecond)
 
@@ -120,15 +122,18 @@ func TestStreamer_TailsAndPrefixes(t *testing.T) {
 	require.NoError(t, appendLine(webPath, "line with a | pipe in it\n"))
 
 	requireLineMatching(t, &mu, &lines, func(s string) bool {
-		return s == "##F=web|live web line one"
+		fid, content, ok := streamLineContent(s)
+		return ok && fid == "web" && content == "live web line one"
 	}, 3*time.Second, "expected web line to be prefixed and emitted")
 
 	requireLineMatching(t, &mu, &lines, func(s string) bool {
-		return s == "##F=err|live err line one"
+		fid, content, ok := streamLineContent(s)
+		return ok && fid == "err" && content == "live err line one"
 	}, 3*time.Second, "expected err line to be prefixed and emitted")
 
 	requireLineMatching(t, &mu, &lines, func(s string) bool {
-		return s == "##F=web|line with a | pipe in it"
+		fid, content, ok := streamLineContent(s)
+		return ok && fid == "web" && content == "line with a | pipe in it"
 	}, 3*time.Second, "pipe in line content must be preserved verbatim")
 
 	// Historical pre-seeded line must NOT appear — default mode is
@@ -149,13 +154,29 @@ func TestStreamer_MissingFileEmitsErrorSentinel(t *testing.T) {
 	scriptPath := filepath.Join(dir, "stream.sh")
 	require.NoError(t, os.WriteFile(scriptPath, []byte(StreamerScript), 0o755))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", scriptPath,
+	cmd := exec.Command("bash", scriptPath,
 		"--files=web:"+filepath.Join(dir, "does-not-exist.log"))
-	out, _ := cmd.CombinedOutput()
-	require.Contains(t, string(out), "##F=web ##E=MISSING",
-		"missing file should produce a per-file error sentinel, not crash the streamer")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	scanner := bufio.NewScanner(stdout)
+	found := make(chan bool, 1)
+	go func() {
+		for scanner.Scan() {
+			if scanner.Text() == "##F=web ##E=MISSING" {
+				found <- true
+				return
+			}
+		}
+		found <- false
+	}()
+	select {
+	case ok := <-found:
+		require.True(t, ok, "missing file should produce an error sentinel")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for missing-file sentinel")
+	}
+	stopCommand(cmd)
 }
 
 func TestStreamer_RejectsBadArgs(t *testing.T) {
@@ -174,7 +195,8 @@ func TestStreamer_RejectsBadArgs(t *testing.T) {
 		{"no files", []string{}, "--files is required"},
 		{"bad file id", []string{"--files=we!rd:/tmp/x"}, "alphanumeric"},
 		{"missing colon", []string{"--files=web"}, "want id:path"},
-		{"non-numeric resume", []string{"--files=web:/tmp/x", "--resume=web:abc"}, "non-negative integer"},
+		{"bad resume shape", []string{"--files=web:/tmp/x", "--resume=web:abc"}, "want id:identity:offset"},
+		{"non-numeric resume", []string{"--files=web:/tmp/x", "--resume=web:identity:abc"}, "non-negative integer"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -198,6 +220,9 @@ func TestStreamer_ResumeFromOffset(t *testing.T) {
 	// after lines 1+2 we're at byte 12, and resume=12 should replay
 	// lines 3+4 (and then any new appends).
 	require.NoError(t, os.WriteFile(logPath, []byte("line1\nline2\nline3\nline4\n"), 0o644))
+	var stat syscall.Stat_t
+	require.NoError(t, syscall.Stat(logPath, &stat))
+	identity := fmt.Sprintf("%d-%d", stat.Dev, stat.Ino)
 
 	scriptPath := filepath.Join(dir, "stream.sh")
 	require.NoError(t, os.WriteFile(scriptPath, []byte(StreamerScript), 0o755))
@@ -205,13 +230,12 @@ func TestStreamer_ResumeFromOffset(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", scriptPath,
-		"--files=web:"+logPath, "--resume=web:12")
+		"--files=web:"+logPath, "--resume=web:"+identity+":12")
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
 	defer func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		stopCommand(cmd)
 	}()
 
 	scanner := bufio.NewScanner(stdout)
@@ -227,16 +251,51 @@ func TestStreamer_ResumeFromOffset(t *testing.T) {
 		}
 	}()
 
-	requireLineMatching(t, &mu, &lines, func(s string) bool { return s == "##F=web|line3" },
+	requireLineMatching(t, &mu, &lines, func(s string) bool {
+		fid, content, ok := streamLineContent(s)
+		return ok && fid == "web" && content == "line3"
+	},
 		3*time.Second, "resume=12 should replay line3 (the line at byte 12 onward)")
-	requireLineMatching(t, &mu, &lines, func(s string) bool { return s == "##F=web|line4" },
+	requireLineMatching(t, &mu, &lines, func(s string) bool {
+		fid, content, ok := streamLineContent(s)
+		return ok && fid == "web" && content == "line4"
+	},
 		3*time.Second, "resume=12 should also replay line4")
 
 	mu.Lock()
 	defer mu.Unlock()
 	for _, ln := range lines {
-		require.NotEqual(t, "##F=web|line1", ln, "line1 is before the resume point")
-		require.NotEqual(t, "##F=web|line2", ln, "line2 is before the resume point")
+		_, content, ok := streamLineContent(ln)
+		if ok {
+			require.NotEqual(t, "line1", content, "line1 is before the resume point")
+			require.NotEqual(t, "line2", content, "line2 is before the resume point")
+		}
+	}
+}
+
+func streamLineContent(line string) (fileID, content string, ok bool) {
+	parts := strings.SplitN(line, "|", 4)
+	if len(parts) != 4 || !strings.HasPrefix(parts[0], "##F=") {
+		return "", "", false
+	}
+	return strings.TrimPrefix(parts[0], "##F="), parts[3], true
+}
+
+func stopCommand(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil || cmd.ProcessState != nil {
+		return
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
 	}
 }
 

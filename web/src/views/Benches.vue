@@ -1,226 +1,80 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
-import { Boxes, Server, RefreshCw, ChevronRight } from 'lucide-vue-next'
-import { fetchBenches, type BenchPair } from '../api'
+import { computed, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { ArrowRight, Boxes, RefreshCw, Search, Server as ServerIcon } from 'lucide-vue-next'
+import { fetchBenches, fetchSites, type BenchPair, type SitePair } from '../api'
 import { useTimeRange } from '../composables/useTimeRange'
+import { usePolling } from '../composables/usePolling'
 
+const route = useRoute()
+const router = useRouter()
 const benches = ref<BenchPair[]>([])
+const sites = ref<SitePair[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+const search = ref(typeof route.query.q === 'string' ? route.query.q : '')
+const serverFilter = ref(typeof route.query.server === 'string' ? route.query.server : '')
 const { refreshSec } = useTimeRange()
 
 async function refresh() {
   loading.value = true
   error.value = null
   try {
-    benches.value = await fetchBenches()
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    loading.value = false
-  }
+    const [benchRows, siteRows] = await Promise.all([fetchBenches(), fetchSites()])
+    benches.value = benchRows
+    sites.value = siteRows
+  } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+  finally { loading.value = false }
 }
+const { refresh: refreshNow } = usePolling(refresh, refreshSec)
 
-let timer: ReturnType<typeof setInterval> | null = null
-function arm(secs: number) {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
-  if (secs > 0) timer = setInterval(refresh, secs * 1000)
-}
-watch(refreshSec, (s) => arm(s), { immediate: true })
-onScopeDispose(() => {
-  if (timer) clearInterval(timer)
+watch([search, serverFilter], () => {
+  const query = { ...route.query }
+  if (search.value) query.q = search.value; else delete query.q
+  if (serverFilter.value) query.server = serverFilter.value; else delete query.server
+  void router.replace({ query })
 })
-onMounted(refresh)
 
-// Group by server so the operator can scan one server at a time.
-const grouped = computed<{ server: string; benches: string[] }[]>(() => {
-  const m = new Map<string, string[]>()
-  for (const b of benches.value) {
-    const arr = m.get(b.server) ?? []
-    arr.push(b.bench)
-    m.set(b.server, arr)
-  }
-  return [...m.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([server, bs]) => ({ server, benches: bs.sort() }))
+const servers = computed(() => [...new Set(benches.value.map((item) => item.server))].sort())
+const rows = computed(() => {
+  const needle = search.value.trim().toLowerCase()
+  return benches.value.filter((item) =>
+    (!serverFilter.value || item.server === serverFilter.value) &&
+    (!needle || item.bench.toLowerCase().includes(needle) || item.server.toLowerCase().includes(needle)),
+  ).map((item) => {
+    const children = sites.value.filter((site) => site.server === item.server && site.bench === item.bench)
+    return { ...item, siteCount: children.length, healthyCount: children.filter((site) => site.is_healthy === 1).length, issueCount: children.filter((site) => site.is_healthy !== 1).length }
+  }).sort((a, b) => b.issueCount - a.issueCount || a.server.localeCompare(b.server) || a.bench.localeCompare(b.bench))
 })
 </script>
 
 <template>
-  <section>
-    <header class="page-header">
-      <div class="title">
-        <Boxes :size="22" :stroke-width="2.25" class="title-icon" />
-        <h2>Benches</h2>
-        <span class="count">{{ benches.length }}</span>
-      </div>
-      <button class="refresh-btn" :disabled="loading" @click="refresh">
-        <RefreshCw :size="14" :stroke-width="2" :class="{ spin: loading }" />
-        {{ loading ? 'Refreshing' : 'Refresh' }}
-      </button>
+  <section class="page">
+    <header class="page-heading">
+      <div><span class="eyebrow">Frappe workloads</span><h1>Benches</h1><p>Each discovered bench, its site coverage, and whether any workload needs attention.</p></div>
+      <div class="page-actions"><button class="button" :disabled="loading" @click="refreshNow"><RefreshCw :size="15" :class="{ spin: loading }" />{{ loading ? 'Refreshing' : 'Refresh' }}</button></div>
     </header>
 
-    <p v-if="error" class="error">Failed to load benches: {{ error }}</p>
+    <div v-if="error" class="notice error">Failed to load benches: {{ error }}</div>
 
-    <p v-if="!loading && benches.length === 0" class="muted">
-      No benches reporting yet. The collector populates this list once
-      <code>frappe_bench_apps_count</code> is being pushed to VictoriaMetrics.
-    </p>
-
-    <div v-for="group in grouped" :key="group.server" class="server-group">
-      <h3 class="server-name">
-        <Server :size="14" :stroke-width="2" />
-        {{ group.server }}
-      </h3>
-      <div class="grid">
-        <RouterLink
-          v-for="bench in group.benches"
-          :key="bench"
-          :to="`/benches/${encodeURIComponent(group.server)}/${encodeURIComponent(bench)}`"
-          class="card"
-        >
-          <div class="card-head">
-            <Boxes :size="16" :stroke-width="2" class="card-icon" />
-            <span class="bench-name">{{ bench }}</span>
-            <ChevronRight :size="14" :stroke-width="2" class="chev" />
-          </div>
-          <div class="bench-sub">on {{ group.server }}</div>
-        </RouterLink>
-      </div>
+    <div v-if="benches.length" class="panel toolbar">
+      <label class="search"><Search :size="16" /><input v-model="search" type="search" placeholder="Search benches…" /></label>
+      <select v-model="serverFilter" aria-label="Filter by server"><option value="">All servers</option><option v-for="server in servers" :key="server" :value="server">{{ server }}</option></select>
+      <span>{{ rows.length }} of {{ benches.length }}</span>
     </div>
+
+    <div v-if="rows.length" class="bench-grid">
+      <RouterLink v-for="bench in rows" :key="`${bench.server}/${bench.bench}`" :to="`/benches/${encodeURIComponent(bench.server)}/${encodeURIComponent(bench.bench)}`" class="panel bench-card">
+        <div class="bench-head"><span class="bench-icon"><Boxes :size="18" /></span><div><strong>{{ bench.bench }}</strong><small><ServerIcon :size="12" /> {{ bench.server }}</small></div><ArrowRight :size="16" class="arrow" /></div>
+        <div class="bench-health"><div><span>Sites</span><strong>{{ bench.siteCount }}</strong></div><div><span>Healthy</span><strong class="healthy">{{ bench.healthyCount }}</strong></div><div><span>Attention</span><strong :class="{ danger: bench.issueCount }">{{ bench.issueCount }}</strong></div></div>
+      </RouterLink>
+    </div>
+    <div v-else-if="!loading" class="panel empty-state"><Boxes :size="28" /><h3>{{ benches.length ? 'No matching benches' : 'No benches reporting' }}</h3><p>{{ benches.length ? 'Adjust the search or server filter.' : 'Wait for the first agentless SSH collection.' }}</p></div>
   </section>
 </template>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
-}
-.title {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-.title-icon { color: var(--accent); }
-.title h2 {
-  margin: 0;
-  font-size: 1.35rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-.count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.6rem;
-  height: 1.4rem;
-  padding: 0 0.4rem;
-  background: var(--bg-hover);
-  color: var(--muted);
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 600;
-}
-.refresh-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: var(--card-bg);
-  color: var(--fg);
-  border: 1px solid var(--card-border);
-  padding: 0.45rem 0.9rem;
-  border-radius: 6px;
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.88rem;
-  font-weight: 500;
-  transition: border-color 120ms, background 120ms;
-}
-.refresh-btn:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--bg-hover);
-}
-.refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.spin { animation: spin 0.9s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.server-group {
-  margin-bottom: 1.5rem;
-}
-.server-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
-  color: var(--muted);
-  margin: 0 0 0.6rem 0;
-  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  font-weight: 500;
-  text-transform: lowercase;
-  letter-spacing: 0.01em;
-}
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 0.85rem;
-}
-.card {
-  display: block;
-  padding: 0.85rem 1rem;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 8px;
-  text-decoration: none;
-  color: inherit;
-  transition: border-color 120ms, transform 120ms;
-  box-shadow: var(--card-shadow);
-}
-.card:hover {
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
-.card-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.card-icon { color: var(--muted); }
-.bench-name {
-  flex: 1;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-.chev { color: var(--muted-2); }
-.card:hover .chev,
-.card:hover .card-icon { color: var(--accent); }
-.bench-sub {
-  color: var(--muted);
-  font-size: 0.78rem;
-  margin-top: 0.35rem;
-  margin-left: 1.5rem;
-}
-.error {
-  padding: 0.5rem 0.75rem;
-  background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
-  color: var(--status-unreachable);
-  border-radius: 4px;
-}
-.muted {
-  color: var(--muted);
-}
-
-@media (max-width: 720px) {
-  .grid {
-    grid-template-columns: 1fr;
-    gap: 0.6rem;
-  }
-  .card { padding: 0.7rem 0.85rem; }
-  .bench-sub { margin-left: 1.4rem; font-size: 0.75rem; }
-  .server-name { font-size: 0.8rem; }
-}
+.toolbar { display: flex; align-items: center; gap: .65rem; padding: .7rem; margin-bottom: 1rem; }.toolbar > span { color: var(--muted-2); font-size: .72rem; white-space: nowrap; }.search { flex: 1; min-height: 39px; display: flex; align-items: center; gap: .45rem; padding: 0 .65rem; border: 1px solid var(--card-border); border-radius: 8px; background: var(--bg); color: var(--muted); }.search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; }.toolbar select { min-height: 39px; padding: 0 .7rem; border: 1px solid var(--card-border); border-radius: 8px; background: var(--bg); }
+.bench-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(290px,1fr)); gap: .8rem; }.bench-card { color: inherit; padding: 1rem; transition: 150ms ease; }.bench-card:hover { color: inherit; transform: translateY(-2px); border-color: var(--accent); }.bench-head { display: flex; align-items: center; gap: .65rem; }.bench-icon { width: 38px; height: 38px; display: grid; place-items: center; color: var(--accent-strong); border-radius: 10px; background: var(--accent-soft); }.bench-head > div { min-width: 0; display: flex; flex-direction: column; }.bench-head strong { color: var(--fg-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.bench-head small { display: inline-flex; align-items: center; gap: .28rem; margin-top: .15rem; color: var(--muted); font-size: .7rem; }.arrow { margin-left: auto; color: var(--muted-2); }.bench-health { display: grid; grid-template-columns: repeat(3,1fr); gap: .4rem; padding-top: .85rem; margin-top: .85rem; border-top: 1px solid var(--card-border); }.bench-health div { display: flex; flex-direction: column; }.bench-health span { color: var(--muted-2); font-size: .65rem; text-transform: uppercase; }.bench-health strong { margin-top: .18rem; font-size: .9rem; }.healthy { color: var(--status-reachable); }.danger { color: var(--status-unreachable); }
+@media(max-width:720px){.toolbar{align-items:stretch;flex-direction:column}.toolbar select{width:100%}.toolbar>span{align-self:flex-end}.bench-grid{grid-template-columns:1fr}}
 </style>

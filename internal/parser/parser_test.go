@@ -87,6 +87,25 @@ func TestTokenize_HandlesInlineLabelsWithEqualsInside(t *testing.T) {
 	require.Equal(t, "1234", out.Sections[0].KVs[`disk_used_bytes{mount="/"}`])
 }
 
+func TestTokenize_HandlesBracesAndEqualsInsideQuotedLabels(t *testing.T) {
+	input := "###SERVER\n" +
+		`disk_used_bytes{mount="/data/{a}=b"}=1234` + "\n" +
+		"###END\n"
+	out, err := Tokenize(input)
+	require.NoError(t, err)
+	require.Equal(t, "1234", out.Sections[0].KVs[`disk_used_bytes{mount="/data/{a}=b"}`])
+}
+
+func TestTokenize_RejectsDuplicateKeysAndTrailingContent(t *testing.T) {
+	for _, input := range []string{
+		"###META\nversion=1\nversion=2\n###END\n",
+		"###META\nversion=1\n###END\ntrailing=1\n",
+	} {
+		_, err := Tokenize(input)
+		require.Error(t, err)
+	}
+}
+
 func TestTokenize_PreservesSectionsWithColons(t *testing.T) {
 	// Phase 3 will introduce ###BENCH:bench_name — make sure tokenizer
 	// keeps section names with colons intact (no splitting on colon).

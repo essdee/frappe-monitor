@@ -43,6 +43,20 @@ func (_u *LogCursorUpdate) SetNillableLogPath(v *string) *LogCursorUpdate {
 	return _u
 }
 
+// SetFileIdentity sets the "file_identity" field.
+func (_u *LogCursorUpdate) SetFileIdentity(v string) *LogCursorUpdate {
+	_u.mutation.SetFileIdentity(v)
+	return _u
+}
+
+// SetNillableFileIdentity sets the "file_identity" field if the given value is not nil.
+func (_u *LogCursorUpdate) SetNillableFileIdentity(v *string) *LogCursorUpdate {
+	if v != nil {
+		_u.SetFileIdentity(*v)
+	}
+	return _u
+}
+
 // SetByteOffset sets the "byte_offset" field.
 func (_u *LogCursorUpdate) SetByteOffset(v int64) *LogCursorUpdate {
 	_u.mutation.ResetByteOffset()
@@ -161,6 +175,9 @@ func (_u *LogCursorUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.LogPath(); ok {
 		_spec.SetField(logcursor.FieldLogPath, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.FileIdentity(); ok {
+		_spec.SetField(logcursor.FieldFileIdentity, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.ByteOffset(); ok {
 		_spec.SetField(logcursor.FieldByteOffset, field.TypeInt64, value)
 	}
@@ -229,6 +246,20 @@ func (_u *LogCursorUpdateOne) SetLogPath(v string) *LogCursorUpdateOne {
 func (_u *LogCursorUpdateOne) SetNillableLogPath(v *string) *LogCursorUpdateOne {
 	if v != nil {
 		_u.SetLogPath(*v)
+	}
+	return _u
+}
+
+// SetFileIdentity sets the "file_identity" field.
+func (_u *LogCursorUpdateOne) SetFileIdentity(v string) *LogCursorUpdateOne {
+	_u.mutation.SetFileIdentity(v)
+	return _u
+}
+
+// SetNillableFileIdentity sets the "file_identity" field if the given value is not nil.
+func (_u *LogCursorUpdateOne) SetNillableFileIdentity(v *string) *LogCursorUpdateOne {
+	if v != nil {
+		_u.SetFileIdentity(*v)
 	}
 	return _u
 }
@@ -380,6 +411,9 @@ func (_u *LogCursorUpdateOne) sqlSave(ctx context.Context) (_node *LogCursor, er
 	}
 	if value, ok := _u.mutation.LogPath(); ok {
 		_spec.SetField(logcursor.FieldLogPath, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.FileIdentity(); ok {
+		_spec.SetField(logcursor.FieldFileIdentity, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.ByteOffset(); ok {
 		_spec.SetField(logcursor.FieldByteOffset, field.TypeInt64, value)

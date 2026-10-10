@@ -3,26 +3,70 @@ package ssh
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type PoolConfig struct {
-	DialTimeout    time.Duration
-	CommandTimeout time.Duration
+	DialTimeout        time.Duration
+	CommandTimeout     time.Duration
+	KnownHostsPath     string
+	MaxSessionsPerHost int
 }
 
 type Pool struct {
-	cfg  PoolConfig
-	mu   sync.Mutex
-	conn map[string]*ssh.Client // key: host:port|user|keypath
+	cfg      PoolConfig
+	mu       sync.Mutex
+	conn     map[string]*ssh.Client // key: host:port|user|keypath
+	limits   map[string]chan struct{}
+	keyCache map[string]cachedKey
 }
+
+type cachedKey struct {
+	modTime time.Time
+	size    int64
+	auth    ssh.AuthMethod
+}
+
+const maxCommandOutputBytes = 8 << 20
+
+// cappedBuffer drains all remote output while retaining only a bounded
+// prefix. Reporting the full write length keeps SSH flowing; callers reject
+// truncated output instead of parsing an incomplete collector document.
+type cappedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func newCappedBuffer(limit int) *cappedBuffer { return &cappedBuffer{limit: limit} }
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	originalLen := len(p)
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = b.buf.Write(p)
+	}
+	if originalLen > remaining {
+		b.truncated = true
+	}
+	return originalLen, nil
+}
+
+func (b *cappedBuffer) String() string { return b.buf.String() }
 
 func NewPool(cfg PoolConfig) *Pool {
 	if cfg.DialTimeout == 0 {
@@ -31,7 +75,18 @@ func NewPool(cfg PoolConfig) *Pool {
 	if cfg.CommandTimeout == 0 {
 		cfg.CommandTimeout = 30 * time.Second
 	}
-	return &Pool{cfg: cfg, conn: map[string]*ssh.Client{}}
+	if cfg.MaxSessionsPerHost <= 0 {
+		cfg.MaxSessionsPerHost = 2
+	}
+	if strings.TrimSpace(cfg.KnownHostsPath) == "" {
+		cfg.KnownHostsPath = "~/.ssh/known_hosts"
+	}
+	return &Pool{
+		cfg:      cfg,
+		conn:     map[string]*ssh.Client{},
+		limits:   map[string]chan struct{}{},
+		keyCache: map[string]cachedKey{},
+	}
 }
 
 func (p *Pool) Close() {
@@ -48,6 +103,12 @@ func (p *Pool) Run(ctx context.Context, tgt Target, cmd string) (string, error) 
 }
 
 func (p *Pool) RunWithInput(ctx context.Context, tgt Target, cmd, stdin string) (string, error) {
+	release, err := p.acquire(ctx, tgt)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
 	client, err := p.getOrDial(ctx, tgt)
 	if err != nil {
 		return "", err
@@ -67,9 +128,9 @@ func (p *Pool) RunWithInput(ctx context.Context, tgt Target, cmd, stdin string) 
 	}
 	defer sess.Close()
 
-	var out bytes.Buffer
-	sess.Stdout = &out
-	sess.Stderr = &out
+	out := newCappedBuffer(maxCommandOutputBytes)
+	sess.Stdout = out
+	sess.Stderr = out
 	if stdin != "" {
 		sess.Stdin = strings.NewReader(stdin)
 	}
@@ -84,8 +145,11 @@ func (p *Pool) RunWithInput(ctx context.Context, tgt Target, cmd, stdin string) 
 	timeout := p.cfg.CommandTimeout
 	select {
 	case err := <-done:
+		if out.truncated {
+			return out.String(), fmt.Errorf("ssh run %q on %s: output exceeded %d bytes", cmd, tgt.addr(), maxCommandOutputBytes)
+		}
 		if err != nil {
-			return out.String(), fmt.Errorf("ssh run %q on %s: %w: %s", cmd, tgt.addr(), err, out.String())
+			return out.String(), fmt.Errorf("ssh run %q on %s: %w: %s", cmd, tgt.addr(), err, truncateOutput(out.String(), 4096))
 		}
 		return out.String(), nil
 	case <-ctx.Done():
@@ -97,14 +161,39 @@ func (p *Pool) RunWithInput(ctx context.Context, tgt Target, cmd, stdin string) 
 	}
 }
 
+func truncateOutput(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "…"
+}
+
 // Stream opens a session, starts cmd, and returns its stdout as a
 // StreamHandle. Unlike Run, it does NOT wait for cmd to finish — the
 // caller drives the stream by reading until EOF (clean exit) or a
 // non-EOF error (network drop, host reboot, etc.). The CommandTimeout
 // from PoolConfig is intentionally NOT applied here; long-lived
-// streams (the streamer's tail -F session is forever) would otherwise
+// streams (the log protocol session is long-lived) would otherwise
 // be killed at the timeout. Callers manage their own deadlines.
 func (p *Pool) Stream(ctx context.Context, tgt Target, cmd string) (StreamHandle, error) {
+	return p.StreamWithInput(ctx, tgt, cmd, "")
+}
+
+// StreamWithInput is Stream with a caller-owned stdin payload. Production
+// uses it to execute embedded read-only scripts via `bash -s`, avoiding any
+// file deployment on monitored servers.
+func (p *Pool) StreamWithInput(ctx context.Context, tgt Target, cmd, stdin string) (StreamHandle, error) {
+	release, err := p.acquire(ctx, tgt)
+	if err != nil {
+		return nil, err
+	}
+	keepSlot := false
+	defer func() {
+		if !keepSlot {
+			release()
+		}
+	}()
+
 	client, err := p.getOrDial(ctx, tgt)
 	if err != nil {
 		return nil, err
@@ -133,16 +222,21 @@ func (p *Pool) Stream(ctx context.Context, tgt Target, cmd string) (StreamHandle
 	if stderr, err := sess.StderrPipe(); err == nil {
 		go io.Copy(io.Discard, stderr)
 	}
+	if stdin != "" {
+		sess.Stdin = strings.NewReader(stdin)
+	}
 	if err := sess.Start(cmd); err != nil {
 		_ = sess.Close()
 		return nil, fmt.Errorf("ssh start %q on %s: %w", cmd, tgt.addr(), err)
 	}
 	h := &poolStream{
-		sess:   sess,
-		stdout: stdout,
-		addr:   tgt.addr(),
-		closed: make(chan struct{}),
+		sess:    sess,
+		stdout:  stdout,
+		addr:    tgt.addr(),
+		closed:  make(chan struct{}),
+		release: release,
 	}
+	keepSlot = true
 	go h.watchCtx(ctx)
 	return h, nil
 }
@@ -160,6 +254,7 @@ type poolStream struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 	closeErr  error
+	release   func()
 }
 
 func (s *poolStream) Read(p []byte) (int, error) {
@@ -173,6 +268,9 @@ func (s *poolStream) Close() error {
 		// POSIX signal name; some servers ignore it, that's fine.
 		_ = s.sess.Signal(ssh.SIGTERM)
 		s.closeErr = s.sess.Close()
+		if s.release != nil {
+			s.release()
+		}
 		close(s.closed)
 	})
 	return s.closeErr
@@ -194,7 +292,25 @@ func poolKey(tgt Target) string {
 	return fmt.Sprintf("%s|%s|%s", tgt.addr(), tgt.User, tgt.KeyPath)
 }
 
-func (p *Pool) getOrDial(_ context.Context, tgt Target) (*ssh.Client, error) {
+func (p *Pool) acquire(ctx context.Context, tgt Target) (func(), error) {
+	p.mu.Lock()
+	sem, ok := p.limits[tgt.addr()]
+	if !ok {
+		sem = make(chan struct{}, p.cfg.MaxSessionsPerHost)
+		p.limits[tgt.addr()] = sem
+	}
+	p.mu.Unlock()
+
+	select {
+	case sem <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-sem }) }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("ssh session slot %s: %w", tgt.addr(), ctx.Err())
+	}
+}
+
+func (p *Pool) getOrDial(ctx context.Context, tgt Target) (*ssh.Client, error) {
 	k := poolKey(tgt)
 	p.mu.Lock()
 	if c, ok := p.conn[k]; ok {
@@ -203,17 +319,20 @@ func (p *Pool) getOrDial(_ context.Context, tgt Target) (*ssh.Client, error) {
 	}
 	p.mu.Unlock()
 
-	auth, err := loadKey(tgt.KeyPath)
+	auth, err := p.loadKey(tgt.KeyPath)
+	if err != nil {
+		return nil, err
+	}
+	hostKeyCallback, err := knownHostsCallback(p.cfg.KnownHostsPath)
 	if err != nil {
 		return nil, err
 	}
 	cfg := &ssh.ClientConfig{
 		User:            tgt.User,
 		Auth:            []ssh.AuthMethod{auth},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // Phase 7 will add a known_hosts check.
-		Timeout:         p.cfg.DialTimeout,
+		HostKeyCallback: hostKeyCallback,
 	}
-	c, err := ssh.Dial("tcp", tgt.addr(), cfg)
+	c, err := dialSSHContext(ctx, "tcp", tgt.addr(), cfg, p.cfg.DialTimeout)
 	if err != nil {
 		return nil, classifyDialError(tgt.addr(), err)
 	}
@@ -234,6 +353,17 @@ func (p *Pool) getOrDial(_ context.Context, tgt Target) (*ssh.Client, error) {
 // sentinel (ErrAuth or ErrDial) so callers can distinguish the two without
 // inspecting messages themselves.
 func classifyDialError(addr string, err error) error {
+	var hostKeyErr *knownhosts.KeyError
+	if errors.As(err, &hostKeyErr) {
+		return fmt.Errorf("ssh dial %s: %w: %v", addr, ErrHostKey, err)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("ssh dial %s: %w: %v", addr, ErrTimeout, err)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return fmt.Errorf("ssh dial %s: %w: %v", addr, ErrTimeout, err)
+	}
 	s := err.Error()
 	if strings.Contains(s, "unable to authenticate") ||
 		strings.Contains(s, "no supported methods remain") ||
@@ -253,14 +383,95 @@ func (p *Pool) dropClient(tgt Target) {
 	}
 }
 
-func loadKey(path string) (ssh.AuthMethod, error) {
+func knownHostsCallback(path string) (ssh.HostKeyCallback, error) {
+	resolved, err := expandHome(path)
+	if err != nil {
+		return nil, fmt.Errorf("known_hosts path: %w", err)
+	}
+	callback, err := knownhosts.New(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("%w: load known_hosts %q: %v", ErrHostKey, resolved, err)
+	}
+	return callback, nil
+}
+
+func expandHome(path string) (string, error) {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if path == "~" {
+			return home, nil
+		}
+		return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
+	}
+	return path, nil
+}
+
+func dialSSHContext(ctx context.Context, network, addr string, cfg *ssh.ClientConfig, timeout time.Duration) (*ssh.Client, error) {
+	dialer := &net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = conn.Close()
+		}
+	}()
+
+	deadline := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	_ = conn.SetDeadline(deadline)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	cc, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	close(done)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	success = true
+	return ssh.NewClient(cc, chans, reqs), nil
+}
+
+func (p *Pool) loadKey(path string) (ssh.AuthMethod, error) {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: stat key %q: %v", ErrKey, path, err)
+	}
+	p.mu.Lock()
+	cached, ok := p.keyCache[path]
+	if ok && cached.size == stat.Size() && cached.modTime.Equal(stat.ModTime()) {
+		p.mu.Unlock()
+		return cached.auth, nil
+	}
+	p.mu.Unlock()
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read key %q: %w", path, err)
+		return nil, fmt.Errorf("%w: read key %q: %v", ErrKey, path, err)
 	}
 	signer, err := ssh.ParsePrivateKey(raw)
 	if err != nil {
-		return nil, fmt.Errorf("parse key %q: %w", path, err)
+		return nil, fmt.Errorf("%w: parse key %q: %v", ErrKey, path, err)
 	}
-	return ssh.PublicKeys(signer), nil
+	auth := ssh.PublicKeys(signer)
+	p.mu.Lock()
+	p.keyCache[path] = cachedKey{modTime: stat.ModTime(), size: stat.Size(), auth: auth}
+	p.mu.Unlock()
+	return auth, nil
 }

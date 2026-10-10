@@ -8,7 +8,7 @@ This is **not** a production install. For production see [`deployment.md`](deplo
 
 | | macOS | Linux (Ubuntu/Debian/Fedora) |
 |---|---|---|
-| **Go ≥ 1.25** | `brew install go` | distro Go is often too old; use [go.dev/doc/install](https://go.dev/doc/install) |
+| **Go ≥ 1.26.5** | `brew install go` | distro Go is often too old; use [go.dev/doc/install](https://go.dev/doc/install) |
 | **Node ≥ 20** | `brew install node` | `apt install nodejs npm` (verify `node --version` is ≥ 20; nodesource if not) |
 | **Docker + compose** | Docker Desktop, [OrbStack](https://orbstack.dev), or [colima](https://github.com/abiosoft/colima) | `apt install docker.io docker-compose-plugin` and add yourself to the `docker` group |
 | **Python 3** | preinstalled | preinstalled on most distros |
@@ -113,11 +113,11 @@ curl -X POST http://127.0.0.1:8080/api/v1/servers \
 # 5. Test the connection (should return reachable: true):
 curl -X POST http://127.0.0.1:8080/api/v1/servers/<id>/test-connection
 
-# 6. Push the bench-side collector script to the host:
-curl -X POST http://127.0.0.1:8080/api/v1/servers/<id>/deploy-collector
+# 6. Collection begins immediately after registration. No target-side
+#    installation or deployment step exists.
 ```
 
-Wait one scheduler tick (default 15min) for the first real metrics to land. To shorten the wait, edit `./config/monitor.yaml` and set `scheduler.default_interval_seconds: 60`, then `make run` again.
+The first collection starts immediately; later cycles use the configured scheduler interval. To shorten repeated cycles, edit `./config/monitor.yaml`, set `scheduler.default_interval_seconds: 60`, then run `make run` again.
 
 In the dashboard, the new server's card will switch from "unknown" to "reachable" once the first cycle succeeds, and CPU / memory / disk / load charts will start populating.
 
@@ -133,7 +133,12 @@ alerts:
     chat_ids: ["<your chat id from getUpdates>"]
 ```
 
-Re-run `make run`. The default rules (`server_unreachable`, `disk_almost_full`, `site_unhealthy`, `redis_queue_high`) start evaluating against whatever metrics are in VM. The seeded `staging.example.com` site has `is_healthy=0`, so within ~60s of starting you should receive a Telegram message.
+Re-run `make run`. The bundled rules start evaluating server capacity, service
+and worker health, queue pressure, site health/latency, and log-stream state
+against whatever metrics are in VM. The seeded `staging.example.com` site has
+`is_healthy=0`, so within ~60s of starting you should receive a Telegram
+message. The stream rule remains quiet unless a
+`frappe_stream_connected=0` series exists.
 
 See [`usage.md`](usage.md#setting-up-telegram-alerting) for the full bot-creation walkthrough.
 

@@ -28,8 +28,9 @@ type Sample struct {
 // internal/api/hierarchy_handlers.go's queryInstant; lifted into its
 // own package so the alerts evaluator doesn't depend on the api one.
 type HTTPVMClient struct {
-	BaseURL string
-	HTTP    *http.Client
+	BaseURL  string
+	HTTP     *http.Client
+	Lookback time.Duration
 }
 
 // NewHTTPVMClient builds an HTTPVMClient with a sensible timeout.
@@ -37,8 +38,9 @@ type HTTPVMClient struct {
 // is appended at request time.
 func NewHTTPVMClient(baseURL string, timeout time.Duration) *HTTPVMClient {
 	return &HTTPVMClient{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		HTTP:    &http.Client{Timeout: timeout},
+		BaseURL:  strings.TrimRight(baseURL, "/"),
+		HTTP:     &http.Client{Timeout: timeout},
+		Lookback: 5 * time.Minute,
 	}
 }
 
@@ -49,7 +51,7 @@ type vmInstantResponse struct {
 	Data   struct {
 		ResultType string `json:"resultType"`
 		Result     []struct {
-			Metric map[string]string `json:"metric"`
+			Metric map[string]string  `json:"metric"`
 			Value  [2]json.RawMessage `json:"value"`
 		} `json:"result"`
 	} `json:"data"`
@@ -59,6 +61,9 @@ type vmInstantResponse struct {
 func (c *HTTPVMClient) Query(ctx context.Context, expr string) ([]Sample, error) {
 	v := url.Values{}
 	v.Set("query", expr)
+	if c.Lookback > 0 {
+		v.Set("step", strconv.FormatInt(max(1, int64(c.Lookback.Seconds())), 10))
+	}
 	full := c.BaseURL + "/api/v1/query?" + v.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
 	if err != nil {

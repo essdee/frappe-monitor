@@ -46,13 +46,16 @@ services:
 
   loki:
     # Pinned for the same reason as VM — Loki's config schema has shifted
-    # between major versions. Verified v3.4.1 with the bundled example
-    # config (no custom config file required for dev).
+    # between major versions. The product-owned config enables a bounded
+    # 30-day retention policy and is verified against this exact image.
     image: grafana/loki:3.4.1
     container_name: frappe-monitor-loki
     ports:
       - "127.0.0.1:3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
+    command: -config.file=/etc/loki/frappe-monitor.yaml
+    configs:
+      - source: loki_config
+        target: /etc/loki/frappe-monitor.yaml
     volumes:
       - loki-data:/loki
     restart: unless-stopped
@@ -67,3 +70,49 @@ volumes:
     name: frappe-monitor-vm-data
   loki-data:
     name: frappe-monitor-loki-data
+
+configs:
+  loki_config:
+    content: |
+      auth_enabled: false
+
+      server:
+        http_listen_port: 3100
+        log_level: warn
+
+      common:
+        instance_addr: 127.0.0.1
+        path_prefix: /loki
+        storage:
+          filesystem:
+            chunks_directory: /loki/chunks
+            rules_directory: /loki/rules
+        replication_factor: 1
+        ring:
+          kvstore:
+            store: inmemory
+
+      schema_config:
+        configs:
+          - from: 2020-10-24
+            store: tsdb
+            object_store: filesystem
+            schema: v13
+            index:
+              prefix: index_
+              period: 24h
+
+      limits_config:
+        retention_period: 720h
+        max_query_lookback: 720h
+
+      compactor:
+        working_directory: /loki/compactor
+        compaction_interval: 10m
+        retention_enabled: true
+        retention_delete_delay: 2h
+        retention_delete_worker_count: 10
+        delete_request_store: filesystem
+
+      analytics:
+        reporting_enabled: false

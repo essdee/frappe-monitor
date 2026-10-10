@@ -27,6 +27,20 @@ func (_c *LogCursorCreate) SetLogPath(v string) *LogCursorCreate {
 	return _c
 }
 
+// SetFileIdentity sets the "file_identity" field.
+func (_c *LogCursorCreate) SetFileIdentity(v string) *LogCursorCreate {
+	_c.mutation.SetFileIdentity(v)
+	return _c
+}
+
+// SetNillableFileIdentity sets the "file_identity" field if the given value is not nil.
+func (_c *LogCursorCreate) SetNillableFileIdentity(v *string) *LogCursorCreate {
+	if v != nil {
+		_c.SetFileIdentity(*v)
+	}
+	return _c
+}
+
 // SetByteOffset sets the "byte_offset" field.
 func (_c *LogCursorCreate) SetByteOffset(v int64) *LogCursorCreate {
 	_c.mutation.SetByteOffset(v)
@@ -101,6 +115,10 @@ func (_c *LogCursorCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *LogCursorCreate) defaults() {
+	if _, ok := _c.mutation.FileIdentity(); !ok {
+		v := logcursor.DefaultFileIdentity
+		_c.mutation.SetFileIdentity(v)
+	}
 	if _, ok := _c.mutation.ByteOffset(); !ok {
 		v := logcursor.DefaultByteOffset
 		_c.mutation.SetByteOffset(v)
@@ -120,6 +138,9 @@ func (_c *LogCursorCreate) check() error {
 		if err := logcursor.LogPathValidator(v); err != nil {
 			return &ValidationError{Name: "log_path", err: fmt.Errorf(`ent: validator failed for field "LogCursor.log_path": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.FileIdentity(); !ok {
+		return &ValidationError{Name: "file_identity", err: errors.New(`ent: missing required field "LogCursor.file_identity"`)}
 	}
 	if _, ok := _c.mutation.ByteOffset(); !ok {
 		return &ValidationError{Name: "byte_offset", err: errors.New(`ent: missing required field "LogCursor.byte_offset"`)}
@@ -164,6 +185,10 @@ func (_c *LogCursorCreate) createSpec() (*LogCursor, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.LogPath(); ok {
 		_spec.SetField(logcursor.FieldLogPath, field.TypeString, value)
 		_node.LogPath = value
+	}
+	if value, ok := _c.mutation.FileIdentity(); ok {
+		_spec.SetField(logcursor.FieldFileIdentity, field.TypeString, value)
+		_node.FileIdentity = value
 	}
 	if value, ok := _c.mutation.ByteOffset(); ok {
 		_spec.SetField(logcursor.FieldByteOffset, field.TypeInt64, value)

@@ -21,6 +21,7 @@ import (
 	"frappe-monitor/internal/config"
 	"frappe-monitor/internal/logs"
 	"frappe-monitor/internal/metrics"
+	"frappe-monitor/internal/probes"
 	"frappe-monitor/internal/scheduler"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
@@ -30,18 +31,96 @@ import (
 
 func main() {
 	cfgPath := flag.String("config", "./config/monitor.yaml", "path to config yaml")
+	checkConfig := flag.Bool("check-config", false, "validate configuration and exit without starting services")
 	flag.Parse()
 
+	if *checkConfig {
+		if err := checkConfiguration(*cfgPath); err != nil {
+			fmt.Fprintln(os.Stderr, "fatal:", err)
+			os.Exit(1)
+		}
+		fmt.Println("configuration valid")
+		return
+	}
 	if err := run(*cfgPath); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
 		os.Exit(1)
 	}
 }
 
+func checkConfiguration(path string) error {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	_, _, err = runtimeConfigs(cfg)
+	return err
+}
+
+// runtimeConfigs builds and validates every subsystem configuration before run
+// creates a database, starts the scheduler, or opens any network connection.
+// The installer uses the same path through --check-config, preventing an
+// invalid first-run prompt answer from installing a restart-looping service.
+func runtimeConfigs(cfg *config.Config) (alerts.Config, streamer.Config, error) {
+	alertsCfg := alerts.Config{
+		Enabled:                   cfg.Alerts.Enabled,
+		EvaluationIntervalSeconds: cfg.Alerts.EvaluationIntervalSeconds,
+		NotifyRepeatSeconds:       cfg.Alerts.NotifyRepeatSeconds,
+		VMQueryTimeoutSeconds:     cfg.Alerts.VMQueryTimeoutSeconds,
+		Telegram: alerts.TelegramConfig{
+			BotToken:           cfg.Alerts.Telegram.BotToken,
+			ChatIDs:            cfg.Alerts.Telegram.ChatIDs,
+			SendTimeoutSeconds: cfg.Alerts.Telegram.SendTimeoutSeconds,
+		},
+		DisableDefaults: cfg.Alerts.DisableDefaults,
+		Timezone:        cfg.Display.Timezone,
+	}
+	for _, rule := range cfg.Alerts.Rules {
+		alertsCfg.Rules = append(alertsCfg.Rules, alerts.Rule{
+			Name:              rule.Name,
+			Expr:              rule.Expr,
+			Severity:          rule.Severity,
+			Message:           rule.Message,
+			FingerprintLabels: rule.FingerprintLabels,
+		})
+	}
+	if err := alertsCfg.Validate(); err != nil {
+		return alerts.Config{}, streamer.Config{}, fmt.Errorf("alerts: %w", err)
+	}
+
+	streamCfg := streamer.Config{
+		Enabled:              cfg.Streaming.Enabled,
+		MonitorID:            cfg.Streaming.MonitorID,
+		ScriptPath:           cfg.Streaming.ScriptPath,
+		FlushIntervalSeconds: cfg.Streaming.FlushIntervalSeconds,
+		MaxBatchLines:        cfg.Streaming.MaxBatchLines,
+		MaxBufferedLines:     cfg.Streaming.MaxBufferedLines,
+		MaxBufferedBytes:     cfg.Streaming.MaxBufferedBytes,
+		PushTimeoutSeconds:   cfg.Streaming.PushTimeoutSeconds,
+		MinBackoffSeconds:    cfg.Streaming.MinBackoffSeconds,
+		MaxBackoffSeconds:    cfg.Streaming.MaxBackoffSeconds,
+	}
+	for _, file := range cfg.Streaming.Files {
+		streamCfg.Files = append(streamCfg.Files, streamer.FileSpecConfig{
+			ServerID: file.ServerID, ID: file.ID, Path: file.Path,
+			LogType: file.LogType, Bench: file.Bench, Site: file.Site,
+		})
+	}
+	if err := streamCfg.Validate(); err != nil {
+		return alerts.Config{}, streamer.Config{}, fmt.Errorf("streamer: %w", err)
+	}
+	return alertsCfg, streamCfg, nil
+}
+
 func run(cfgPath string) error {
+	startedAt := time.Now().UTC()
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+	alertsCfg, streamCfg, err := runtimeConfigs(cfg)
+	if err != nil {
+		return err
 	}
 
 	logger := newLogger(cfg.Log.Level, cfg.Log.Format)
@@ -69,8 +148,10 @@ func run(cfgPath string) error {
 	}()
 
 	pool := sshpkg.NewPool(sshpkg.PoolConfig{
-		DialTimeout:    time.Duration(cfg.SSH.DialTimeoutSeconds) * time.Second,
-		CommandTimeout: time.Duration(cfg.SSH.CommandTimeoutSeconds) * time.Second,
+		DialTimeout:        time.Duration(cfg.SSH.DialTimeoutSeconds) * time.Second,
+		CommandTimeout:     time.Duration(cfg.SSH.CommandTimeoutSeconds) * time.Second,
+		KnownHostsPath:     cfg.SSH.KnownHostsPath,
+		MaxSessionsPerHost: cfg.SSH.MaxConnectionsPerHost,
 	})
 	defer pool.Close()
 
@@ -83,7 +164,13 @@ func run(cfgPath string) error {
 		Store:  store,
 		Exec:   pool,
 		Push:   vmClient,
+		Public: probes.NewPublicProber(cfg.PublicProbes),
 		Logger: logger,
+	}
+	metricsLookback := 3*time.Duration(cfg.Scheduler.DefaultIntervalSeconds)*time.Second +
+		time.Duration(cfg.Scheduler.PerJobTimeoutSeconds)*time.Second
+	if metricsLookback < 5*time.Minute {
+		metricsLookback = 5 * time.Minute
 	}
 	sched := scheduler.New(
 		cfg.Scheduler.MaxParallel,
@@ -102,27 +189,7 @@ func run(cfgPath string) error {
 	// which the rest of the wiring treats as "no-op" — no goroutine, no
 	// telegram traffic, no extra rows in SQLite. Validation surfaces
 	// missing telegram config etc. before we ever start.
-	alertsCfg := alerts.Config{
-		Enabled:                   cfg.Alerts.Enabled,
-		EvaluationIntervalSeconds: cfg.Alerts.EvaluationIntervalSeconds,
-		NotifyRepeatSeconds:       cfg.Alerts.NotifyRepeatSeconds,
-		VMQueryTimeoutSeconds:     cfg.Alerts.VMQueryTimeoutSeconds,
-		Telegram: alerts.TelegramConfig{
-			BotToken:           cfg.Alerts.Telegram.BotToken,
-			ChatIDs:            cfg.Alerts.Telegram.ChatIDs,
-			SendTimeoutSeconds: cfg.Alerts.Telegram.SendTimeoutSeconds,
-		},
-		DisableDefaults: cfg.Alerts.DisableDefaults,
-	}
-	for _, r := range cfg.Alerts.Rules {
-		alertsCfg.Rules = append(alertsCfg.Rules, alerts.Rule{
-			Name:              r.Name,
-			Expr:              r.Expr,
-			Severity:          r.Severity,
-			Message:           r.Message,
-			FingerprintLabels: r.FingerprintLabels,
-		})
-	}
+	alertsCfg.QueryLookback = metricsLookback
 	alertsSvc, err := alerts.New(alertsCfg, cfg.Metrics.VMURL, store, logger)
 	if err != nil {
 		return fmt.Errorf("alerts: %w", err)
@@ -141,21 +208,6 @@ func run(cfgPath string) error {
 	// tail Frappe + MariaDB logs and push them to Loki. Health
 	// metrics (frappe_stream_connected, frappe_stream_lag_seconds)
 	// land in VM. NewManager returns nil + nil when disabled.
-	streamCfg := streamer.Config{
-		Enabled:              cfg.Streaming.Enabled,
-		MonitorID:            cfg.Streaming.MonitorID,
-		ScriptPath:           cfg.Streaming.ScriptPath,
-		FlushIntervalSeconds: cfg.Streaming.FlushIntervalSeconds,
-		MaxBatchLines:        cfg.Streaming.MaxBatchLines,
-		PushTimeoutSeconds:   cfg.Streaming.PushTimeoutSeconds,
-		MinBackoffSeconds:    cfg.Streaming.MinBackoffSeconds,
-		MaxBackoffSeconds:    cfg.Streaming.MaxBackoffSeconds,
-	}
-	for _, f := range cfg.Streaming.Files {
-		streamCfg.Files = append(streamCfg.Files, streamer.FileSpecConfig{
-			ID: f.ID, Path: f.Path,
-		})
-	}
 	lokiClient := logs.NewLokiClient(
 		cfg.Logs.LokiURL,
 		time.Duration(cfg.Logs.PushTimeoutSeconds)*time.Second,
@@ -169,32 +221,56 @@ func run(cfgPath string) error {
 			return fmt.Errorf("streamer start: %w", err)
 		}
 		logger.Info("streamer manager started",
-			"file_count", len(cfg.Streaming.Files),
-			"script_path", cfg.Streaming.ScriptPath)
+			"configured_file_count", len(cfg.Streaming.Files),
+			"auto_discovery", len(cfg.Streaming.Files) == 0)
+	}
+	streamStatus := func() api.StreamRuntimeStatus {
+		status := api.StreamRuntimeStatus{
+			Enabled:          cfg.Streaming.Enabled,
+			MaxBufferedLines: cfg.Streaming.MaxBufferedLines,
+			MaxBufferedBytes: cfg.Streaming.MaxBufferedBytes,
+		}
+		if streamMgr == nil {
+			return status
+		}
+		stats := streamMgr.Stats()
+		status.Sessions = stats.Sessions
+		status.Connected = stats.Connected
+		status.Launching = stats.Launching
+		status.BufferedLines = stats.BufferedLines
+		status.BufferedBytes = stats.BufferedBytes
+		status.MaxBufferedLines = stats.MaxBufferedLines
+		status.MaxBufferedBytes = stats.MaxBufferedBytes
+		return status
 	}
 
 	// Lifecycle hooks: when a server is added/removed via the API,
 	// register/deregister its scheduler entry so it picks up (or
 	// stops) on the next tick — no process restart required.
 	scheduleSpec := fmt.Sprintf("@every %ds", cfg.Scheduler.DefaultIntervalSeconds)
-	onServerCreated := func(serverID int) {
-		err := sched.AddKeyed(serverID, scheduleSpec, scheduler.Job{
+	jobForServer := func(serverID int) scheduler.Job {
+		return scheduler.Job{
 			ServerID: serverID,
 			Run: func(ctx context.Context) error {
 				return pipeline.PullOnce(ctx, serverID)
 			},
-		})
+		}
+	}
+	onServerCreated := func(serverID int) {
+		job := jobForServer(serverID)
+		err := sched.AddKeyed(serverID, scheduleSpec, job)
 		if err != nil {
 			logger.Warn("scheduler: hot-add failed", "server_id", serverID, "err", err)
 			return
 		}
 		logger.Info("scheduler: hot-added server", "server_id", serverID, "spec", scheduleSpec)
+		sched.RunNow(job)
 
 		// Phase 8: hot-launch the streamer for the new server. No-op
 		// when streaming is disabled (streamMgr is nil).
 		if streamMgr != nil {
 			go func() {
-				launchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				launchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
 				if err := streamMgr.LaunchServer(launchCtx, serverID); err != nil {
 					logger.Warn("streamer: hot-launch failed", "server_id", serverID, "err", err)
@@ -207,7 +283,7 @@ func run(cfgPath string) error {
 		// dashboard's refresh button can retry. Don't block server
 		// creation on this.
 		go func() {
-			snapCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			snapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 			srv, err := store.GetServer(snapCtx, serverID)
 			if err != nil {
@@ -240,51 +316,89 @@ func run(cfgPath string) error {
 		}
 		logger.Info("scheduler: hot-removed server", "server_id", serverID)
 	}
+	onServerUpdated := func(serverID int) {
+		if streamMgr == nil {
+			return
+		}
+		go func() {
+			streamMgr.RemoveServer(serverID)
+			launchCtx, launchCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer launchCancel()
+			if err := streamMgr.LaunchServer(launchCtx, serverID); err != nil {
+				logger.Warn("streamer: restart after server update failed", "server_id", serverID, "err", err)
+			}
+		}()
+	}
 
 	router := api.NewRouter(api.Deps{
-		Store:    store,
-		Executor: pool,
-		Logger:   logger,
+		Store:      store,
+		Executor:   pool,
+		Logger:     logger,
+		ConfigPath: cfgPath,
+		Config:     cfg,
 
 		// Phase 4: query proxies for the dashboard.
 		MetricsBaseURL:      cfg.Metrics.VMURL,
 		LogsBaseURL:         cfg.Logs.LokiURL,
 		MetricsQueryTimeout: time.Duration(cfg.Metrics.QueryTimeoutSeconds) * time.Second,
+		MetricsLookback:     metricsLookback,
 		LogsQueryTimeout:    time.Duration(cfg.Logs.QueryTimeoutSeconds) * time.Second,
 
-		// Phase 7: HTTP basic auth.
-		AuthPassword: cfg.Auth.Password,
-		AuthRealm:    cfg.Auth.Realm,
+		// Single-tenant cookie auth with HTTP basic compatibility for API clients.
+		AuthPassword:      cfg.Auth.Password,
+		AuthRealm:         cfg.Auth.Realm,
+		DisplayTimezone:   cfg.Display.Timezone,
+		TrustedProxyCIDRs: cfg.Server.TrustedProxyCIDRs,
 
 		// Hot register/deregister scheduler entries on server CRUD.
 		OnServerCreated: onServerCreated,
+		OnServerUpdated: onServerUpdated,
 		OnServerDeleted: onServerDeleted,
 
-		// Phase 6: surface configured rules + enabled flag to the
-		// dashboard's Alerts page. alertsSvc may be nil when alerts
-		// are disabled; in that case Rules() is unavailable, so
-		// fall back to whatever the operator declared (likely empty).
+		// Surface effective rules even while delivery is disabled so the
+		// monitoring UI can review the policy before Telegram is enabled.
 		AlertsRules: func() []alerts.Rule {
 			if alertsSvc != nil {
 				return alertsSvc.Rules()
 			}
-			return alertsCfg.Rules
+			return alerts.EffectiveRules(alertsCfg)
 		}(),
 		AlertsEnabled: cfg.Alerts.Enabled,
+		StartedAt:     startedAt,
+		StreamStatus:  streamStatus,
 	})
 
 	srv := &http.Server{
-		Addr:         cfg.Server.ListenAddr,
-		Handler:      router,
-		ReadTimeout:  time.Duration(cfg.Server.ReadTimeoutSeconds) * time.Second,
-		WriteTimeout: time.Duration(cfg.Server.WriteTimeoutSeconds) * time.Second,
-		BaseContext:  func(net.Listener) context.Context { return ctx },
+		Addr:              cfg.Server.ListenAddr,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       time.Duration(cfg.Server.ReadTimeoutSeconds) * time.Second,
+		WriteTimeout:      time.Duration(cfg.Server.WriteTimeoutSeconds) * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
+	listener, err := net.Listen("tcp", cfg.Server.ListenAddr)
+	if err != nil {
+		// Background services have already started by this point. Cancel
+		// their shared work and drain them before returning the bind error.
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		_ = sched.Stop(stopCtx)
+		if alertsSvc != nil {
+			alertsSvc.Stop()
+		}
+		if streamMgr != nil {
+			streamMgr.Stop(5 * time.Second)
+		}
+		return fmt.Errorf("http listen %s: %w", cfg.Server.ListenAddr, err)
+	}
+	logger.Info("http listening", "addr", listener.Addr().String())
 
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Info("http listening", "addr", cfg.Server.ListenAddr)
-		err := srv.ListenAndServe()
+		err := srv.Serve(listener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 			return
@@ -328,12 +442,9 @@ func run(cfgPath string) error {
 }
 
 // registerScheduledPulls lists every server in the store and adds a
-// scheduler entry per server. Phase 2 uses one global cron spec
-// (default_interval_seconds); Phase 3 will support per-server overrides.
-//
-// Note: this is one-shot at boot. Servers added via the API after boot
-// are not auto-scheduled until the next process restart. Hot reload is
-// a Phase 3 concern.
+// scheduler entry per server using the global default interval. API lifecycle
+// hooks add and remove keyed jobs after boot, so the registry stays live
+// without a process restart.
 func registerScheduledPulls(
 	ctx context.Context,
 	sched *scheduler.Scheduler,
@@ -352,15 +463,17 @@ func registerScheduledPulls(
 		// AddKeyed (not plain Add) so a later API delete can remove
 		// this entry without process restart. Boot-time and runtime
 		// scheduling end up sharing the same registry.
-		err := sched.AddKeyed(serverID, spec, scheduler.Job{
+		job := scheduler.Job{
 			ServerID: serverID,
 			Run: func(ctx context.Context) error {
 				return pipeline.PullOnce(ctx, serverID)
 			},
-		})
+		}
+		err := sched.AddKeyed(serverID, spec, job)
 		if err != nil {
 			return fmt.Errorf("schedule server %d: %w", serverID, err)
 		}
+		sched.RunNow(job)
 	}
 	logger.Info("scheduled pulls registered",
 		"server_count", len(servers),

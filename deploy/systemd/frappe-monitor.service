@@ -3,7 +3,6 @@ Description=Frappe Monitor (multi-server, multi-bench, multi-site monitoring)
 Documentation=https://github.com/sakthikumarp/frappe_monitor
 After=network-online.target frappe-monitor-stack.service
 Wants=network-online.target
-Requires=frappe-monitor-stack.service
 
 [Service]
 Type=simple
@@ -24,7 +23,7 @@ KillSignal=SIGTERM
 StateDirectory=frappe-monitor
 StateDirectoryMode=0750
 ConfigurationDirectory=frappe-monitor
-ConfigurationDirectoryMode=0750
+ConfigurationDirectoryMode=0770
 WorkingDirectory=/var/lib/frappe-monitor
 
 # Hardening — the binary needs egress to the configured VM/Loki URLs
@@ -44,7 +43,7 @@ RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
-ReadWritePaths=/var/lib/frappe-monitor
+ReadWritePaths=/var/lib/frappe-monitor /etc/frappe-monitor
 
 # Resource caps — the binary should never become a burden on the host.
 # Steady-state usage on a small fleet (≤25 servers, 60–900s pull

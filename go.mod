@@ -1,18 +1,18 @@
 module frappe-monitor
 
-go 1.25.0
+go 1.26.5
 
 require (
 	entgo.io/ent v0.14.6
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/knadh/koanf/parsers/yaml v1.1.0
 	github.com/knadh/koanf/providers/confmap v1.0.0
-	github.com/knadh/koanf/providers/env v1.1.0
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.4
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/crypto v0.50.0
+	go.yaml.in/yaml/v3 v3.0.3
+	golang.org/x/crypto v0.52.0
 	modernc.org/sqlite v1.50.0
 )
 
@@ -40,10 +40,9 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/zclconf/go-cty v1.14.4 // indirect
 	github.com/zclconf/go-cty-yaml v1.1.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.3 // indirect
-	golang.org/x/mod v0.34.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/mod v0.37.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

@@ -20,6 +20,11 @@ type LogCursor struct {
 func (LogCursor) Fields() []ent.Field {
 	return []ent.Field{
 		field.String("log_path").NotEmpty(),
+		// file_identity is the remote device/inode pair reported by the
+		// log reader. An offset is only meaningful for the file identity
+		// it came from; keeping both lets us detect rotation even when the
+		// replacement file is larger than the previous offset.
+		field.String("file_identity").Default(""),
 		field.Int64("byte_offset").Default(0).Min(0),
 		field.Time("last_seen_at").Default(time.Now).UpdateDefault(time.Now),
 	}

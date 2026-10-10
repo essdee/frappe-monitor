@@ -14,28 +14,33 @@ func TestParseLine(t *testing.T) {
 	}{
 		{
 			name: "version header",
-			in:   "##V=8.0.0",
-			want: Event{Type: EventVersion, Version: "8.0.0"},
+			in:   "##V=9.0.0",
+			want: Event{Type: EventVersion, Version: "9.0.0"},
 		},
 		{
 			name: "version with trailing whitespace",
-			in:   "##V=8.0.0 ",
-			want: Event{Type: EventVersion, Version: "8.0.0"},
+			in:   "##V=9.0.0 ",
+			want: Event{Type: EventVersion, Version: "9.0.0"},
+		},
+		{
+			name: "offset origin",
+			in:   "##O=web|2049-1234|418",
+			want: Event{Type: EventOffset, FileID: "web", FileIdentity: "2049-1234", Offset: 418},
 		},
 		{
 			name: "simple file line",
-			in:   "##F=web|GET /api/method/foo",
-			want: Event{Type: EventLine, FileID: "web", Content: "GET /api/method/foo"},
+			in:   "##F=web|2049-1234|438|GET /api/method/foo",
+			want: Event{Type: EventLine, FileID: "web", FileIdentity: "2049-1234", Offset: 438, Content: "GET /api/method/foo"},
 		},
 		{
 			name: "content containing the protocol pipe",
-			in:   "##F=web|line with a | pipe in it",
-			want: Event{Type: EventLine, FileID: "web", Content: "line with a | pipe in it"},
+			in:   "##F=web|2049-1234|444|line with a | pipe in it",
+			want: Event{Type: EventLine, FileID: "web", FileIdentity: "2049-1234", Offset: 444, Content: "line with a | pipe in it"},
 		},
 		{
 			name: "empty content",
-			in:   "##F=web|",
-			want: Event{Type: EventLine, FileID: "web", Content: ""},
+			in:   "##F=web|2049-1234|445|",
+			want: Event{Type: EventLine, FileID: "web", FileIdentity: "2049-1234", Offset: 445, Content: ""},
 		},
 		{
 			name: "file error MISSING",
@@ -63,8 +68,13 @@ func TestParseLine(t *testing.T) {
 			want: Event{Type: EventUnknown},
 		},
 		{
-			name: "##F= with no separator is unknown",
-			in:   "##F=web",
+			name: "legacy line without position is unknown",
+			in:   "##F=web|old content",
+			want: Event{Type: EventUnknown},
+		},
+		{
+			name: "negative offset is unknown",
+			in:   "##O=web|2049-1234|-1",
 			want: Event{Type: EventUnknown},
 		},
 		{
@@ -80,15 +90,4 @@ func TestParseLine(t *testing.T) {
 			require.Equal(t, c.want, got)
 		})
 	}
-}
-
-func TestEvent_SourceByteLen(t *testing.T) {
-	require.Equal(t, 4, Event{Type: EventLine, Content: "abc"}.SourceByteLen(),
-		"3 bytes content + 1 byte LF")
-	require.Equal(t, 1, Event{Type: EventLine, Content: ""}.SourceByteLen(),
-		"empty content still represents one LF byte in the source")
-	require.Equal(t, 0, Event{Type: EventVersion}.SourceByteLen(),
-		"version events don't consume source bytes")
-	require.Equal(t, 0, Event{Type: EventFileError, FileID: "web"}.SourceByteLen(),
-		"file errors don't consume source bytes")
 }

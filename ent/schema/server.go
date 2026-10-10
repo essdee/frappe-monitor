@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"entgo.io/ent"
+	"entgo.io/ent/dialect/entsql"
 	"entgo.io/ent/schema/edge"
 	"entgo.io/ent/schema/field"
 )
@@ -14,7 +15,9 @@ type Server struct {
 
 func (Server) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("name").NotEmpty(),
+		// Name is the canonical server label in VM, Loki, and alert
+		// fingerprints. Duplicates would merge unrelated hosts' telemetry.
+		field.String("name").NotEmpty().Unique(),
 		field.String("hostname").NotEmpty().Unique(),
 		field.String("ssh_user").Default("monitor"),
 		field.Int("ssh_port").Default(22).Positive(),
@@ -41,9 +44,12 @@ func (Server) Edges() []ent.Edge {
 	return []ent.Edge{
 		// One server -> many log cursors. The reverse end lives on
 		// LogCursor (Required + Unique → cascading delete falls out).
-		edge.To("log_cursors", LogCursor.Type),
+		edge.To("log_cursors", LogCursor.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 		// One server -> one system snapshot (Unique). Cascading
 		// delete from server.
-		edge.To("system_snapshot", SystemSnapshot.Type).Unique(),
+		edge.To("system_snapshot", SystemSnapshot.Type).
+			Unique().
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }

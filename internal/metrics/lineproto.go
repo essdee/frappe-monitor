@@ -3,7 +3,21 @@ package metrics
 import (
 	"strconv"
 	"strings"
+	"time"
 )
+
+// ReachabilityLineProtocol reports the outcome of the monitor's latest
+// collection attempt. Unlike inferring reachability from an absent load
+// sample, this produces an explicit zero when SSH or parsing fails, so alert
+// evaluation remains correct for any collection interval.
+func ReachabilityLineProtocol(serverLabel string, reachable bool, at time.Time) string {
+	value := "0"
+	if reachable {
+		value = "1"
+	}
+	return "frappe_server_reachable,server=" + escapeTag(serverLabel) +
+		" value=" + value + " " + strconv.FormatInt(at.UnixNano(), 10) + "\n"
+}
 
 // LineProtocol formats a ServerMetrics value as influx-line-protocol text
 // suitable for POSTing to VictoriaMetrics' /write endpoint. The output is
@@ -103,8 +117,25 @@ func (m BenchMetrics) LineProtocol(serverLabel string) string {
 	}
 
 	emit("apps_count", "", strconv.FormatInt(m.AppsCount, 10))
+	emit("web_workers_configured", "", strconv.FormatInt(m.WebWorkersConfigured, 10))
+	emit("background_workers_configured", "", strconv.FormatInt(m.BackgroundWorkersConfigured, 10))
 	emit("supervisor_running", "", strconv.FormatInt(m.SupervisorRun, 10))
 	emit("supervisor_total", "", strconv.FormatInt(m.SupervisorTotal, 10))
+	emit("workers_registered", "", strconv.FormatInt(m.WorkersRegistered, 10))
+	emit("workers_busy", "", strconv.FormatInt(m.WorkersBusy, 10))
+	emit("workers_idle", "", strconv.FormatInt(m.WorkersIdle, 10))
+	var runningWebWorkers int64
+	for _, service := range m.Services {
+		if service.State == 1 && service.Kind == "web-worker" {
+			runningWebWorkers++
+		}
+	}
+	emit("web_workers_running", "", strconv.FormatInt(runningWebWorkers, 10))
+	// Snapshot timestamps make dynamically disappearing service series
+	// distinguishable from VictoriaMetrics' normal instant-query lookback.
+	// Without these values a stopped/restarted worker can remain visible until
+	// the lookback window expires even though the newest collection omitted it.
+	emit("snapshot_timestamp_seconds", "", strconv.FormatInt(m.Timestamp.Unix(), 10))
 
 	// info-style metric so PromQL can join on frappe_version.
 	if m.FrappeVersion != "" {
@@ -114,6 +145,16 @@ func (m BenchMetrics) LineProtocol(serverLabel string) string {
 	for _, q := range m.RedisQueues {
 		emit("redis_queue_depth", "queue="+escapeTag(q.Name),
 			strconv.FormatInt(q.Depth, 10))
+	}
+	for _, service := range m.Services {
+		serviceTags := "service=" + escapeTag(service.Name) + ",kind=" + escapeTag(service.Kind) + ",queue=" + escapeTag(service.Queue)
+		emit("service_observed_at_seconds", serviceTags, strconv.FormatInt(m.Timestamp.Unix(), 10))
+		emit("service_state", serviceTags, strconv.FormatInt(service.State, 10))
+		emit("service_pid", serviceTags, strconv.FormatInt(service.PID, 10))
+		emit("service_cpu_percent", serviceTags, strconv.FormatFloat(service.CPUPercent, 'f', -1, 64))
+		emit("service_memory_percent", serviceTags, strconv.FormatFloat(service.MemoryPercent, 'f', -1, 64))
+		emit("service_rss_bytes", serviceTags, strconv.FormatInt(service.RSSBytes, 10))
+		emit("service_uptime_seconds", serviceTags, strconv.FormatInt(service.UptimeSeconds, 10))
 	}
 
 	return b.String()
@@ -144,7 +185,55 @@ func (m SiteMetrics) LineProtocol(serverLabel string) string {
 	emit("http_status_code", strconv.FormatInt(m.HTTPStatusCode, 10))
 	emit("http_response_ms", strconv.FormatFloat(m.HTTPResponseMs, 'f', -1, 64))
 	emit("is_healthy", strconv.FormatInt(m.IsHealthy, 10))
+	emit("failure_reason_code", strconv.FormatInt(m.FailureReasonCode, 10))
+	emit("native_monitor_enabled", strconv.FormatInt(m.NativeMonitorEnabled, 10))
+	emitIdentity := func(kind, hash string) {
+		if hash == "" {
+			return
+		}
+		b.WriteString("frappe_site_database_identity,")
+		b.WriteString(tags)
+		b.WriteString(",identity_hash=")
+		b.WriteString(escapeTag(hash))
+		b.WriteString(",identity_kind=")
+		b.WriteString(kind)
+		b.WriteString(" value=1 ")
+		b.WriteString(strconv.FormatInt(tsNs, 10))
+		b.WriteByte('\n')
+	}
+	emitIdentity("database", m.DatabaseHash)
+	emitIdentity("user", m.DatabaseUserHash)
 
+	return b.String()
+}
+
+// LineProtocol formats the monitor-side public probe with a distinct
+// frappe_site_public_* prefix. All values share one timestamp so a query can
+// reason about the result as an atomic observation.
+func (m PublicSiteMetrics) LineProtocol() string {
+	tsNs := m.Timestamp.UnixNano()
+	tags := "server=" + escapeTag(m.Server) +
+		",bench=" + escapeTag(m.Bench) +
+		",site=" + escapeTag(m.Site)
+
+	var b strings.Builder
+	emit := func(name, value string) {
+		b.WriteString("frappe_site_public_")
+		b.WriteString(name)
+		b.WriteByte(',')
+		b.WriteString(tags)
+		b.WriteString(" value=")
+		b.WriteString(value)
+		b.WriteByte(' ')
+		b.WriteString(strconv.FormatInt(tsNs, 10))
+		b.WriteByte('\n')
+	}
+	emit("http_status_code", strconv.FormatInt(m.HTTPStatusCode, 10))
+	emit("http_response_ms", strconv.FormatFloat(m.HTTPResponseMs, 'f', -1, 64))
+	emit("is_healthy", strconv.FormatInt(m.IsHealthy, 10))
+	emit("failure_reason_code", strconv.FormatInt(m.FailureReasonCode, 10))
+	emit("tls_cert_expiry_timestamp_seconds", strconv.FormatInt(m.TLSCertExpiryTimestamp, 10))
+	emit("observed_at_seconds", strconv.FormatInt(m.Timestamp.Unix(), 10))
 	return b.String()
 }
 

@@ -136,7 +136,7 @@ Examples of what belongs there: tighter Caddy auth defaults, jitter in scheduler
 make vm-up
 
 # Iterate on Go-only changes (no npm rebuild needed).
-make build-no-web && ./bin/monitor-server --config ./config/monitor.yaml
+make build-no-web && ./bin/monitor-server --config ./deploy/config/monitor.yaml.example
 
 # Iterate on the SPA (live-reload via Vite dev server).
 cd web && npm run dev      # http://localhost:5173 — proxies API to :8080
@@ -155,4 +155,4 @@ For SPA work, the Vite dev server (`:5173`) hot-reloads on save and proxies `/ap
 4. Build: `make build`. The resulting `bin/monitor-server` is the artifact.
 5. On each target host: `git pull && sudo ./deploy/install.sh`.
 
-Phase 7 will add a proper release pipeline (signed binaries, changelog generation). Until then, this is enough.
+A repository CI/release pipeline (including signed artifacts and changelog generation) remains in the hardening backlog. Until then, this is the manual release path.

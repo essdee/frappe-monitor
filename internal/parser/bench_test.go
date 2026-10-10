@@ -141,3 +141,31 @@ func TestSiteFromSections_FloatResponseMs(t *testing.T) {
 	require.InDelta(t, 12.345, m.HTTPResponseMs, 0.001)
 	require.Equal(t, int64(1), m.IsHealthy)
 }
+
+func TestSiteFromSections_NativeMonitorReadiness(t *testing.T) {
+	input := "###META\nversion=2.0.0\nhostname=h\ntimestamp=1\n" +
+		"###SITE:b1:s1.example.com\n" +
+		"http_status_code=200\nhttp_response_ms=12\nis_healthy=1\nfailure_reason_code=0\n" +
+		"native_monitor_enabled=1\n" +
+		"database_hash=0123456789ABCDEF01234567\n" +
+		"database_user_hash=89abcdef0123456789abcdef\n###END\n"
+	out, err := Tokenize(input)
+	require.NoError(t, err)
+	m, err := SiteFromSections(out, "b1", "s1.example.com")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), m.NativeMonitorEnabled)
+	require.Equal(t, "0123456789abcdef01234567", m.DatabaseHash)
+	require.Equal(t, "89abcdef0123456789abcdef", m.DatabaseUserHash)
+
+	bad := strings.Replace(input, "native_monitor_enabled=1", "native_monitor_enabled=2", 1)
+	out, err = Tokenize(bad)
+	require.NoError(t, err)
+	_, err = SiteFromSections(out, "b1", "s1.example.com")
+	require.ErrorContains(t, err, "must be 0 or 1")
+
+	bad = strings.Replace(input, "0123456789ABCDEF01234567", "not-a-safe-hash", 1)
+	out, err = Tokenize(bad)
+	require.NoError(t, err)
+	_, err = SiteFromSections(out, "b1", "s1.example.com")
+	require.ErrorContains(t, err, "must be a 24-character hex identity")
+}

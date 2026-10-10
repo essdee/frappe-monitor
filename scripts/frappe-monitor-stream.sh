@@ -1,217 +1,266 @@
 #!/usr/bin/env bash
 # frappe-monitor-stream.sh
 #
-# Long-lived companion to frappe-monitor-collect.sh. Where the
-# collector emits a single snapshot per SSH invocation, the streamer
-# follows N log files indefinitely and emits each new line over
-# stdout, prefixed with the file id so the monitor can route it.
+# Agentless, resumable multi-file log follower. The monitor supplies this
+# embedded wrapper through SSH stdin; it is never installed on the target.
+# One Python process polls every selected file, avoiding the old one-shell plus
+# one-tail-per-file design that became expensive on benches with many site logs.
+# Python's standard library is sufficient; no package or target change occurs.
 #
-# This script is the bench-side half of Phase 8 (per-event capture).
-# Design rationale lives in docs/2026-05-07/2.md — read that first.
-#
-# Hard rules on this script:
-#   - bash + coreutils only. No python, no awk-pipelines that aren't
-#     line-buffered. Anything that buffers will hide events for minutes.
-#   - reads files Frappe / MariaDB ALREADY write. We don't enable any
-#     new logging from here. The operator chooses what to tail via
-#     --files; this script just reads.
-#   - polite under load. renice +10, ionice idle so we never preempt
-#     the bench's actual workload.
-#
-# Wire protocol (stdout, line-oriented, UTF-8):
-#
-#   First line:           ##V=<semver>
-#   Subsequent lines:     ##F=<file_id>|<raw line content>
-#   Read errors:          ##F=<file_id> ##E=<error_token>
-#
-# The monitor parses by splitting on the first '|'. File ids are
-# short alphanumeric tokens (e.g. web, err, slowq). Raw line content
-# may itself contain '|' — only the FIRST pipe is the protocol delimiter.
-#
-# Usage:
-#   frappe-monitor-stream.sh \
-#       --files=web:/home/frappe/frappe-bench/logs/web.log,err:/home/frappe/frappe-bench/logs/web.error.log \
-#       --resume=web:12345,err:0
-#
-# --resume is optional; missing entries default to "tail from end".
-# Pass 0 to start from byte 0.
+# Wire protocol:
+#   ##V=<semver>
+#   ##O=<file_id>|<device-inode>|<start_offset>
+#   ##F=<file_id>|<device-inode>|<exclusive_end_offset>|<line>
+#   ##F=<file_id> ##E=<error_token>
 
-set -uo pipefail
+set -euo pipefail
 
-VERSION="8.0.0"
+VERSION="9.2.0"
 
-# Self-renice + ionice. Same pattern as the collector — we never
-# outrank the bench's own workloads. Failures here are silently
-# swallowed; politeness is best-effort, not load-bearing.
-renice +10 -p $$ >/dev/null 2>&1 || true
-command -v ionice >/dev/null 2>&1 && ionice -c 2 -n 7 -p $$ >/dev/null 2>&1 || true
-
-# ---------------------------------------------------------------------------
-# Argument parsing.
-# ---------------------------------------------------------------------------
-
-FILES_ARG=""
-RESUME_ARG=""
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --files=*)  FILES_ARG="${1#--files=}"  ;;
-    --resume=*) RESUME_ARG="${1#--resume=}" ;;
-    --version)
-      printf '%s\n' "$VERSION"
-      exit 0
-      ;;
-    -h|--help)
-      sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
-      exit 0
-      ;;
-    *)
-      printf 'frappe-monitor-stream: unknown arg: %s\n' "$1" >&2
-      exit 2
-      ;;
+PYTHON_BIN=$(command -v python3 || true)
+if [ -z "$PYTHON_BIN" ]; then
+  # A Frappe bench always has a Python environment, even on minimal targets
+  # where python3 is not globally visible. Derive its root from the first log.
+  files_arg=""
+  for arg in "$@"; do
+    case "$arg" in --files=*) files_arg=${arg#--files=} ;; esac
+  done
+  first_pair=${files_arg%%,*}
+  first_path=${first_pair#*:}
+  bench_root=""
+  case "$first_path" in
+    */sites/*/logs/*) bench_root=${first_path%%/sites/*} ;;
+    */logs/*) bench_root=${first_path%%/logs/*} ;;
   esac
-  shift
-done
-
-if [[ -z "$FILES_ARG" ]]; then
-  printf 'frappe-monitor-stream: --files is required (e.g. --files=web:/path/web.log,err:/path/err.log)\n' >&2
-  exit 2
+  if [ -n "$bench_root" ] && [ -x "$bench_root/env/bin/python" ]; then
+    PYTHON_BIN="$bench_root/env/bin/python"
+  fi
+fi
+if [ -z "$PYTHON_BIN" ]; then
+  printf 'frappe-monitor-stream: python3 or a bench env/bin/python is required\n' >&2
+  exit 127
 fi
 
-# Parse --files into parallel arrays IDS[] and PATHS[].
-declare -a IDS=()
-declare -a PATHS=()
-IFS=',' read -ra _PAIRS <<< "$FILES_ARG"
-for pair in "${_PAIRS[@]}"; do
-  if [[ "$pair" != *:* ]]; then
-    printf 'frappe-monitor-stream: bad --files entry %q (want id:path)\n' "$pair" >&2
-    exit 2
-  fi
-  fid="${pair%%:*}"
-  fpath="${pair#*:}"
-  if [[ ! "$fid" =~ ^[a-zA-Z0-9_]+$ ]]; then
-    printf 'frappe-monitor-stream: file id %q must be alphanumeric/underscore\n' "$fid" >&2
-    exit 2
-  fi
-  IDS+=("$fid")
-  PATHS+=("$fpath")
-done
+# Keep the single follower below application workloads under contention.
+renice +10 -p $$ >/dev/null 2>&1 || true
+command -v ionice >/dev/null 2>&1 && ionice -c 3 -p $$ >/dev/null 2>&1 || true
 
-# Build an associative resume map from --resume=id:offset,id:offset.
-declare -A RESUME=()
-if [[ -n "$RESUME_ARG" ]]; then
-  IFS=',' read -ra _RPAIRS <<< "$RESUME_ARG"
-  for pair in "${_RPAIRS[@]}"; do
-    if [[ "$pair" != *:* ]]; then
-      printf 'frappe-monitor-stream: bad --resume entry %q (want id:offset)\n' "$pair" >&2
-      exit 2
-    fi
-    fid="${pair%%:*}"
-    off="${pair#*:}"
-    if ! [[ "$off" =~ ^[0-9]+$ ]]; then
-      printf 'frappe-monitor-stream: --resume offset %q for %q must be a non-negative integer\n' "$off" "$fid" >&2
-      exit 2
-    fi
-    RESUME[$fid]="$off"
-  done
-fi
+exec "$PYTHON_BIN" -u - "$@" <<'PY'
+import os
+import re
+import sys
+import time
 
-# ---------------------------------------------------------------------------
-# Header. The monitor reads this before launching its parser so it can
-# detect a stale streamer (version mismatch → redeploy).
-# ---------------------------------------------------------------------------
+VERSION = "9.2.0"
+POLL_SECONDS = 0.25
+READ_SIZE = 65536
+MAX_PENDING = 65536
 
-printf '##V=%s\n' "$VERSION"
 
-# ---------------------------------------------------------------------------
-# Trap shutdown — clean up child tail processes so the bench doesn't
-# leak followers when the SSH session goes away.
-# ---------------------------------------------------------------------------
+def fail(message):
+    print("frappe-monitor-stream: " + message, file=sys.stderr, flush=True)
+    raise SystemExit(2)
 
-declare -a CHILDREN=()
-cleanup() {
-  for pid in "${CHILDREN[@]}"; do
-    kill -TERM "$pid" 2>/dev/null || true
-  done
-  # Brief grace period, then SIGKILL anything still hanging on.
-  sleep 0.5 || true
-  for pid in "${CHILDREN[@]}"; do
-    kill -KILL "$pid" 2>/dev/null || true
-  done
-}
-trap cleanup EXIT TERM INT
 
-# ---------------------------------------------------------------------------
-# Per-file streamer. Spawned once per --files entry, runs until the
-# process is signaled. Emits ##F=<id>|<line> for every new line in the
-# tailed file. On resume, starts at byte offset RESUME[id] (default
-# tail-from-end via -n 0).
-#
-# We use 'tail -F' (capital) which follows by name, so logrotate
-# moving the file aside and creating a fresh one is followed without
-# losing the new file. Resume from byte offset uses 'tail -c +N' which
-# means "start from byte N+1". Note: passing -c +1 means "the whole
-# file" (byte 1 onwards), which is what we want when RESUME is unset
-# AND a caller explicitly asks for full replay (offset=0 → -c +1).
-# ---------------------------------------------------------------------------
+files_arg = ""
+resume_arg = ""
+for arg in sys.argv[1:]:
+    if arg.startswith("--files="):
+        files_arg = arg[len("--files="):]
+    elif arg.startswith("--resume="):
+        resume_arg = arg[len("--resume="):]
+    elif arg == "--version":
+        print(VERSION)
+        raise SystemExit(0)
+    elif arg in ("-h", "--help"):
+        print("usage: frappe-monitor-stream.sh --files=id:/absolute/path[,id:path] [--resume=id:device-inode:offset]")
+        raise SystemExit(0)
+    else:
+        fail("unknown arg: " + arg)
 
-stream_one() {
-  local fid="$1"
-  local fpath="$2"
-  local offset="${RESUME[$fid]:-}"
+if not files_arg:
+    fail("--files is required (want id:path)")
 
-  # File missing at startup? Emit an error sentinel and exit; the
-  # monitor will see ##F=fid ##E=MISSING and decide whether to retry
-  # later. Don't crash the whole streamer — other files may be fine.
-  if [[ ! -e "$fpath" ]]; then
-    printf '##F=%s ##E=MISSING\n' "$fid"
-    return 0
-  fi
-  if [[ ! -r "$fpath" ]]; then
-    printf '##F=%s ##E=PERMISSION\n' "$fid"
-    return 0
-  fi
+files = []
+for pair in files_arg.split(","):
+    if ":" not in pair:
+        fail("bad --files entry %r (want id:path)" % pair)
+    file_id, path = pair.split(":", 1)
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", file_id):
+        fail("file id %r must be alphanumeric, underscore, or hyphen" % file_id)
+    if not path:
+        fail("path for %r is empty" % file_id)
+    files.append((file_id, path))
 
-  local tail_args
-  if [[ -n "$offset" ]]; then
-    # +1-based byte offset: byte position 0 in the file is "before any
-    # data", so -c +$((offset+1)) is "starting at byte index `offset`"
-    # in 0-based terms. The monitor stores 0-based offsets in
-    # log_cursors, so we add 1 here.
-    tail_args=(-c "+$((offset + 1))" -F "$fpath")
-  else
-    # No resume: start from end-of-file ("only new lines from now").
-    # The monitor will record the starting offset on first read.
-    tail_args=(-n 0 -F "$fpath")
-  fi
+resume = {}
+if resume_arg:
+    for pair in resume_arg.split(","):
+        parts = pair.split(":", 2)
+        if len(parts) != 3:
+            fail("bad --resume entry %r (want id:identity:offset)" % pair)
+        file_id, identity, raw_offset = parts
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", identity):
+            fail("--resume identity %r for %r is invalid" % (identity, file_id))
+        if not raw_offset.isdigit():
+            fail("--resume offset %r for %r must be a non-negative integer" % (raw_offset, file_id))
+        resume[file_id] = (identity, int(raw_offset))
 
-  # Per-line prefix in a small bash filter. read -r preserves
-  # backslashes; IFS= preserves leading/trailing whitespace. The line
-  # content is opaque from this script's point of view — we never
-  # parse it.
-  tail "${tail_args[@]}" 2>/dev/null | while IFS= read -r line; do
-    # printf with a single format string is one write(2) call. POSIX
-    # guarantees writes <= PIPE_BUF (4096 on Linux) are atomic across
-    # concurrent writers, so concurrent stream_one's interleave at the
-    # line boundary, not within a line. Lines longer than PIPE_BUF can
-    # theoretically tear; in practice Frappe log lines are well under.
-    printf '##F=%s|%s\n' "$fid" "$line"
-  done
 
-  # If we got here, tail exited (file unreadable, killed, etc.).
-  # Surface the cause so the monitor can act.
-  printf '##F=%s ##E=TAIL_EXITED\n' "$fid"
-}
+def identity_for(stat_result):
+    return "%d-%d" % (stat_result.st_dev, stat_result.st_ino)
 
-# ---------------------------------------------------------------------------
-# Fan out: one streamer per file, run concurrently, all writing to our
-# stdout. We `wait` so the parent stays alive until SIGTERM/EOF; the
-# trap then cleans up children.
-# ---------------------------------------------------------------------------
 
-for i in "${!IDS[@]}"; do
-  stream_one "${IDS[$i]}" "${PATHS[$i]}" &
-  CHILDREN+=("$!")
-done
+class FileFollower:
+    def __init__(self, file_id, path):
+        self.file_id = file_id
+        self.path = path
+        self.fd = None
+        self.identity = ""
+        self.read_offset = 0
+        self.pending = b""
+        self.pending_start = 0
+        self.initialized = False
+        self.last_error = ""
 
-wait
+    def emit_error(self, token):
+        if self.last_error != token:
+            print("##F=%s ##E=%s" % (self.file_id, token), flush=True)
+            self.last_error = token
+
+    def close(self):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+        self.fd = None
+
+    def flush_partial(self):
+        if not self.pending or not self.identity:
+            self.pending = b""
+            return
+        end = self.pending_start + len(self.pending)
+        content = self.pending.rstrip(b"\r").decode("utf-8", "replace")
+        print("##F=%s|%s|%d|%s" % (self.file_id, self.identity, end, content), flush=True)
+        self.pending = b""
+        self.pending_start = end
+
+    def open_current(self, start_at_zero=False):
+        try:
+            stat_result = os.stat(self.path)
+            fd = os.open(self.path, os.O_RDONLY)
+        except FileNotFoundError:
+            self.emit_error("MISSING")
+            return False
+        except PermissionError:
+            self.emit_error("PERMISSION")
+            return False
+        except OSError:
+            self.emit_error("OPEN")
+            return False
+
+        identity = identity_for(stat_result)
+        if start_at_zero:
+            offset = 0
+        elif not self.initialized:
+            previous = resume.get(self.file_id)
+            offset = min(previous[1], stat_result.st_size) if previous and previous[0] == identity else stat_result.st_size
+        else:
+            offset = 0
+
+        self.close()
+        self.fd = fd
+        self.identity = identity
+        self.read_offset = offset
+        self.pending = b""
+        self.pending_start = offset
+        self.initialized = True
+        self.last_error = ""
+        os.lseek(fd, offset, os.SEEK_SET)
+        print("##O=%s|%s|%d" % (self.file_id, identity, offset), flush=True)
+        return True
+
+    def emit_complete_lines(self):
+        while True:
+            newline = self.pending.find(b"\n")
+            if newline < 0:
+                break
+            raw = self.pending[:newline]
+            consumed = newline + 1
+            end = self.pending_start + consumed
+            content = raw.rstrip(b"\r").decode("utf-8", "replace")
+            print("##F=%s|%s|%d|%s" % (self.file_id, self.identity, end, content), flush=True)
+            self.pending = self.pending[consumed:]
+            self.pending_start = end
+        # Bound a pathological unterminated line without dropping its bytes.
+        if len(self.pending) > MAX_PENDING:
+            raw = self.pending[:MAX_PENDING]
+            end = self.pending_start + len(raw)
+            print("##F=%s|%s|%d|%s" % (
+                self.file_id, self.identity, end, raw.decode("utf-8", "replace")
+            ), flush=True)
+            self.pending = self.pending[MAX_PENDING:]
+            self.pending_start = end
+
+    def poll(self):
+        try:
+            stat_result = os.stat(self.path)
+        except FileNotFoundError:
+            self.close()
+            self.emit_error("MISSING")
+            return
+        except PermissionError:
+            self.close()
+            self.emit_error("PERMISSION")
+            return
+        except OSError:
+            self.close()
+            self.emit_error("STAT")
+            return
+
+        current_identity = identity_for(stat_result)
+        if self.fd is None:
+            if not self.open_current():
+                return
+        elif current_identity != self.identity:
+            self.flush_partial()
+            if not self.open_current(start_at_zero=True):
+                return
+        elif stat_result.st_size < self.read_offset:
+            self.flush_partial()
+            if not self.open_current(start_at_zero=True):
+                return
+
+        while True:
+            try:
+                chunk = os.read(self.fd, READ_SIZE)
+            except PermissionError:
+                self.close()
+                self.emit_error("PERMISSION")
+                return
+            except OSError:
+                self.close()
+                self.emit_error("READ")
+                return
+            if not chunk:
+                break
+            if not self.pending:
+                self.pending_start = self.read_offset
+            self.read_offset += len(chunk)
+            self.pending += chunk
+            self.emit_complete_lines()
+
+
+followers = [FileFollower(file_id, path) for file_id, path in files]
+print("##V=" + VERSION, flush=True)
+try:
+    while True:
+        for follower in followers:
+            follower.poll()
+        time.sleep(POLL_SECONDS)
+except (KeyboardInterrupt, SystemExit):
+    pass
+finally:
+    for follower in followers:
+        follower.close()
+PY

@@ -13,7 +13,7 @@ These docs are **evergreen** — kept current with the code. Dated decisions and
 | Deploy on a fresh server, end-to-end | [`deployment.md`](deployment.md) |
 | Add a bench server and use the dashboard | [`usage.md`](usage.md) |
 | Start, stop, upgrade, see logs, take backups | [`operations.md`](operations.md) |
-| Tune the YAML config, env-var overrides | [`configuration.md`](configuration.md) |
+| Tune YAML-only runtime settings | [`configuration.md`](configuration.md) |
 | Hit the HTTP API directly | [`api.md`](api.md) |
 | Understand what runs where + why | [`architecture.md`](architecture.md) |
 | Diagnose something broken | [`troubleshooting.md`](troubleshooting.md) |
@@ -25,14 +25,16 @@ These docs are **evergreen** — kept current with the code. Dated decisions and
 |---|---|---|
 | 1 | HTTP foundation: server CRUD + SSH probe | done |
 | 2 | Per-server pull → metrics in VictoriaMetrics | done |
-| 3 | Bench + site collectors → metrics + logs (Loki) | done |
+| 3 | Bench + site collector → VictoriaMetrics | done |
 | 4 | Dashboard foundation: SPA, query proxies, timeline filter | done |
-| 5 | Dashboard full coverage: benches, sites, log feeds | done |
-| 6 | Telegram alerting (rules engine + state + fan-out) | done |
-| 7 v1 | HTTP basic auth, in-dashboard add/edit/delete | done |
-| 7 v2 | Deploy markers, multi-tenant scoping, search UI | post-v1 backlog |
+| 5 | Monitoring UI: fleet, servers, benches, sites, services, workers | done |
+| 6 | Telegram alerting + durable incident history | done |
+| 7 v1 | Cookie login + API basic auth | done |
+| 8 | Agentless auto-discovered log streaming + global Log Explorer | done |
+| 9 | Read-only SSH boundary; remove remote operation surface | done |
+| v2 | Multi-tenant scoping | backlog |
 
-The single-tenant production-shippable v1 is complete. v2 items (multi-tenant access, deploy timeline annotations) are tracked in `docs/hardening-backlog.md`.
+The single-tenant monitoring product is complete. Multi-tenant access and deeper optional request instrumentation are tracked in `docs/hardening-backlog.md`.
 
 ## Convention
 

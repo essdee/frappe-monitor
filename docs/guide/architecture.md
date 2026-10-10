@@ -1,146 +1,155 @@
 # Architecture
 
-What runs where, why, and how data flows.
+Frappe Monitor is a single control-plane process for many SSH-reachable Frappe servers. It keeps only registry and reconciliation state in SQLite; VictoriaMetrics and Loki remain the data stores.
 
 ## Components
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  monitor host                                                    │
-│                                                                  │
-│   ┌────────────────────────┐                                     │
-│   │ frappe-monitor binary  │                                     │
-│   │  (single Go process)   │                                     │
-│   │                        │                                     │
-│   │  • chi HTTP router     │      ┌────────────────────────┐     │
-│   │  • SPA (embed_dist)    │◀─────│ browser (Vue 3 + Vite) │     │
-│   │  • SQLite (ent ORM)    │      └────────────────────────┘     │
-│   │  • SSH pool            │                                     │
-│   │  • cron scheduler      │                                     │
-│   │  • collector pipeline  │                                     │
-│   └─────┬──────────────┬───┘                                     │
-│         │ pushes       │ reads                                   │
-│         ▼              ▼                                         │
-│   ┌────────────┐  ┌────────────┐                                 │
-│   │ VictoriaM. │  │   Loki     │                                 │
-│   │   :8428    │  │   :3100    │                                 │
-│   │  metrics   │  │   logs     │                                 │
-│   └────────────┘  └────────────┘                                 │
-│                                                                  │
-└─────────┬────────────────────────────────────────────────────────┘
-          │ outbound SSH (per-server cron tick, default 15m)
-          ▼
-   ┌──────────────────────────┐
-   │ frappe bench server      │
-   │  ~/.frappe-monitor/      │
-   │     collect.sh           │ ← shipped via deploy-collector endpoint
-   │  /home/frappe/...        │
-   └──────────────────────────┘
-```
-
-### `frappe-monitor` binary
-
-Single static Go binary. Includes:
-
-- **Embedded SPA** — `web/dist/` baked in via `//go:embed` (with the `embed_dist` build tag), served on every non-API, non-`/healthz` path. Build-tag fallback (`embed_placeholder.go`) lets `go build` work without npm.
-- **chi router** — HTTP handlers under `/api/v1/`, plus `/healthz` and the SPA fallback. Middleware: recoverer (outermost) → request logger → optional HTTP basic auth (when `auth.password` is set).
-- **Storage** — SQLite via [ent](https://entgo.io/) (pure-Go driver `modernc.org/sqlite`, so CGO stays disabled). Stores: `Server` (registry), `LogCursor` (per-file tail offsets), `AlertState` (per-(rule, fingerprint) firing/resolved status).
-- **SSH pool** — per-host connection pool with typed errors (`ErrAuth`, `ErrDial`, `ErrTimeout`). Underpins the test-connection diagnostic and every scheduled pull.
-- **Scheduler** — `robfig/cron/v3` ticking at `scheduler.default_interval_seconds`. A semaphore caps concurrency at `scheduler.max_parallel`. Each tick fans out one job per registered server.
-- **Collector pipeline** — for one server: `ssh exec collect.sh → parse output → push metrics to VM → tail logs → push to Loki → upsert cursor`. Failures are typed: SSH/parse failures mark the server unreachable; VM/Loki push failures don't (the bench is fine; the metrics tier is the failure domain).
-- **Alerts service** (Phase 6) — independent goroutine ticking at `alerts.evaluation_interval_seconds`. For each rule, queries VM for the firing series, reconciles against last-cycle state in SQLite, fans out new fires + resolutions to Telegram. Send-only, no acks.
-
-### VictoriaMetrics
-
-Time-series store. Receives Influx-line-protocol pushes from the monitor on `/write`. The dashboard's `/api/v1/metrics/query` proxies PromQL to `/api/v1/query_range`. Image pinned in `deploy/docker-compose.prod.yml` (`v1.142.0`); the load-bearing `-influxSkipSingleField` flag keeps metric names matching the master plan's naming convention.
-
-### Loki
-
-Log store. Receives JSON pushes on `/loki/api/v1/push`. The dashboard's `/api/v1/logs/query` proxies LogQL to `/loki/api/v1/query_range`. Image pinned (`grafana/loki:3.4.1`). Loki uses its bundled example config — sufficient for our scale; tune via a custom config file if you outgrow it.
-
-### Vue 3 SPA
-
-Built with Vite + TypeScript + vue-router + ECharts. Lives in `web/`. Built into `internal/web/dist/` (gitignored), then embedded into the Go binary at compile time. Pages: Servers, Server detail, Benches, Bench detail, Sites, Site detail. URL-synced timeline filter (`?from=&to=&step=&refresh=`) drives every chart.
-
-### Bench-side collector
-
-`scripts/frappe-monitor-collect.sh` — a self-contained bash script embedded in the binary at build time. The `deploy-collector` endpoint pipes it over SSH to the target's `~/.frappe-monitor/collect.sh`. Outputs structured `key=val` lines under `###META`, `###SERVER`, `###BENCH`, `###SITE` sections plus `###END`.
-
-The collector reads `/proc`, `/sys`, `bench` CLI output, Redis `LLEN`, and HTTP probes against site URLs. No external dependencies beyond bash + standard coreutils.
-
-## Data flow per pull cycle
-
-```
-        ┌─────────────────────────────────────────────────────┐
-        │ scheduler tick (every default_interval_seconds)     │
-        └────────────────────────┬────────────────────────────┘
-                                 │ for each registered server
-                                 ▼
-               ┌──────────────────────────────────────┐
-               │ pull job (capped by sem max_parallel) │
-               └────┬─────────────────────────────────┘
+```text
+browser ──HTTP──▶ frappe-monitor (Go + embedded Vue SPA)
                     │
-                    ▼
-            ssh exec ~/.frappe-monitor/collect.sh
-                    │ stdout
-                    ▼
-            parser tokenizes ###SERVER / ###BENCH / ###SITE
-                    │ ServerMetrics / BenchMetrics / SiteMetrics
-                    ▼
-       ┌────────────┴────────────┐
-       │                         │
-       ▼ Influx-line proto       ▼ Loki JSON push
-   POST /write to VM         POST /loki/api/v1/push
-       │                         │
-       ▼                         ▼
-   200 OK                    200 OK + cursor offset
-       │                         │
-       └────────────┬────────────┘
-                    ▼
-        Storage.UpdateServerStatus("reachable")
-        Storage.UpsertLogCursor(...)
+                    ├── SQLite: registry, snapshots, cursors, incident history
+                    ├── VictoriaMetrics: metric writes + PromQL reads
+                    ├── Loki: live-log writes + LogQL reads
+                    └── outbound SSH
+                         ├── embedded collector over stdin every 60s by default
+                         └── optional embedded log stream over stdin per server
 ```
 
-If the SSH or parse step fails: `UpdateServerStatus("unreachable", err)`, the dashboard turns the card red, and the rest of the pipeline doesn't run for this cycle. If only the VM/Loki push fails: status stays `reachable` (the bench is fine), the failure goes to the structured log, and the next cycle retries.
+The monitor opens no inbound connection on a bench server beyond its normal SSH daemon. VictoriaMetrics and Loki can run beside the binary through the bundled Docker Compose stack or on a separate internal host.
 
-## Storage
+## Monitor process
 
-| What | Where | Why there |
+- **HTTP/API** — chi routes under `/api/v1`, `/healthz`, and the embedded SPA. JSON bodies are bounded and reject unknown fields. Query proxies apply backend timeouts.
+- **Authentication** — an optional single shared password. The SPA exchanges it for an HMAC-signed, HttpOnly session cookie; API automation may use HTTP basic credentials. Login attempts are bounded per client IP, and forwarded headers are trusted only from configured proxy CIDRs.
+- **Storage** — ent over pure-Go SQLite in WAL mode. Server names are unique because they are canonical telemetry labels. Server deletion cascades cursors and system snapshots.
+- **SSH pool** — cancellable TCP and SSH handshakes, parsed-key caching, strict `known_hosts` verification, connection reuse, and a per-host session semaphore. Streaming requires at least two sessions per host so normal probes cannot be starved.
+- **Scheduler** — one keyed job per server, capped globally by `scheduler.max_parallel` and individually by `per_job_timeout_seconds`. Jobs run immediately at startup and registration, then at the configured cadence. An overlapping run for the same server is skipped.
+- **Collector pipeline** — supplies the embedded metric collector to `bash -s` over SSH stdin, parses one complete framed result, pushes server/bench/site/service metrics and opaque site database identities to VictoriaMetrics, and updates reachability in SQLite. It then runs optional monitor-side public probes as a separate non-fatal phase.
+- **Streamer** — optional. It discovers standard bench and site logs when no explicit list is configured. One reconnecting SSH stream per selected server runs the embedded streamer over stdin and reports file identity plus absolute byte offsets. Loki batches and cursor commits are serialized so reconnects retry rather than skip data.
+- **Alert evaluator** — queries VictoriaMetrics, reconciles active state in SQLite, retains every incident episode, and sends Telegram fire/repeat/recovery messages. Site companion metrics are joined using a constant number of bulk queries, independent of the number of failed sites.
+
+## Read-only target contract
+
+The monitor never installs an agent and exposes no deploy, pull, update, or
+restart operation for a target. Its embedded shell programs are supplied to
+`bash -s` over SSH stdin. They read procfs, bench configuration, Supervisor,
+Redis/RQ registries, Frappe metadata, site health endpoints, and existing log
+files. They do not write a target file, change a service, or alter Frappe.
+
+The metric collector emits framed `###META`, `###SERVER`, `###BENCH`, `###SITE`,
+and `###END` sections. Bench data includes configured web/background-worker
+capacity, Supervisor groups, individual process CPU/RSS/uptime, RQ
+registered/busy/idle counts, and Redis queue depth. Site probes run with bounded
+concurrency and a total safety budget; probes that cannot run are unknown
+(`is_healthy=-1`), not falsely unhealthy.
+
+The streamer accepts file IDs, paths, and resume positions. It starts new
+streams at EOF, resumes known identities at their committed byte offset,
+detects truncation/rotation, and reports appended lines with exclusive offsets.
+
+## Metrics pull flow
+
+```text
+scheduler tick / immediate run
+  → acquire global slot and per-server overlap guard
+  → SSH exec `bash -s` with the embedded collector on stdin
+  → validate complete framed output
+  → parse server + every valid bench/site section
+  → push one Influx-line-protocol body to VictoriaMetrics
+  → persist reachable/unreachable status
+  → optionally probe configured public site URLs and push public metrics
+```
+
+SSH or top-level parse failure marks the server unreachable and emits `frappe_server_reachable=0` when possible. A VictoriaMetrics failure does not misclassify the remote host: the job reports a push error while the registry remains reachable. Invalid data for one bench/site is logged and skipped without discarding the rest of a complete pull.
+
+The metric-name contract requires VictoriaMetrics to run with
+`-influxSkipSingleField`. Without it, single-field Influx writes are stored
+with a `_value` suffix and the monitor's PromQL selectors cannot find them.
+The bundled Compose stack sets the flag, and the smoke test verifies it.
+
+## Live-log flow
+
+```text
+SSH stream → version/offset/line protocol → bounded per-(server,file) buffer
+           → raw Loki lines + safe derived event summaries
+           → derived VM event samples → SQLite absolute cursor commit → drain
+```
+
+Each discovered or configured file supplies canonical `server`, stable
+`server_id`, `log_type`, and optional `bench`/`site` Loki labels. Discovery is
+itself an embedded read-only SSH command and searches standard bench-level and
+site-level log directories. Explicit entries can override discovery for
+non-standard layouts.
+
+A Loki, VictoriaMetrics event-write, or cursor-write failure retains the batch and does not advance its durable cursor. `max_batch_lines` is a hard per-stream bound; `max_buffered_lines` and `max_buffered_bytes` bound the entire sink across all files. Once any bound is reached, the SSH reader applies TCP backpressure until persistence recovers. The original remote file is therefore the durable backlog. This protects monitor memory without silently dropping lines; a simultaneous backend outage, monitor crash, and remote log rotation can still lose content, so backend availability and remote retention remain operational requirements.
+
+Native Frappe monitor JSON is stored raw and projected into bounded per-site
+request/job samples. Slow database logs are stored raw and parsed into duration,
+lock, row-cost, engine, and operation samples. Site configuration database/user
+identities are hashed on the target; the same one-way hash from a slow record
+provides the join. A safe Loki summary with that opaque hash supports a readable
+site-scoped slow-query feed. SQL, database/user names, request UUIDs, client IPs,
+and exception messages never become metric labels.
+
+## Site health and alerts
+
+The SSH collector records internal site health, HTTP status, response latency,
+and a failure reason code through localhost plus the site's Host header. The
+optional public prober separately covers DNS, TLS, reverse-proxy routing, and
+Frappe's ping response. Public metrics take precedence for site alerts and the
+fleet summary when available; both signals remain visible on site detail.
+Private and loopback public destinations are blocked unless explicitly allowed.
+A recovery for any server-scoped rule requires a fresh positive reachability
+metric and, when available, a reachable registry state. Unknown/skipped site
+probes and failed evidence queries also defer recovery. Built-in rules cover:
+
+- unreachable servers;
+- disks above the configured expression threshold;
+- unhealthy sites with HTTP/reason/latency detail;
+- high Redis queue depth;
+- all registered RQ workers occupied;
+- stopped or failed bench services;
+- disconnected live-log streams;
+- sustained per-site request/job latency and HTTP 5xx rate;
+- site-correlated database queries exceeding the bundled duration threshold.
+
+Alert fingerprints use stable identifying labels. Notification cooldown advances only after delivery succeeds. Every fire-to-recovery episode is stored in the incident-history table, so recovery no longer erases diagnostic history. With multiple Telegram chats, successful destinations are remembered in process so a retry targets only failed chats. Alert samples whose `server` is no longer in the registry are ignored and prior active state is silently pruned, preventing a server deletion from looking like a recovery.
+
+## Query and dashboard path
+
+The browser calls the monitor rather than VictoriaMetrics or Loki directly. Metric/LogQL expressions are escaped at construction, query requests are time-bounded, and stale frontend responses cannot overwrite a newer route/range selection. Completion-based polling coalesces manual refreshes and avoids overlapping request storms.
+
+Hierarchy lists are derived from recent VictoriaMetrics series rather than duplicated in SQLite. The lookback is tied to the collection cadence and timeout so normal between-pull gaps do not make benches/sites disappear.
+
+## Storage ownership
+
+| Data | Owner | Reason |
 |---|---|---|
-| Server registry (id, hostname, ssh creds, status, last_error) | SQLite (ent ORM) | Read on every API call; durable; small. |
-| Per-(server,file) log tail offsets | SQLite | Strict consistency required to avoid double-shipping or losing log lines on restart. |
-| Time-series metrics | VictoriaMetrics | Purpose-built, Prom-compatible, very small footprint. |
-| Log lines | Loki | Cheap, label-indexed; LogQL pairs naturally with PromQL. |
-| Phase 5 hierarchy lists (which benches/sites exist) | (none — derived from VM at query time) | Avoids a second source of truth that can disagree with VM. |
+| Server registry and last status | SQLite | Small, transactional control state |
+| Latest system snapshot | SQLite | One operator-facing document per server |
+| Stream file identity and byte offset | SQLite | Durable replay boundary |
+| Active alert fingerprints/cooldown | SQLite | Restart-safe notification reconciliation |
+| Incident episodes and recovery times | SQLite | Durable operational history |
+| Time-series metrics | VictoriaMetrics | PromQL and retention |
+| Log lines | Loki | Label-indexed LogQL and retention |
+| Bench/site list | Derived from VictoriaMetrics | Avoids a second inventory source of truth |
 
-## Dashboard query path
+## Failure isolation
 
-Browser hits `/api/v1/metrics/query?query=<PromQL>&start=&end=&step=` on the monitor. Monitor forwards to VM `/api/v1/query_range`. Response is mirrored back unchanged (same status, same content-type). Same pattern for logs via the Loki `/api/v1/logs/query` proxy.
-
-The proxy is intentionally thin — no PromQL rewriting, no auth (yet), no caching. It exists to:
-
-1. Avoid CORS / token plumbing in the browser.
-2. Centralize TLS / auth / rate-limiting in one place (Phase 7).
-
-## Failure domains
-
-| Failure | Effect |
+| Failure | Behavior |
 |---|---|
-| Bench server SSH down | That server's card goes red. Other servers unaffected. |
-| VM down | Pushes fail; logs note it. Server status still updates from SSH success. Dashboard charts show "vm unreachable". |
-| Loki down | Log pushes fail; metrics path is unaffected. Site-detail log feed shows an error. |
-| Monitor binary crashes | systemd restarts within 5s. SQLite is fsync-durable; no data lost. |
-| Disk full on monitor host | VM + Loki stop ingesting; binary continues to run but pushes fail. |
+| One SSH server is down | Its pull/stream fails and alerts; other servers continue. |
+| A pull exceeds its timeout | Its context is canceled; later cadence retries it. |
+| VictoriaMetrics is down | Metric writes/charts fail; SSH reachability remains distinct. |
+| Loki is down | Live readers backpressure at the memory bound; metrics continue. |
+| Telegram is down | Firing/recovery state remains retryable; cooldown is not advanced. |
+| Monitor restarts | systemd restarts it; scheduler runs immediately and streams resume from cursor identity/offset. |
+| A server is edited/deleted | Stream session is restarted/removed and scheduler registration changes without a process restart. |
 
-## What's deferred
+## Current scope limits
 
-| Item | Status |
-|---|---|
-| Telegram alerting | shipped (Phase 6) |
-| Built-in HTTP basic auth | shipped (Phase 7 v1) |
-| In-dashboard "add server" form + delete + rename | shipped (Phase 7 v1) |
-| Per-server schedule overrides | post-v1 backlog |
-| Site-scoped log labels | post-v1 backlog |
-| Deploy markers (annotation timeline) | post-v1 backlog |
-| Multi-tenant access scoping (per-team password / SSO) | post-v1 backlog |
-| p95 / quantile_over_time on site detail (currently avg_over_time) | post-v1 backlog |
+- Authentication is single-tenant; there are no per-user roles or per-server visibility rules.
+- Collection cadence is global, not per server.
+- Alert rules and Telegram routes are configuration-driven and editable through the authenticated Settings dashboard; they require a process restart after save.
+- There is no deploy-event annotation timeline.
+- Stock Gunicorn exposes configured and running worker capacity but not a reliable per-request busy/free state. RQ workers do expose busy/idle state through Redis and are reported exactly.

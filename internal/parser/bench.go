@@ -1,7 +1,9 @@
 package parser
 
 import (
+	"encoding/hex"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -82,6 +84,21 @@ func BenchFromSections(o Output, benchName string) (metrics.BenchMetrics, error)
 	} else {
 		m.SupervisorTotal = v
 	}
+	for key, dst := range map[string]*int64{
+		"web_workers_configured":        &m.WebWorkersConfigured,
+		"background_workers_configured": &m.BackgroundWorkersConfigured,
+		"workers_registered":            &m.WorkersRegistered,
+		"workers_busy":                  &m.WorkersBusy,
+		"workers_idle":                  &m.WorkersIdle,
+	} {
+		if raw, ok := s.KVs[key]; ok {
+			value, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				return m, fmt.Errorf("BENCH %s: %s: %w", benchName, key, err)
+			}
+			*dst = value
+		}
+	}
 
 	// Optional info{frappe_version="..."}=1 — extract the version label.
 	for k := range s.KVs {
@@ -111,6 +128,54 @@ func BenchFromSections(o Output, benchName string) (metrics.BenchMetrics, error)
 		m.RedisQueues = append(m.RedisQueues, metrics.RedisQueue{Name: qname, Depth: n})
 	}
 
+	services := map[string]*metrics.ServiceMetric{}
+	for key, raw := range s.KVs {
+		base, labels, ok := splitLabeledKey(key)
+		if !ok || !strings.HasPrefix(base, "service_") {
+			continue
+		}
+		name := labels["service"]
+		if name == "" {
+			continue
+		}
+		service := services[name]
+		if service == nil {
+			service = &metrics.ServiceMetric{Name: name, Kind: labels["kind"], Queue: labels["queue"]}
+			services[name] = service
+		}
+		switch base {
+		case "service_cpu_percent", "service_memory_percent":
+			value, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				return m, fmt.Errorf("BENCH %s: %s: %w", benchName, key, err)
+			}
+			if base == "service_cpu_percent" {
+				service.CPUPercent = value
+			} else {
+				service.MemoryPercent = value
+			}
+		default:
+			value, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				return m, fmt.Errorf("BENCH %s: %s: %w", benchName, key, err)
+			}
+			switch base {
+			case "service_state":
+				service.State = value
+			case "service_pid":
+				service.PID = value
+			case "service_rss_bytes":
+				service.RSSBytes = value
+			case "service_uptime_seconds":
+				service.UptimeSeconds = value
+			}
+		}
+	}
+	for _, service := range services {
+		m.Services = append(m.Services, *service)
+	}
+	slices.SortFunc(m.Services, func(a, b metrics.ServiceMetric) int { return strings.Compare(a.Name, b.Name) })
+
 	return m, nil
 }
 
@@ -139,6 +204,45 @@ func SiteFromSections(o Output, benchName, siteName string) (metrics.SiteMetrics
 		return m, fmt.Errorf("SITE %s/%s: %w", benchName, siteName, err)
 	} else {
 		m.IsHealthy = v
+	}
+	if raw, ok := s.KVs["failure_reason_code"]; ok {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return m, fmt.Errorf("SITE %s/%s: failure_reason_code: %w", benchName, siteName, err)
+		}
+		m.FailureReasonCode = v
+	} else {
+		// Compatibility for collector versions before 2.6.0.
+		switch {
+		case m.IsHealthy == 1:
+			m.FailureReasonCode = 0
+		case m.HTTPStatusCode == 0:
+			m.FailureReasonCode = 1
+		case m.HTTPStatusCode >= 400 && m.HTTPStatusCode < 500:
+			m.FailureReasonCode = 2
+		case m.HTTPStatusCode >= 500 && m.HTTPStatusCode < 600:
+			m.FailureReasonCode = 3
+		default:
+			m.FailureReasonCode = 6
+		}
+	}
+	if raw, ok := s.KVs["native_monitor_enabled"]; ok {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || (v != 0 && v != 1) {
+			return m, fmt.Errorf("SITE %s/%s: native_monitor_enabled must be 0 or 1", benchName, siteName)
+		}
+		m.NativeMonitorEnabled = v
+	}
+	for key, destination := range map[string]*string{
+		"database_hash": &m.DatabaseHash, "database_user_hash": &m.DatabaseUserHash,
+	} {
+		if raw := strings.TrimSpace(s.KVs[key]); raw != "" {
+			decoded, err := hex.DecodeString(raw)
+			if err != nil || len(decoded) != 12 {
+				return m, fmt.Errorf("SITE %s/%s: %s must be a 24-character hex identity", benchName, siteName, key)
+			}
+			*destination = strings.ToLower(raw)
+		}
 	}
 
 	return m, nil

@@ -6,7 +6,9 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +22,7 @@ import (
 //
 //   POST /api/v1/login   {password} → 204 + Set-Cookie monitor_session
 //   POST /api/v1/logout                 → 204 + Set-Cookie max-age=0
-//   GET  /api/v1/whoami                  → 200 (proves session is valid)
+//   GET  /api/v1/whoami                  → 200 + authentication mode
 //
 // Session is a stateless HMAC-signed token: "<exp_unix>.<hex_hmac>".
 // Signing key is derived from the auth password — changing the password
@@ -34,27 +36,27 @@ import (
 const sessionCookieName = "monitor_session"
 const sessionTTL = 7 * 24 * time.Hour
 
-// Brute-force throttle: 5 failed login attempts per IP per minute.
-// Successes don't count. Single in-memory map; lost on restart.
-var loginThrottle = newLoginThrottle(5, time.Minute)
+const maxLoginThrottleBuckets = 10_000
 
 type ipBucket struct {
-	count    int
-	resetAt  time.Time
+	count   int
+	resetAt time.Time
 }
 
 type throttle struct {
-	mu      sync.Mutex
-	limit   int
-	window  time.Duration
-	buckets map[string]*ipBucket
+	mu         sync.Mutex
+	limit      int
+	window     time.Duration
+	buckets    map[string]*ipBucket
+	maxBuckets int
 }
 
-func newLoginThrottle(limit int, window time.Duration) *throttle {
+func newLoginThrottle(limit int, window time.Duration, maxBuckets int) *throttle {
 	return &throttle{
-		limit:   limit,
-		window:  window,
-		buckets: map[string]*ipBucket{},
+		limit:      limit,
+		window:     window,
+		buckets:    map[string]*ipBucket{},
+		maxBuckets: maxBuckets,
 	}
 }
 
@@ -66,6 +68,8 @@ func (t *throttle) recordFailure(ip string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := time.Now()
+	t.cleanupLocked(now)
+	ip = t.bucketKeyLocked(ip)
 	b, ok := t.buckets[ip]
 	if !ok || now.After(b.resetAt) {
 		b = &ipBucket{count: 0, resetAt: now.Add(t.window)}
@@ -75,15 +79,45 @@ func (t *throttle) recordFailure(ip string) bool {
 	return b.count <= t.limit
 }
 
+func (t *throttle) reset(ip string) {
+	t.mu.Lock()
+	delete(t.buckets, t.bucketKeyLocked(ip))
+	t.mu.Unlock()
+}
+
 // blocked returns true if this IP is currently over the limit.
 func (t *throttle) blocked(ip string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	b, ok := t.buckets[ip]
-	if !ok || time.Now().After(b.resetAt) {
+	now := time.Now()
+	t.cleanupLocked(now)
+	b, ok := t.buckets[t.bucketKeyLocked(ip)]
+	if !ok {
 		return false
 	}
 	return b.count > t.limit
+}
+
+func (t *throttle) cleanupLocked(now time.Time) {
+	for key, bucket := range t.buckets {
+		if now.After(bucket.resetAt) {
+			delete(t.buckets, key)
+		}
+	}
+}
+
+func (t *throttle) bucketKeyLocked(ip string) string {
+	if _, exists := t.buckets[ip]; exists {
+		return ip
+	}
+	const overflow = "__overflow__"
+	if _, exists := t.buckets[overflow]; exists {
+		return overflow
+	}
+	if t.maxBuckets <= 1 || len(t.buckets) >= t.maxBuckets-1 {
+		return overflow
+	}
+	return ip
 }
 
 // deriveSessionKey returns the HMAC key used to sign session cookies.
@@ -123,20 +157,70 @@ func validateSession(cookie, password string) bool {
 	return subtle.ConstantTimeCompare([]byte(want), []byte(sig)) == 1
 }
 
-// clientIP extracts a best-effort client IP for throttling. Honors
-// X-Forwarded-For when the request came through a reverse proxy.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if comma := strings.IndexByte(xff, ','); comma > 0 {
-			return strings.TrimSpace(xff[:comma])
+type proxyTrust struct {
+	prefixes []netip.Prefix
+}
+
+func newProxyTrust(cidrs []string) proxyTrust {
+	trust := proxyTrust{}
+	for _, cidr := range cidrs {
+		if prefix, err := netip.ParsePrefix(cidr); err == nil {
+			trust.prefixes = append(trust.prefixes, prefix)
 		}
-		return strings.TrimSpace(xff)
 	}
-	host := r.RemoteAddr
-	if colon := strings.LastIndexByte(host, ':'); colon > 0 {
-		host = host[:colon]
+	return trust
+}
+
+func remoteIP(r *http.Request) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = strings.Trim(r.RemoteAddr, "[]")
 	}
-	return host
+	ip, err := netip.ParseAddr(host)
+	return ip.Unmap(), err == nil
+}
+
+func (p proxyTrust) contains(ip netip.Addr) bool {
+	for _, prefix := range p.prefixes {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP trusts forwarding headers only when the direct peer is in an
+// explicitly configured proxy CIDR. It walks the chain from right to left so
+// a client cannot smuggle a fake leftmost address through a trusted proxy.
+func clientIP(r *http.Request, trust proxyTrust) string {
+	peer, ok := remoteIP(r)
+	if !ok {
+		return r.RemoteAddr
+	}
+	if !trust.contains(peer) {
+		return peer.String()
+	}
+	chain := make([]netip.Addr, 0, 4)
+	for _, raw := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
+		if ip, err := netip.ParseAddr(strings.TrimSpace(raw)); err == nil {
+			chain = append(chain, ip.Unmap())
+		}
+	}
+	chain = append(chain, peer)
+	for i := len(chain) - 1; i >= 0; i-- {
+		if !trust.contains(chain[i]) {
+			return chain[i].String()
+		}
+	}
+	return chain[0].String()
+}
+
+func requestIsHTTPS(r *http.Request, trust proxyTrust) bool {
+	if r.TLS != nil {
+		return true
+	}
+	peer, ok := remoteIP(r)
+	return ok && trust.contains(peer) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // loginReq matches what Login.vue POSTs.
@@ -146,16 +230,20 @@ type loginReq struct {
 
 // newLoginHandler returns a handler that validates the password,
 // throttles brute-force, and on success sets the session cookie.
-func newLoginHandler(password string) http.HandlerFunc {
+func newLoginHandler(password string, trust proxyTrust, loginThrottle *throttle) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
+		ip := clientIP(r, trust)
 		if loginThrottle.blocked(ip) {
+			w.Header().Set("Retry-After", strconv.FormatInt(int64(loginThrottle.window.Seconds()), 10))
 			writeErr(w, http.StatusTooManyRequests,
 				"too many failed attempts; wait a minute")
 			return
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
 		var req loginReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
 			writeErr(w, http.StatusBadRequest, "invalid json")
 			return
 		}
@@ -165,17 +253,17 @@ func newLoginHandler(password string) http.HandlerFunc {
 				"auth not configured on this server")
 			return
 		}
-		if subtle.ConstantTimeCompare([]byte(req.Password), []byte(password)) != 1 {
+		if !securePasswordEqual(req.Password, password) {
 			loginThrottle.recordFailure(ip)
 			writeErr(w, http.StatusUnauthorized, "wrong password")
 			return
 		}
+		loginThrottle.reset(ip)
 		// Issue cookie. HttpOnly so JS can't read it; SameSite=Strict so
 		// a malicious cross-site form can't trigger an authed POST.
 		// Secure attribute set when the connection looks TLS-terminated
 		// (request itself is TLS, OR a reverse proxy says so).
-		secure := r.TLS != nil ||
-			strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+		secure := requestIsHTTPS(r, trust)
 		http.SetCookie(w, &http.Cookie{
 			Name:     sessionCookieName,
 			Value:    issueSession(password, sessionTTL),
@@ -193,24 +281,33 @@ func newLoginHandler(password string) http.HandlerFunc {
 // Secure attribute used at login time — without that, browsers behind
 // HTTPS may keep the cookie because the deletion cookie's attributes
 // don't match the original.
-func logoutHandler(w http.ResponseWriter, r *http.Request) {
-	secure := r.TLS != nil ||
-		strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   secure,
-	})
-	w.WriteHeader(http.StatusNoContent)
+func logoutHandler(trust proxyTrust) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     sessionCookieName,
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+			Secure:   requestIsHTTPS(r, trust),
+		})
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
-// whoamiHandler is the SPA's "is my session still valid?" probe.
-// Returns 200 if authed (cookie OR basic auth passed the middleware
-// to get here); the middleware itself does the actual check.
-func whoamiHandler(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+// whoamiHandler is intentionally public and always returns 200. That lets the
+// router decide which view to mount without first producing a noisy 401 in the
+// browser console. It reports state only and never exposes credentials.
+func whoamiHandler(password, timezone string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if timezone == "" {
+			timezone = "UTC"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"authenticated": requestAuthenticated(r, password),
+			"auth_enabled":  password != "",
+			"timezone":      timezone,
+		})
+	}
 }

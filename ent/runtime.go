@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"frappe-monitor/ent/alertincident"
 	"frappe-monitor/ent/alertstate"
 	"frappe-monitor/ent/logcursor"
 	"frappe-monitor/ent/schema"
@@ -15,6 +16,34 @@ import (
 // (default values, validators, hooks and policies) and stitches it
 // to their package variables.
 func init() {
+	alertincidentFields := schema.AlertIncident{}.Fields()
+	_ = alertincidentFields
+	// alertincidentDescRuleName is the schema descriptor for rule_name field.
+	alertincidentDescRuleName := alertincidentFields[0].Descriptor()
+	// alertincident.RuleNameValidator is a validator for the "rule_name" field. It is called by the builders before save.
+	alertincident.RuleNameValidator = alertincidentDescRuleName.Validators[0].(func(string) error)
+	// alertincidentDescFingerprint is the schema descriptor for fingerprint field.
+	alertincidentDescFingerprint := alertincidentFields[1].Descriptor()
+	// alertincident.FingerprintValidator is a validator for the "fingerprint" field. It is called by the builders before save.
+	alertincident.FingerprintValidator = alertincidentDescFingerprint.Validators[0].(func(string) error)
+	// alertincidentDescSeverity is the schema descriptor for severity field.
+	alertincidentDescSeverity := alertincidentFields[2].Descriptor()
+	// alertincident.DefaultSeverity holds the default value on creation for the severity field.
+	alertincident.DefaultSeverity = alertincidentDescSeverity.Default.(string)
+	// alertincidentDescValue is the schema descriptor for value field.
+	alertincidentDescValue := alertincidentFields[5].Descriptor()
+	// alertincident.DefaultValue holds the default value on creation for the value field.
+	alertincident.DefaultValue = alertincidentDescValue.Default.(float64)
+	// alertincidentDescStartedAt is the schema descriptor for started_at field.
+	alertincidentDescStartedAt := alertincidentFields[6].Descriptor()
+	// alertincident.DefaultStartedAt holds the default value on creation for the started_at field.
+	alertincident.DefaultStartedAt = alertincidentDescStartedAt.Default.(func() time.Time)
+	// alertincidentDescUpdatedAt is the schema descriptor for updated_at field.
+	alertincidentDescUpdatedAt := alertincidentFields[9].Descriptor()
+	// alertincident.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	alertincident.DefaultUpdatedAt = alertincidentDescUpdatedAt.Default.(func() time.Time)
+	// alertincident.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	alertincident.UpdateDefaultUpdatedAt = alertincidentDescUpdatedAt.UpdateDefault.(func() time.Time)
 	alertstateFields := schema.AlertState{}.Fields()
 	_ = alertstateFields
 	// alertstateDescRuleName is the schema descriptor for rule_name field.
@@ -49,14 +78,18 @@ func init() {
 	logcursorDescLogPath := logcursorFields[0].Descriptor()
 	// logcursor.LogPathValidator is a validator for the "log_path" field. It is called by the builders before save.
 	logcursor.LogPathValidator = logcursorDescLogPath.Validators[0].(func(string) error)
+	// logcursorDescFileIdentity is the schema descriptor for file_identity field.
+	logcursorDescFileIdentity := logcursorFields[1].Descriptor()
+	// logcursor.DefaultFileIdentity holds the default value on creation for the file_identity field.
+	logcursor.DefaultFileIdentity = logcursorDescFileIdentity.Default.(string)
 	// logcursorDescByteOffset is the schema descriptor for byte_offset field.
-	logcursorDescByteOffset := logcursorFields[1].Descriptor()
+	logcursorDescByteOffset := logcursorFields[2].Descriptor()
 	// logcursor.DefaultByteOffset holds the default value on creation for the byte_offset field.
 	logcursor.DefaultByteOffset = logcursorDescByteOffset.Default.(int64)
 	// logcursor.ByteOffsetValidator is a validator for the "byte_offset" field. It is called by the builders before save.
 	logcursor.ByteOffsetValidator = logcursorDescByteOffset.Validators[0].(func(int64) error)
 	// logcursorDescLastSeenAt is the schema descriptor for last_seen_at field.
-	logcursorDescLastSeenAt := logcursorFields[2].Descriptor()
+	logcursorDescLastSeenAt := logcursorFields[3].Descriptor()
 	// logcursor.DefaultLastSeenAt holds the default value on creation for the last_seen_at field.
 	logcursor.DefaultLastSeenAt = logcursorDescLastSeenAt.Default.(func() time.Time)
 	// logcursor.UpdateDefaultLastSeenAt holds the default value on update for the last_seen_at field.

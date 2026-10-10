@@ -14,28 +14,39 @@ export function useServers(refreshSec: Ref<number>): {
   const servers = ref<Server[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
+	let requestSequence = 0
 
   async function refresh() {
+		const requestID = ++requestSequence
     loading.value = true
     error.value = null
     try {
-      servers.value = await fetchServers()
+			const response = await fetchServers()
+			if (requestID === requestSequence) servers.value = response
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
+			if (requestID === requestSequence) {
+				error.value = e instanceof Error ? e.message : String(e)
+			}
     } finally {
-      loading.value = false
+			if (requestID === requestSequence) loading.value = false
     }
   }
 
-  let timer: ReturnType<typeof setInterval> | null = null
+	let timer: ReturnType<typeof setTimeout> | null = null
+	let armedSeconds = 0
   function arm(secs: number) {
     if (timer) {
-      clearInterval(timer)
+			clearTimeout(timer)
       timer = null
     }
-    if (secs > 0) {
-      timer = setInterval(refresh, secs * 1000)
-    }
+		armedSeconds = secs
+		if (secs > 0) scheduleNext()
+	}
+	function scheduleNext() {
+		timer = setTimeout(async () => {
+			await refresh()
+			if (armedSeconds > 0) scheduleNext()
+		}, armedSeconds * 1000)
   }
 
   watch(
@@ -47,7 +58,9 @@ export function useServers(refreshSec: Ref<number>): {
   )
 
   onScopeDispose(() => {
-    if (timer) clearInterval(timer)
+		requestSequence++
+		armedSeconds = 0
+		if (timer) clearTimeout(timer)
   })
 
   refresh()

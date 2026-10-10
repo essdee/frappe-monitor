@@ -16,6 +16,8 @@ const (
 	FieldID = "id"
 	// FieldLogPath holds the string denoting the log_path field in the database.
 	FieldLogPath = "log_path"
+	// FieldFileIdentity holds the string denoting the file_identity field in the database.
+	FieldFileIdentity = "file_identity"
 	// FieldByteOffset holds the string denoting the byte_offset field in the database.
 	FieldByteOffset = "byte_offset"
 	// FieldLastSeenAt holds the string denoting the last_seen_at field in the database.
@@ -37,6 +39,7 @@ const (
 var Columns = []string{
 	FieldID,
 	FieldLogPath,
+	FieldFileIdentity,
 	FieldByteOffset,
 	FieldLastSeenAt,
 }
@@ -65,6 +68,8 @@ func ValidColumn(column string) bool {
 var (
 	// LogPathValidator is a validator for the "log_path" field. It is called by the builders before save.
 	LogPathValidator func(string) error
+	// DefaultFileIdentity holds the default value on creation for the "file_identity" field.
+	DefaultFileIdentity string
 	// DefaultByteOffset holds the default value on creation for the "byte_offset" field.
 	DefaultByteOffset int64
 	// ByteOffsetValidator is a validator for the "byte_offset" field. It is called by the builders before save.
@@ -86,6 +91,11 @@ func ByID(opts ...sql.OrderTermOption) OrderOption {
 // ByLogPath orders the results by the log_path field.
 func ByLogPath(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLogPath, opts...).ToFunc()
+}
+
+// ByFileIdentity orders the results by the file_identity field.
+func ByFileIdentity(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldFileIdentity, opts...).ToFunc()
 }
 
 // ByByteOffset orders the results by the byte_offset field.

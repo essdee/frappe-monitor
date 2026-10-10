@@ -66,6 +66,29 @@ func TestPatchServer_RejectsBadPort(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
+func TestCreateServer_RejectsOversizedPortAndUnknownFields(t *testing.T) {
+	ts := newAPIServer(t, openMemStore(t), sshpkg.NewFakeExecutor())
+	for _, body := range []string{
+		`{"name":"x","hostname":"x.example.com","ssh_port":65536,"ssh_key_path":"/tmp/k"}`,
+		`{"name":"x","hostname":"x.example.com","ssh_key_path":"/tmp/k","surprise":true}`,
+	} {
+		resp, err := http.Post(ts.URL+"/api/v1/servers", "application/json", bytes.NewBufferString(body))
+		require.NoError(t, err)
+		resp.Body.Close()
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	}
+}
+
+func TestCreateServer_RejectsDuplicateCanonicalName(t *testing.T) {
+	ts := newAPIServer(t, openMemStore(t), sshpkg.NewFakeExecutor())
+	createForCRUDTest(t, ts.URL, "first.example.com")
+	body := `{"name":"n-first.example.com","hostname":"second.example.com","ssh_key_path":"/tmp/k"}`
+	resp, err := http.Post(ts.URL+"/api/v1/servers", "application/json", bytes.NewBufferString(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+}
+
 func TestPatchServer_404OnUnknownID(t *testing.T) {
 	ts := newAPIServer(t, openMemStore(t), sshpkg.NewFakeExecutor())
 	req, _ := http.NewRequest(http.MethodPatch,

@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -194,6 +195,7 @@ func readDisks(s Section) ([]metrics.DiskMount, error) {
 		}
 		out = append(out, metrics.DiskMount{Mount: mount, UsedBytes: a.used, TotalBytes: a.total})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Mount < out[j].Mount })
 	return out, nil
 }
 
@@ -242,6 +244,7 @@ func readNet(s Section) ([]metrics.NetIface, error) {
 		}
 		out = append(out, metrics.NetIface{Name: name, RxBytes: a.rx, TxBytes: a.tx})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
@@ -254,7 +257,7 @@ func readNet(s Section) ([]metrics.NetIface, error) {
 // comma-separated. The collector script always emits this shape.
 func splitLabeledKey(k string) (base string, labels map[string]string, ok bool) {
 	open := strings.Index(k, "{")
-	if open < 0 {
+	if open <= 0 {
 		return k, nil, false
 	}
 	if !strings.HasSuffix(k, "}") {
@@ -266,18 +269,69 @@ func splitLabeledKey(k string) (base string, labels map[string]string, ok bool) 
 		return base, map[string]string{}, true
 	}
 	labels = map[string]string{}
-	// Comma-separated label=value pairs; values are double-quoted.
-	for _, pair := range strings.Split(body, ",") {
-		eq := strings.Index(pair, "=")
-		if eq < 0 {
+	for pos := 0; pos < len(body); {
+		for pos < len(body) && (body[pos] == ' ' || body[pos] == '\t') {
+			pos++
+		}
+		keyStart := pos
+		for pos < len(body) && (body[pos] == '_' || body[pos] >= 'a' && body[pos] <= 'z' ||
+			body[pos] >= 'A' && body[pos] <= 'Z' || pos > keyStart && body[pos] >= '0' && body[pos] <= '9') {
+			pos++
+		}
+		labelKey := body[keyStart:pos]
+		for pos < len(body) && (body[pos] == ' ' || body[pos] == '\t') {
+			pos++
+		}
+		if labelKey == "" || pos >= len(body) || body[pos] != '=' {
 			return k, nil, false
 		}
-		lk := strings.TrimSpace(pair[:eq])
-		lv := strings.TrimSpace(pair[eq+1:])
-		if len(lv) < 2 || lv[0] != '"' || lv[len(lv)-1] != '"' {
+		pos++
+		for pos < len(body) && (body[pos] == ' ' || body[pos] == '\t') {
+			pos++
+		}
+		if pos >= len(body) || body[pos] != '"' {
 			return k, nil, false
 		}
-		labels[lk] = lv[1 : len(lv)-1]
+		valueStart := pos
+		pos++
+		escaped := false
+		for pos < len(body) {
+			char := body[pos]
+			pos++
+			if escaped {
+				escaped = false
+				continue
+			}
+			if char == '\\' {
+				escaped = true
+				continue
+			}
+			if char == '"' {
+				break
+			}
+		}
+		quoted := body[valueStart:pos]
+		if len(quoted) < 2 || quoted[len(quoted)-1] != '"' {
+			return k, nil, false
+		}
+		value, err := strconv.Unquote(quoted)
+		if err != nil {
+			return k, nil, false
+		}
+		if _, duplicate := labels[labelKey]; duplicate {
+			return k, nil, false
+		}
+		labels[labelKey] = value
+		for pos < len(body) && (body[pos] == ' ' || body[pos] == '\t') {
+			pos++
+		}
+		if pos == len(body) {
+			break
+		}
+		if body[pos] != ',' {
+			return k, nil, false
+		}
+		pos++
 	}
 	return base, labels, true
 }

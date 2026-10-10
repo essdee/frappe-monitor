@@ -3,6 +3,13 @@ server:
   listen_addr: ":8080"
   read_timeout_seconds: 15
   write_timeout_seconds: 15
+  # Only these direct peers may supply X-Forwarded-For/Proto. The defaults
+  # cover a same-host Caddy; add your proxy subnet for a remote proxy.
+  trusted_proxy_cidrs: ["127.0.0.1/32", "::1/128"]
+
+# Human-facing timestamps only. Stored metrics, logs, and incidents stay UTC.
+display:
+  timezone: "UTC"  # IANA name, e.g. Asia/Kolkata
 
 database:
   path: "./data/monitor.db"
@@ -10,7 +17,11 @@ database:
 ssh:
   dial_timeout_seconds: 10
   command_timeout_seconds: 30
+  # Maximum concurrent SSH sessions per target. A log stream consumes one.
   max_connections_per_host: 2
+  # Strict host-key verification. Add targets with ssh-keyscan only after
+  # checking their fingerprint through a trusted channel.
+  known_hosts_path: "~/.ssh/known_hosts"
 
 log:
   level: "info"   # debug | info | warn | error
@@ -18,7 +29,9 @@ log:
 
 metrics:
   # VictoriaMetrics endpoint. /write is appended for pushes; the dashboard
-  # query proxy forwards to /api/v1/query_range. Pass the root URL.
+  # query proxy forwards to /api/v1/query_range. Pass the root URL. Custom
+  # VictoriaMetrics deployments must use -influxSkipSingleField; the bundled
+  # Compose stack already enables it.
   vm_url: "http://127.0.0.1:8428"
   push_timeout_seconds: 5
   query_timeout_seconds: 15
@@ -31,19 +44,41 @@ logs:
   query_timeout_seconds: 15
 
 scheduler:
-  # Default per-server pull interval. Master plan §5 default is 15 min;
-  # do not go below 5 minutes over real SSH.
-  default_interval_seconds: 900
+  # Default per-server pull interval. A first pull also runs immediately at
+  # process start and when a target is registered. Collection scripts are
+  # sent over SSH stdin; nothing is installed on the target.
+  default_interval_seconds: 60
   # Cap on simultaneously-running pull jobs across the whole monitor.
   max_parallel: 10
   # Per-job ctx timeout. Pick well above P99(ssh + parse + push).
-  per_job_timeout_seconds: 30
+  per_job_timeout_seconds: 45
 
-# --- Phase 7 auth ---------------------------------------------------------
-# HTTP basic auth. Empty password = auth disabled (dev / behind-internal-
-# network deploys). When set, the dashboard + API require credentials —
-# any username + this password. Browsers handle the prompt natively, so
-# the SPA needs no login page. /healthz stays unauthenticated for probes.
+# --- Public site availability --------------------------------------------
+# Optional monitor-side checks cover DNS, TLS, reverse-proxy routing, and the
+# public Frappe endpoint. Internal localhost checks continue over SSH.
+public_probes:
+  enabled: false
+  auto_discover: true
+  default_scheme: "https"
+  path: "/api/method/ping"
+  timeout_seconds: 5
+  max_parallel: 10
+  # SSRF protection: enable only when site DNS intentionally resolves to RFC
+  # 1918, loopback, or link-local addresses reachable from the monitor.
+  allow_private_targets: false
+  require_pong: true
+  targets: []
+  # Exact override examples:
+  # - server: Production
+  #   bench: frappe-bench
+  #   site: erp.example.com
+  #   url: https://edge.example.net/api/method/ping
+  #   disabled: false
+
+# --- Authentication -------------------------------------------------------
+# Empty password disables auth. When set, the SPA uses its login page and a
+# signed seven-day session cookie. API clients may also use HTTP basic auth
+# with any username and this password. /healthz stays unauthenticated.
 auth:
   password: ""
   realm: "frappe-monitor"
@@ -58,9 +93,11 @@ auth:
 #      https://api.telegram.org/bot<token>/getUpdates after sending /start.
 #   3. Set enabled: true and fill in bot_token + chat_ids.
 #
-# Default rules cover server_unreachable, disk_almost_full, site_unhealthy,
-# redis_queue_high. Override or add via the rules: list below; the
-# defaults still fire unless disable_defaults: true.
+# Default rules cover server reachability, disk/memory/swap/CPU pressure, site
+# health and latency, Redis queue depth, complete RQ-worker saturation,
+# Gunicorn worker shortage, failed bench services, and disconnected log
+# streams. Override a default by declaring a rule with the same name, or add
+# another via the rules list. Defaults still fire unless disable_defaults=true.
 alerts:
   enabled: false
   evaluation_interval_seconds: 60
@@ -82,3 +119,39 @@ alerts:
   #     severity: warning
   #     fingerprint_labels: [server]
   #     message: "CPU on {{.Labels.server}} is {{printf \"%.1f\" .Value}}% used."
+
+# --- Live log streaming ---------------------------------------------------
+# Streaming is opt-in because it holds one long-lived SSH session per selected
+# server. The embedded streamer runs through SSH stdin and leaves no remote
+# agent or script behind. With no files listed, bench logs are auto-discovered.
+streaming:
+  enabled: false
+  monitor_id: ""
+  # Deprecated compatibility key; ignored by the agentless streamer.
+  script_path: ".frappe-monitor/frappe-monitor-stream.sh"
+  files:
+    # Leave empty to discover <bench>/logs/*.log and
+    # <bench>/sites/*/logs/*.log with read-only shell inspection.
+    # server_id: 0 applies an entry to every registered server. Use a
+    # positive database server ID when hosts have different bench roots.
+    # - server_id: 1
+    #   id: prod_web_error
+    #   path: /home/frappe/frappe-bench/logs/web.error.log
+    #   log_type: error
+    #   bench: frappe-bench
+    # - server_id: 1
+    #   id: prod_worker_error
+    #   path: /home/frappe/frappe-bench/logs/worker.error.log
+    #   log_type: error
+    #   bench: frappe-bench
+  flush_interval_seconds: 1
+  # Hard per-stream RAM bound. A backend outage applies SSH backpressure;
+  # the remote file and persisted cursor remain the durable source.
+  max_batch_lines: 500
+  # Hard fleet-wide bounds prevent hundreds of streams from each retaining a
+  # full batch during a Loki outage.
+  max_buffered_lines: 5000
+  max_buffered_bytes: 33554432
+  push_timeout_seconds: 10
+  min_backoff_seconds: 1
+  max_backoff_seconds: 60

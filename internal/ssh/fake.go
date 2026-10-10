@@ -150,11 +150,16 @@ func (f *FakeExecutor) RunWithInput(_ context.Context, tgt Target, cmd, stdin st
 	return r.out, r.err
 }
 
-func (f *FakeExecutor) Stream(_ context.Context, tgt Target, cmd string) (StreamHandle, error) {
+func (f *FakeExecutor) Stream(ctx context.Context, tgt Target, cmd string) (StreamHandle, error) {
+	return f.StreamWithInput(ctx, tgt, cmd, "")
+}
+
+func (f *FakeExecutor) StreamWithInput(_ context.Context, tgt Target, cmd, stdin string) (StreamHandle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.streamCalls[tgt.Host]++
 	f.lastStream[tgt.Host] = cmd
+	f.lastIn[tgt.Host] = fakeCall{cmd: cmd, stdin: stdin}
 	r, ok := f.streamResp[tgt.Host]
 	if !ok {
 		return nil, fmt.Errorf("fake: no stream response configured for %q", tgt.Host)
@@ -173,7 +178,6 @@ func (f *FakeExecutor) Stream(_ context.Context, tgt Target, cmd string) (Stream
 type fakeStreamHandle struct {
 	r io.Reader
 
-	mu        sync.Mutex
 	closeOnce sync.Once
 	closed    chan struct{}
 	closeErr  error

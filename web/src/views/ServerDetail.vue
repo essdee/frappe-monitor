@@ -1,383 +1,113 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { Pencil } from 'lucide-vue-next'
+import { computed, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import {
+  Boxes, Gauge, Globe2, Pencil, RefreshCw, Server as ServerIcon,
+} from 'lucide-vue-next'
+import {
+  fetchBenches,
   fetchServer,
-  testServerConnection,
-  deployCollector,
-  deleteServer,
+  fetchSites,
+  queryLabelMatchers,
+  type BenchPair,
   type Server,
-  type TestConnectionResult,
+  type SitePair,
 } from '../api'
 import { useTimeRange } from '../composables/useTimeRange'
 import { useMetricsRange } from '../composables/useMetricsRange'
+import { usePolling } from '../composables/usePolling'
 import MetricChart from '../components/MetricChart.vue'
 import SystemDetailsCard from '../components/SystemDetailsCard.vue'
-import EditServerForm from '../components/EditServerForm.vue'
 
 const props = defineProps<{ id: number }>()
-const router = useRouter()
-
-const server = ref<Server | null>(null)
-const serverError = ref<string | null>(null)
-
-const probeResult = ref<TestConnectionResult | null>(null)
-const probeRunning = ref(false)
-const deployMsg = ref<string | null>(null)
-const deployRunning = ref(false)
-const deleteRunning = ref(false)
-const showEdit = ref(false)
-
-function onEdited(updated: Server) {
-  server.value = updated
-  showEdit.value = false
-  // Clear stale probe banners — the SSH target may have changed,
-  // and showing "SSH reachable" against the old IP would mislead.
-  probeResult.value = null
-  deployMsg.value = null
-}
-
 const { range, refreshSec } = useTimeRange()
+const server = ref<Server | null>(null)
+const benches = ref<BenchPair[]>([])
+const sites = ref<SitePair[]>([])
+const serverError = ref<string | null>(null)
+let serverRequest = 0
 
 async function loadServer() {
+  const request = ++serverRequest
   serverError.value = null
   try {
-    server.value = await fetchServer(props.id)
+    const current = await fetchServer(props.id)
+    if (request !== serverRequest) return
+    server.value = current
+    const [benchResult, siteResult] = await Promise.allSettled([fetchBenches(), fetchSites()])
+    if (request !== serverRequest) return
+    if (benchResult.status === 'fulfilled') benches.value = benchResult.value.filter((item) => item.server === current.name)
+    if (siteResult.status === 'fulfilled') sites.value = siteResult.value.filter((item) => item.server === current.name)
   } catch (e) {
-    serverError.value = e instanceof Error ? e.message : String(e)
+    if (request === serverRequest) serverError.value = e instanceof Error ? e.message : String(e)
   }
 }
 
-async function runProbe() {
-  probeRunning.value = true
-  probeResult.value = null
-  try {
-    probeResult.value = await testServerConnection(props.id)
-  } catch (e) {
-    probeResult.value = {
-      reachable: false,
-      latency_ms: 0,
-      error: e instanceof Error ? e.message : String(e),
-      error_kind: 'unknown',
-    }
-  } finally {
-    probeRunning.value = false
-  }
-  // Re-fetch the server row so the page-header status badge reflects
-  // the probe outcome — otherwise the UI shows "unreachable" right
-  // next to a green "SSH reachable" probe-result banner, which is the
-  // exact contradiction operators flag as "the dashboard is wrong".
-  // The probe handler already wrote the new status to the DB; we just
-  // need to surface it.
-  await loadServer()
-}
-
-async function runDeploy() {
-  deployRunning.value = true
-  deployMsg.value = null
-  try {
-    const r = await deployCollector(props.id)
-    deployMsg.value = `Collector v${r.version} deployed.`
-  } catch (e) {
-    deployMsg.value = `Deploy failed: ${e instanceof Error ? e.message : String(e)}`
-  } finally {
-    deployRunning.value = false
-  }
-}
-
-async function runDelete() {
-  if (!server.value) return
-  if (!window.confirm(
-    `Delete server "${server.value.name}" (${server.value.hostname})?\n\n` +
-    `This stops collecting metrics + logs from it. Existing data in VictoriaMetrics ` +
-    `and Loki will age out on the configured retention.`
-  )) return
-  deleteRunning.value = true
-  try {
-    await deleteServer(props.id)
-    router.push('/servers')
-  } catch (e) {
-    serverError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    deleteRunning.value = false
-  }
-}
-
-onMounted(loadServer)
 watch(() => props.id, loadServer)
+usePolling(loadServer, refreshSec)
 
-// CPU usage % derived from raw jiffies. (1 - idle_rate / total_rate) * 100.
-const cpuQuery = computed(() => {
-  const name = server.value?.name ?? ''
-  if (!name) return ''
-  return `100 * (1 - rate(frappe_server_cpu_idle{server="${name}"}[5m]) / clamp_min(
-    rate(frappe_server_cpu_user{server="${name}"}[5m]) +
-    rate(frappe_server_cpu_nice{server="${name}"}[5m]) +
-    rate(frappe_server_cpu_system{server="${name}"}[5m]) +
-    rate(frappe_server_cpu_idle{server="${name}"}[5m]) +
-    rate(frappe_server_cpu_iowait{server="${name}"}[5m]) +
-    rate(frappe_server_cpu_irq{server="${name}"}[5m]) +
-    rate(frappe_server_cpu_softirq{server="${name}"}[5m]) +
-    rate(frappe_server_cpu_steal{server="${name}"}[5m]),
-    1
-  ))`
-})
-
-const memQuery = computed(() => {
-  const name = server.value?.name ?? ''
-  if (!name) return ''
-  return `100 * (1 - frappe_server_mem_available_bytes{server="${name}"} / frappe_server_mem_total_bytes{server="${name}"})`
-})
-
-const diskQuery = computed(() => {
-  const name = server.value?.name ?? ''
-  if (!name) return ''
-  return `100 * frappe_server_disk_used_bytes{server="${name}"} / frappe_server_disk_total_bytes{server="${name}"}`
-})
-
-const loadQuery = computed(() => {
-  const name = server.value?.name ?? ''
-  if (!name) return ''
-  return `frappe_server_load_1m{server="${name}"} or frappe_server_load_5m{server="${name}"} or frappe_server_load_15m{server="${name}"}`
-})
-
+const healthySiteCount = computed(() => sites.value.filter((site) => site.is_healthy === 1).length)
+const queueLabels = computed(() => server.value ? queryLabelMatchers({ server: server.value.name }) : '')
+const cpuQuery = computed(() => !queueLabels.value ? '' : `100 * (1 - rate(frappe_server_cpu_idle{${queueLabels.value}}[5m]) / clamp_min(rate(frappe_server_cpu_user{${queueLabels.value}}[5m]) + rate(frappe_server_cpu_nice{${queueLabels.value}}[5m]) + rate(frappe_server_cpu_system{${queueLabels.value}}[5m]) + rate(frappe_server_cpu_idle{${queueLabels.value}}[5m]) + rate(frappe_server_cpu_iowait{${queueLabels.value}}[5m]) + rate(frappe_server_cpu_irq{${queueLabels.value}}[5m]) + rate(frappe_server_cpu_softirq{${queueLabels.value}}[5m]) + rate(frappe_server_cpu_steal{${queueLabels.value}}[5m]), 1))`)
+const memQuery = computed(() => !queueLabels.value ? '' : `100 * (1 - frappe_server_mem_available_bytes{${queueLabels.value}} / frappe_server_mem_total_bytes{${queueLabels.value}})`)
+const diskQuery = computed(() => !queueLabels.value ? '' : `100 * frappe_server_disk_used_bytes{${queueLabels.value}} / frappe_server_disk_total_bytes{${queueLabels.value}}`)
+const loadQuery = computed(() => !queueLabels.value ? '' : `frappe_server_load_1m{${queueLabels.value}} or frappe_server_load_5m{${queueLabels.value}} or frappe_server_load_15m{${queueLabels.value}}`)
 const cpu = useMetricsRange(cpuQuery, range, refreshSec)
 const mem = useMetricsRange(memQuery, range, refreshSec)
 const disk = useMetricsRange(diskQuery, range, refreshSec)
 const load = useMetricsRange(loadQuery, range, refreshSec)
-
-const cpuLabel = (_m: Record<string, string>) => 'cpu used'
-const memLabel = (_m: Record<string, string>) => 'mem used'
-const diskLabel = (m: Record<string, string>) => `mount ${m.mount ?? '?'}`
-const loadLabel = (m: Record<string, string>) => {
-  // PromQL `or` doesn't preserve which metric a series came from in
-  // labels; show the metric name from __name__ if present, otherwise
-  // pick the first label that disambiguates. ECharts' legend handles
-  // duplicates by suffixing.
-  return m.__name__ ?? 'load'
-}
+const cpuLabel = () => 'CPU used'
+const memLabel = () => 'Memory used'
+const diskLabel = (metric: Record<string, string>) => `Mount ${metric.mount ?? '?'}`
+const loadLabel = (metric: Record<string, string>) => metric.__name__?.replace('frappe_server_load_', '') ?? 'Load'
 </script>
 
 <template>
-  <section>
-    <header v-if="server" class="page-header">
-      <div>
-        <h2>{{ server.name }}</h2>
-        <p class="hostname">
-          {{ server.hostname }} · ssh
-          <code>{{ server.ssh_user }}@{{ server.hostname }}:{{ server.ssh_port }}</code>
-        </p>
+  <section class="page">
+    <nav class="breadcrumbs"><RouterLink to="/servers">Servers</RouterLink><span>/</span><span>{{ server?.name ?? 'Loading' }}</span></nav>
+    <header v-if="server" class="page-heading server-heading">
+      <div class="server-title">
+        <span class="hero-icon"><ServerIcon :size="22" /></span>
+        <div>
+          <span class="eyebrow">Infrastructure target</span>
+          <h1>{{ server.name }}</h1>
+          <p><code>{{ server.ssh_user }}@{{ server.hostname }}:{{ server.ssh_port }}</code></p>
+        </div>
       </div>
-      <div class="status-block">
-        <span class="status-text">{{ server.status }}</span>
+      <div class="heading-status">
+        <span class="status-pill" :class="server.status">{{ server.status }}</span>
+        <span v-for="(value, key) in server.labels" :key="key" class="label-chip">{{ key }}: {{ value }}</span>
+        <RouterLink class="button configure" :to="`/servers/${server.id}/edit`"><Pencil :size="14" />Configure</RouterLink>
       </div>
     </header>
 
-    <div v-if="server && !showEdit" class="actions">
-      <button :disabled="probeRunning" @click="runProbe">
-        {{ probeRunning ? 'Testing…' : 'Test SSH' }}
-      </button>
-      <button :disabled="deployRunning" @click="runDeploy">
-        {{ deployRunning ? 'Deploying…' : 'Deploy collector' }}
-      </button>
-      <button class="edit" @click="showEdit = true">
-        <Pencil :size="14" :stroke-width="2" /> Edit
-      </button>
-      <button class="danger" :disabled="deleteRunning" @click="runDelete">
-        {{ deleteRunning ? 'Deleting…' : 'Delete' }}
-      </button>
+    <div v-if="serverError" class="notice error">Failed to load server: {{ serverError }}</div>
+
+    <div v-if="server" class="summary-grid compact-summary">
+      <RouterLink :to="`/benches?server=${encodeURIComponent(server.name)}`" class="panel summary-card"><Boxes :size="18" /><div class="summary-label">Benches</div><div class="summary-value">{{ benches.length }}</div><div class="summary-note">Discovered workloads</div></RouterLink>
+      <RouterLink :to="`/sites?server=${encodeURIComponent(server.name)}`" class="panel summary-card"><Globe2 :size="18" /><div class="summary-label">Healthy sites</div><div class="summary-value">{{ healthySiteCount }}<small>/{{ sites.length }}</small></div><div class="summary-note">HTTP probes passing</div></RouterLink>
+      <div class="panel summary-card"><Gauge :size="18" /><div class="summary-label">Collection</div><div class="summary-value status-value">{{ server.status === 'reachable' ? 'Active' : 'Paused' }}</div><div class="summary-note">Based on latest SSH result</div></div>
+      <div class="panel summary-card"><RefreshCw :size="18" /><div class="summary-label">Discovery</div><div class="summary-value status-value">{{ server.bench_paths.length ? 'Pinned' : 'Automatic' }}</div><div class="summary-note">{{ server.bench_paths.length ? `${server.bench_paths.length} configured paths` : 'Searches common bench paths' }}</div></div>
     </div>
-
-    <EditServerForm
-      v-if="server && showEdit"
-      :server="server"
-      @saved="onEdited"
-      @cancelled="showEdit = false"
-    />
-
-    <p
-      v-if="probeResult"
-      class="probe-result"
-      :class="probeResult.reachable ? 'ok' : 'fail'"
-    >
-      <template v-if="probeResult.reachable">
-        SSH reachable (latency {{ probeResult.latency_ms }} ms).
-      </template>
-      <template v-else>
-        SSH failed ({{ probeResult.error_kind ?? 'unknown' }}): {{ probeResult.error }}
-      </template>
-    </p>
-    <p v-if="deployMsg" class="probe-result ok">{{ deployMsg }}</p>
-
-    <p v-if="serverError" class="error">Failed to load server: {{ serverError }}</p>
 
     <SystemDetailsCard v-if="server" :server-id="props.id" />
 
-    <div class="charts" v-if="server">
-      <MetricChart
-        title="CPU usage (%)"
-        :result="cpu.result.value"
-        :loading="cpu.loading.value"
-        :error="cpu.error.value"
-        :series-label="cpuLabel"
-        y-unit="%"
-      />
-      <MetricChart
-        title="Memory usage (%)"
-        :result="mem.result.value"
-        :loading="mem.loading.value"
-        :error="mem.error.value"
-        :series-label="memLabel"
-        y-unit="%"
-      />
-      <MetricChart
-        title="Disk usage (% per mount)"
-        :result="disk.result.value"
-        :loading="disk.loading.value"
-        :error="disk.error.value"
-        :series-label="diskLabel"
-        y-unit="%"
-      />
-      <MetricChart
-        title="Load average (1/5/15)"
-        :result="load.result.value"
-        :loading="load.loading.value"
-        :error="load.error.value"
-        :series-label="loadLabel"
-      />
+    <div v-if="server" class="section-heading"><div><h2>Performance</h2><p>Metrics for the selected dashboard time window.</p></div></div>
+    <div v-if="server" class="charts">
+      <MetricChart title="CPU utilization" :result="cpu.result.value" :loading="cpu.loading.value" :error="cpu.error.value" :series-label="cpuLabel" y-unit="%" />
+      <MetricChart title="Memory utilization" :result="mem.result.value" :loading="mem.loading.value" :error="mem.error.value" :series-label="memLabel" y-unit="%" />
+      <MetricChart title="Disk utilization by mount" :result="disk.result.value" :loading="disk.loading.value" :error="disk.error.value" :series-label="diskLabel" y-unit="%" />
+      <MetricChart title="Load average" :result="load.result.value" :loading="load.loading.value" :error="load.error.value" :series-label="loadLabel" />
     </div>
   </section>
 </template>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 1rem;
-}
-.hostname {
-  color: var(--muted);
-  font-size: 0.9rem;
-  margin: 0;
-}
-.hostname code {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-}
-.status-text {
-  text-transform: capitalize;
-  font-weight: 600;
-  font-size: 0.85rem;
-  padding: 0.25rem 0.6rem;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 4px;
-}
-.charts {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-}
-@media (max-width: 900px) {
-  .charts {
-    grid-template-columns: 1fr;
-  }
-}
-.error {
-  padding: 0.5rem 0.75rem;
-  background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
-  color: var(--status-unreachable);
-  border-radius: 4px;
-}
-.actions {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-.actions button {
-  background: var(--card-bg);
-  color: var(--fg);
-  border: 1px solid var(--card-border);
-  padding: 0.35rem 0.85rem;
-  border-radius: 4px;
-  cursor: pointer;
-  font: inherit;
-}
-.actions button:hover:not(:disabled) { border-color: var(--accent); }
-.actions button:disabled { opacity: 0.6; cursor: not-allowed; }
-.actions button.edit {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.actions button.edit:hover:not(:disabled) {
-  background: var(--accent-soft);
-}
-.actions button.danger {
-  border-color: var(--status-unreachable);
-  color: var(--status-unreachable);
-}
-.actions button.danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
-}
-.probe-result {
-  padding: 0.5rem 0.75rem;
-  border-radius: 4px;
-  font-size: 0.9rem;
-  margin-bottom: 0.75rem;
-}
-.probe-result.ok {
-  background: color-mix(in srgb, var(--status-reachable) 12%, transparent);
-  color: var(--status-reachable);
-}
-.probe-result.fail {
-  background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
-  color: var(--status-unreachable);
-}
-
-@media (max-width: 720px) {
-  .page-header {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.5rem;
-  }
-  .page-header h2 {
-    font-size: 1.15rem;
-    word-break: break-word;
-  }
-  .hostname {
-    font-size: 0.82rem;
-    word-break: break-all;
-  }
-  .hostname code {
-    word-break: break-all;
-    font-size: 0.78rem;
-  }
-  /* Status badge moves under the hostname; flex-start so it doesn't
-     hug the right edge once the column is narrow. */
-  .status-block { align-self: flex-start; }
-
-  .actions {
-    display: grid;
-    /* Two rows: [Test SSH | Deploy collector] / [Edit | Delete].
-       Grid gives equal widths, keeps Delete next to Edit (so the
-       red button isn't visually stranded), and avoids wrap-fight
-       between flex children of different label widths. */
-    grid-template-columns: 1fr 1fr;
-    gap: 0.4rem;
-  }
-  .actions button {
-    width: 100%;
-    text-align: center;
-    justify-content: center;
-    padding: 0.55rem 0.7rem;
-  }
-  .probe-result {
-    word-break: break-word;
-    font-size: 0.85rem;
-  }
-}
+.server-title { display: flex; align-items: center; gap: .85rem; }.hero-icon { width: 48px; height: 48px; display: grid; place-items: center; color: var(--accent-strong); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--card-border)); border-radius: 13px; }.server-title p { margin-top: .3rem; }
+.heading-status { display: flex; justify-content: flex-end; align-items: center; gap: .4rem; flex-wrap: wrap; }.label-chip { padding: .25rem .5rem; border: 1px solid var(--card-border); border-radius: 999px; color: var(--muted); background: var(--card-bg); font-size: .7rem; }
+.configure{min-height:34px;padding:.35rem .65rem;font-size:.75rem}
+.compact-summary { margin: 1rem 0 1.25rem; }.compact-summary .summary-card { color: inherit; }.compact-summary svg { float: right; color: var(--muted-2); }.compact-summary small { color: var(--muted-2); font-size: .8rem; }.status-value { font-size: 1.14rem; margin-top: .7rem; }
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; min-width: 0; }
+@media (max-width: 980px) { .charts { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .server-heading { gap: .7rem; }.heading-status { justify-content: flex-start; }.hero-icon { width: 42px; height: 42px; } }
 </style>

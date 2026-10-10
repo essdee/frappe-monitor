@@ -50,9 +50,9 @@ func TestScheduler_SemaphoreBoundsParallelism(t *testing.T) {
 	s := newTestScheduler(t, maxParallel, 5*time.Second)
 
 	var (
-		mu          sync.Mutex
-		concurrent  int32
-		peakSeen    int32
+		mu         sync.Mutex
+		concurrent int32
+		peakSeen   int32
 	)
 	require.NoError(t, s.Add("@every 1s", Job{
 		ServerID: 1,
@@ -140,6 +140,51 @@ func TestScheduler_RejectsBadCronSpec(t *testing.T) {
 		Run:      func(_ context.Context) error { return nil },
 	})
 	require.Error(t, err)
+}
+
+func TestScheduler_RunNowDoesNotWaitForCronBoundary(t *testing.T) {
+	s := newTestScheduler(t, 1, time.Second)
+	ran := make(chan struct{}, 1)
+	s.RunNow(Job{ServerID: 1, Run: func(context.Context) error {
+		ran <- struct{}{}
+		return nil
+	}})
+	select {
+	case <-ran:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("immediate collection did not run")
+	}
+	require.NoError(t, s.Stop(context.Background()))
+}
+
+func TestScheduler_SkipsOverlappingRunForSameServer(t *testing.T) {
+	s := newTestScheduler(t, 4, time.Second)
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	job := Job{ServerID: 42, Run: func(context.Context) error {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		return nil
+	}}
+	s.RunNow(job)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first run did not start")
+	}
+	s.RunNow(job)
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, int32(1), calls.Load(),
+		"a slow server must not accumulate overlapping collection jobs")
+	close(release)
+	require.Eventually(t, func() bool {
+		s.runMu.Lock()
+		defer s.runMu.Unlock()
+		return len(s.running) == 0
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, s.Stop(context.Background()))
 }
 
 func TestScheduler_LogsJobError(t *testing.T) {

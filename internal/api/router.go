@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"frappe-monitor/internal/alerts"
+	"frappe-monitor/internal/config"
 	sshpkg "frappe-monitor/internal/ssh"
 	"frappe-monitor/internal/storage"
 	webpkg "frappe-monitor/internal/web"
@@ -25,14 +26,19 @@ type Deps struct {
 	MetricsBaseURL      string
 	LogsBaseURL         string
 	MetricsQueryTimeout time.Duration
-	LogsQueryTimeout    time.Duration
+	// MetricsLookback is passed as the instant-query step so samples remain
+	// visible between collection cycles even when operators choose an
+	// interval longer than VictoriaMetrics' default lookback.
+	MetricsLookback  time.Duration
+	LogsQueryTimeout time.Duration
 
-	// Phase 7 auth. Empty means no auth (dev / behind-internal-network
-	// deploys). Non-empty applies HTTP basic auth to every /api/v1/*
-	// route and the SPA — browsers handle the credential prompt
-	// natively. /healthz stays unauthenticated so external probes work.
-	AuthPassword string
-	AuthRealm    string
+	// Auth. Empty means no auth. Non-empty protects /api/v1/* with a
+	// signed session cookie (SPA) or HTTP basic credentials (automation).
+	// /healthz and the SPA shell stay open so the login view can load.
+	AuthPassword      string
+	AuthRealm         string
+	DisplayTimezone   string
+	TrustedProxyCIDRs []string
 
 	// OnServerCreated and OnServerDeleted are optional lifecycle hooks
 	// the API calls after a successful server CRUD operation. Used by
@@ -40,14 +46,24 @@ type Deps struct {
 	// servers start collecting on the next tick without a process
 	// restart. Nil hooks are a silent no-op (tests don't need them).
 	OnServerCreated func(serverID int)
+	OnServerUpdated func(serverID int)
 	OnServerDeleted func(serverID int)
 
-	// Phase 6 alerts: passed when alerts.Service is enabled so the
-	// Alerts page in the dashboard can render configured rules and
-	// firing state. AlertsRules nil/empty is fine (the page just
-	// shows "no rules configured").
+	// AlertsRules is the effective policy, also passed while evaluation is
+	// disabled so the Incidents page can review what would be evaluated.
 	AlertsRules   []alerts.Rule
 	AlertsEnabled bool
+
+	// Runtime status is a local, read-only and credential-free view used by
+	// the Settings health card. It never probes or mutates monitored targets.
+	StartedAt    time.Time
+	StreamStatus func() StreamRuntimeStatus
+
+	// ConfigPath and Config enable the local administration API. Monitored
+	// targets remain read-only; this only persists the monitor's own YAML.
+	// Both are required so test routers and API-only embeddings stay unchanged.
+	ConfigPath string
+	Config     *config.Config
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -65,23 +81,27 @@ func NewRouter(d Deps) http.Handler {
 	})
 
 	auth := authGate(d.AuthPassword)
+	proxyTrust := newProxyTrust(d.TrustedProxyCIDRs)
+	loginThrottle := newLoginThrottle(5, time.Minute, maxLoginThrottleBuckets)
 
-	// Login + logout live OUTSIDE the auth middleware so the SPA can
-	// reach them when unauthenticated. Both are no-ops when no password
-	// is configured (the SPA detects this via /api/v1/whoami's response).
+	// Login + logout live OUTSIDE the auth middleware so the SPA can reach
+	// them when unauthenticated. Login is omitted when no password is set;
+	// /whoami tells the SPA that authentication is disabled in that mode.
 	if d.AuthPassword != "" {
-		r.Post("/api/v1/login", newLoginHandler(d.AuthPassword))
+		r.Post("/api/v1/login", newLoginHandler(d.AuthPassword, proxyTrust, loginThrottle))
 	}
-	r.Post("/api/v1/logout", logoutHandler)
+	r.Post("/api/v1/logout", logoutHandler(proxyTrust))
+	r.Get("/api/v1/whoami", whoamiHandler(d.AuthPassword, d.DisplayTimezone))
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(auth)
-		api.Get("/whoami", whoamiHandler)
+		api.Get("/status", runtimeStatusHandler(d.StartedAt, d.StreamStatus))
 		h := &serverHandlers{
 			store:           d.Store,
 			exec:            d.Executor,
 			logger:          d.Logger,
 			onServerCreated: d.OnServerCreated,
+			onServerUpdated: d.OnServerUpdated,
 			onServerDeleted: d.OnServerDeleted,
 		}
 		h.mount(api)
@@ -103,7 +123,7 @@ func NewRouter(d Deps) http.Handler {
 		// Phase 5 hierarchy endpoints derive bench + site lists from
 		// VM directly, so they only mount when MetricsBaseURL is set.
 		if d.MetricsBaseURL != "" {
-			hh := newHierarchyHandlers(d.MetricsBaseURL, d.MetricsQueryTimeout, d.Logger)
+			hh := newHierarchyHandlers(d.MetricsBaseURL, d.MetricsQueryTimeout, d.MetricsLookback, d.Logger, d.Store)
 			hh.mount(api)
 		}
 
@@ -117,6 +137,10 @@ func NewRouter(d Deps) http.Handler {
 			logger:  d.Logger,
 		}
 		api.Get("/alerts", ah.list)
+
+		if sh := newSettingsHandlers(d.ConfigPath, d.Config, d.Logger); sh != nil {
+			sh.mount(api)
+		}
 	})
 
 	// SPA mount: every non-/api, non-/healthz path is delegated to the

@@ -9,8 +9,8 @@ How to run a real production-style monitor on one laptop and have it monitor a F
    │  MONITOR LAPTOP            │                 │  BENCH LAPTOP              │
    │  (Linux + systemd)         │                 │  (any OS with sshd)        │
    │                            │   SSH every     │                            │
-   │  frappe-monitor            │ ─15 min──────▶  │  ~/.frappe-monitor/        │
-   │  VictoriaMetrics :8428     │   collect.sh    │     collect.sh             │
+   │  frappe-monitor            │ ──60s default─▶ │  ~/.frappe-monitor/        │
+   │  VictoriaMetrics :8428     │   collector     │     frappe-monitor-*.sh    │
    │  Loki            :3100     │                 │                            │
    │  dashboard       :8080  ◀──── you browse ────│  Frappe bench at           │
    │                            │  here from this │  ~/frappe-bench/           │
@@ -63,7 +63,7 @@ cd /tmp/frappe-monitor-src
 sudo ./deploy/install.sh
 ```
 
-The installer verifies Go ≥ 1.25, Node ≥ 20, Docker + compose; builds the binary; creates the `frappe-monitor` system user; lays out `/etc/frappe-monitor/`, `/var/lib/frappe-monitor/`, `/opt/frappe-monitor/`; installs two systemd units; brings up VM + Loki; starts the service.
+The installer verifies Go ≥ 1.26.5, Node ≥ 20.19, Docker + compose; builds the binary; creates the `frappe-monitor` system user; lays out `/etc/frappe-monitor/`, `/var/lib/frappe-monitor/`, `/opt/frappe-monitor/`; installs two systemd units; brings up VM + Loki; starts the service.
 
 Verify:
 
@@ -102,19 +102,16 @@ sudo firewall-cmd --reload
 
 ### Browse from the bench laptop
 
-Open `http://<MONITOR_IP>:8080` on the other laptop. Browser prompts for credentials — username doesn't matter, password is what you set. You should land on `/servers` with an empty list.
+Open `http://<MONITOR_IP>:8080` on the other laptop. The app shows its login page; enter the password you set. You should land on `/servers` with an empty list.
 
 ## Phase 3 — Configure SSH from monitor → bench
 
 ### On the monitor laptop
 
-Generate a key as the `frappe-monitor` user (the systemd unit runs as that user):
+The installer already generated a dedicated key for the `frappe-monitor`
+service user. Print its public half:
 
 ```bash
-sudo -u frappe-monitor mkdir -p /var/lib/frappe-monitor/.ssh
-sudo -u frappe-monitor ssh-keygen -t ed25519 -N "" \
-    -f /var/lib/frappe-monitor/.ssh/id_ed25519 \
-    -C "frappe-monitor@$(hostname)"
 sudo cat /var/lib/frappe-monitor/.ssh/id_ed25519.pub
 ```
 
@@ -140,9 +137,22 @@ System Settings → General → Sharing → Remote Login: ON
 
 ### Verify SSH from the monitor
 
+Discover the key, verify its fingerprint against the bench console, then trust it:
+
+```bash
+ssh-keyscan -p 22 -H <BENCH_IP> > /tmp/bench.known-host
+ssh-keygen -lf /tmp/bench.known-host
+# Continue only after the fingerprint matches:
+sudo tee -a /var/lib/frappe-monitor/.ssh/known_hosts < /tmp/bench.known-host >/dev/null
+sudo chown frappe-monitor:frappe-monitor /var/lib/frappe-monitor/.ssh/known_hosts
+sudo chmod 600 /var/lib/frappe-monitor/.ssh/known_hosts
+rm /tmp/bench.known-host
+```
+
 ```bash
 sudo -u frappe-monitor ssh -i /var/lib/frappe-monitor/.ssh/id_ed25519 \
-    -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile=/var/lib/frappe-monitor/.ssh/known_hosts \
+    -o StrictHostKeyChecking=yes \
     frappe@<BENCH_IP> 'echo OK; bench --version 2>/dev/null || echo "no bench in PATH"'
 ```
 
@@ -153,42 +163,31 @@ Expect to see `OK` (and optionally a Frappe bench version). If it fails:
 | `Permission denied (publickey)` | The pubkey isn't in the bench user's `authorized_keys`, or perms are wrong (must be 600). |
 | `Connection refused` | sshd isn't running on the bench laptop. |
 | `Connection timed out` | Firewall, or the bench laptop is on a different network. |
-| `Host key verification failed` | Re-run with `-o StrictHostKeyChecking=accept-new` (already in the command above). |
+| `Host key verification failed` | Verify and add the bench key as above; investigate an unexpected changed key. |
 
-The `accept-new` flag stores the bench's host key on first connect; subsequent connections (the scheduler's) reuse it.
+The application uses this same strict `known_hosts` file and never accepts a first-seen key automatically.
 
-## Phase 4 — Add the bench from the dashboard
+## Phase 4 — Register the bench target
 
-In your browser at `http://<MONITOR_IP>:8080/servers`:
-
-1. Click **+ Add server**.
-2. Fill the form:
-   - **Name**: `bench-laptop` (free-form)
-   - **Hostname**: the bench laptop's IP, e.g. `192.168.1.20`
-   - **SSH user**: the bench user (`frappe` typically)
-   - **Port**: `22`
-   - **SSH key path**: `/var/lib/frappe-monitor/.ssh/id_ed25519`
-3. Click **Add server**.
-
-Click into the new card. On the detail page:
-
-1. **Test SSH** → should turn green: `SSH reachable (latency Xms)`.
-2. **Deploy collector** → should show: `Collector v3 deployed.` (this pipes the bash collector script to `~/.frappe-monitor/collect.sh` on the bench laptop and `chmod +x`'s it).
-
-The status badge will still say `unknown` until the next scheduler tick. **By default that's 15 minutes.** To shorten the wait for testing:
+Registration changes only the monitor's local database. The dashboard is
+monitoring-only, so setup automation uses the API:
 
 ```bash
-# Override the scheduler interval temporarily:
-sudo systemctl edit frappe-monitor
-# In the editor, add:
-[Service]
-Environment=MONITOR_SCHEDULER__DEFAULT_INTERVAL_SECONDS=60
-# Save, exit.
-sudo systemctl daemon-reload
-sudo systemctl restart frappe-monitor
+curl -u 'admin:<MONITOR_PASSWORD>' -X POST \
+  http://127.0.0.1:8080/api/v1/servers \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "bench-laptop",
+    "hostname": "<BENCH_IP>",
+    "ssh_user": "frappe",
+    "ssh_port": 22,
+    "ssh_key_path": "/var/lib/frappe-monitor/.ssh/id_ed25519"
+  }'
 ```
 
-Now a pull cycle fires every 60s. Watch the logs:
+Collection begins immediately and repeats every 60 seconds. Embedded
+inspection code runs through SSH stdin; nothing is deployed to the bench
+laptop. Watch the monitor logs:
 
 ```bash
 sudo journalctl -u frappe-monitor -f | grep -E "(collector|metrics)"
@@ -197,13 +196,14 @@ sudo journalctl -u frappe-monitor -f | grep -E "(collector|metrics)"
 You should see something like:
 
 ```
-INFO collector: pulled successfully  server_id=1  took=1.2s
-INFO collector: metrics pushed       series=42
+INFO collector: pull ok server_id=1 body_lines=42 benches_ok=1 sites_ok=4
 ```
 
-The card on `/servers` flips to **reachable** (green dot). The detail page's CPU / memory / disk / load charts populate after the first cycle, fill in over the next few cycles.
+The card on `/servers` flips to **reachable**. The detail page's CPU, memory,
+disk, load, network, and process data populate after the first cycle.
 
-`/benches` shows the discovered bench (whatever's in `~/frappe-bench/sites/` and `~/frappe-bench/apps/`); `/sites` shows each site with its current HTTP status + response time.
+`/benches` shows configured and actual worker capacity, services, queues, and
+process health. `/sites` shows each site with current HTTP health and latency.
 
 ## Phase 5 — Telegram alerts (optional)
 
@@ -223,19 +223,20 @@ If you want page-on-failure during the test:
 
 4. `sudo systemctl restart frappe-monitor`.
 
-Now turn off WiFi on the bench laptop. Within ~5 min you'll get a Telegram message that `bench-laptop` is unreachable. Reconnect and you get a recovery message.
+Now turn off WiFi on the bench laptop. With 60-second collection and alert intervals, the Telegram fire should arrive within roughly two minutes. Reconnect and a recovery follows after a successful pull/evaluation.
 
-The default rules also catch disk > 90%, site unhealthy, redis queue > 1000.
+The defaults also detect disk >90%, unhealthy sites, Redis queue >1000,
+complete RQ-worker saturation, failed services, and stream disconnection.
 
 ## Verifying it works (checklist)
 
 - [ ] `sudo systemctl status frappe-monitor` is `active (running)` on the monitor laptop.
 - [ ] `curl http://127.0.0.1:8080/healthz` returns `{"status":"ok"}` from the monitor.
-- [ ] Browser at `http://<MONITOR_IP>:8080` from the other laptop prompts for password and lands on the dashboard.
-- [ ] Test SSH on the bench laptop's server card shows reachable=true.
-- [ ] Deploy collector returns version v3.
-- [ ] After one scheduler tick, the card flips to "reachable" and CPU/memory charts populate.
+- [ ] Browser at `http://<MONITOR_IP>:8080` shows the login page and lands on the dashboard after sign-in.
+- [ ] Direct strict-host-key SSH as the monitor user succeeds.
+- [ ] The immediate agentless collection flips the card to reachable and host charts populate.
 - [ ] `/benches` lists the bench, with the right Frappe version + apps count.
+- [ ] Bench detail lists Supervisor/process and worker-capacity evidence.
 - [ ] `/sites` lists each site under that bench.
 - [ ] (Optional) Killing WiFi on the bench laptop produces a Telegram alert within ~5 min.
 
@@ -249,15 +250,15 @@ If any step fails, see the [troubleshooting section](#troubleshooting).
 
 **`Test SSH` says `dial`** — bench laptop's IP changed (DHCP), sshd died, or firewall blocking 22. `nmap -p 22 <BENCH_IP>` from the monitor host should report `open`.
 
-**`Deploy collector` succeeds but no metrics show up** — the collector ran but parsing or VM push failed. Check `sudo journalctl -u frappe-monitor -f`. Common cause: the bench's `~/frappe-bench/` directory has a different name (the collector expects `frappe-bench`). Symlink: `ln -s ~/your-actual-bench ~/frappe-bench`.
+**SSH works but no metrics show up** — inspect `sudo journalctl -u frappe-monitor -f`. For a non-standard bench directory, set `bench_paths` on the local target registry instead of changing the target filesystem.
 
-**Charts say "no data in this window"** — first cycle hasn't run yet. Default interval is 15 min; switch the timeline filter to `1h` or `6h`, or shorten the interval as shown above.
+**Charts say "no data in this window"** — the immediate pull may still be running or failed. Check the collector log, then use a `1h` range; repeats occur every 60 seconds by default.
 
 **`alerts: notify failed`** — bad bot token or chat ID. Test directly: `curl -X POST "https://api.telegram.org/bot<TOKEN>/sendMessage" -d "chat_id=<CHATID>" -d "text=test"`.
 
 **WiFi on different SSIDs / one on cellular** — laptops can't reach each other. Either join both to the same WiFi, use a phone hotspot, or join a Tailscale/ZeroTier mesh.
 
-**Browser keeps prompting for credentials** — the password in `monitor.yaml` doesn't match what you're typing. Username is ignored — only password matters. Restart after editing.
+**Login keeps failing** — the password in `monitor.yaml` does not match. Restart after editing; changing it invalidates all existing signed sessions. Five failed attempts in one minute temporarily rate-limit that client IP.
 
 ## macOS-monitor-host fallback
 

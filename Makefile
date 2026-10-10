@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 .PHONY: build build-no-web web-build web-install run test tidy fmt generate \
-        vm-up vm-down vm-logs loki-logs install uninstall local-test
+        vm-up vm-down vm-logs loki-logs install uninstall diagnose local-test
 
 # `make build` runs the frontend build first and then the Go build with
 # the embed_dist tag so the SPA bundle ends up in the binary. For Go-
@@ -20,7 +20,7 @@ web-build: web-install
 	cd web && npm run build
 
 run:
-	go run -tags=embed_dist ./cmd/monitor --config ./config/monitor.yaml
+	go run -tags=embed_dist ./cmd/monitor --config ./deploy/config/monitor.yaml.example
 
 test:
 	go test ./... -race -count=1
@@ -44,16 +44,16 @@ generate:
 # across down/up cycles. To wipe history: `docker volume rm <name>`.
 
 vm-up:
-	docker compose -f deploy/docker-compose.dev.yml up -d
+	cd deploy && docker compose --project-name frappe-monitor -f - up -d < docker-compose.dev.yml
 
 vm-down:
-	docker compose -f deploy/docker-compose.dev.yml down
+	cd deploy && docker compose --project-name frappe-monitor -f - down < docker-compose.dev.yml
 
 vm-logs:
-	docker compose -f deploy/docker-compose.dev.yml logs -f victoriametrics
+	cd deploy && docker compose --project-name frappe-monitor -f - logs -f victoriametrics < docker-compose.dev.yml
 
 loki-logs:
-	docker compose -f deploy/docker-compose.dev.yml logs -f loki
+	cd deploy && docker compose --project-name frappe-monitor -f - logs -f loki < docker-compose.dev.yml
 
 # --- production install ---------------------------------------------------
 # `sudo make install` runs deploy/install.sh which: builds the binary,
@@ -67,6 +67,9 @@ install:
 
 uninstall:
 	sudo deploy/install.sh --uninstall
+
+diagnose:
+	sudo bash deploy/diagnose.sh
 
 # `make local-test` brings up the whole stack on a laptop with seeded
 # demo data so every page has something to show. No sudo, no systemd,

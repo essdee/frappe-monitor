@@ -4,6 +4,8 @@
 # Idempotent: safe to re-run for upgrades. Re-running:
 #   - rebuilds the binary from the current checkout
 #   - replaces /usr/local/bin/frappe-monitor (atomic mv)
+#   - keeps the last known-good binary/compose/units and restores them if
+#     the upgraded services fail their startup checks
 #   - reinstalls systemd units (only if changed)
 #   - leaves /etc/frappe-monitor/monitor.yaml + /var/lib/frappe-monitor alone
 #   - restarts frappe-monitor.service so the new binary takes effect
@@ -38,7 +40,7 @@
 #   /etc/systemd/system/frappe-monitor.service        the binary
 #   /etc/systemd/system/frappe-monitor-stack.service  VM + Loki via compose
 #
-# Requires: bash, sudo/root, Linux with systemd, Go ≥ 1.25, Node ≥ 20,
+# Requires: bash, sudo/root, Linux with systemd, Go ≥ 1.26.5, Node ≥ 20.19,
 # npm, Docker ≥ 24 with the compose plugin. The script verifies each
 # and bails with a copy-pasteable install hint if anything is missing.
 #
@@ -85,10 +87,190 @@ ETC_DIR="/etc/frappe-monitor"
 STATE_DIR="/var/lib/frappe-monitor"
 OPT_DIR="/opt/frappe-monitor"
 SYSTEMD_DIR="/etc/systemd/system"
+ROLLBACK_DIR="$STATE_DIR/install-rollback"
+
+HAD_PREVIOUS_BINARY=0
+HAD_PREVIOUS_COMPOSE=0
+HAD_PREVIOUS_MONITOR_UNIT=0
+HAD_PREVIOUS_STACK_UNIT=0
+PREVIOUS_MONITOR_ACTIVE=0
+PREVIOUS_MONITOR_ENABLED=0
+PREVIOUS_STACK_ACTIVE=0
+PREVIOUS_STACK_ENABLED=0
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok: $*"; }
 note() { echo "  >> $*"; }
+
+backup_install_state() {
+    install -d -o root -g root -m 0700 "$ROLLBACK_DIR"
+    if [ -f "$BIN_DST" ]; then
+        install -m 0755 "$BIN_DST" "$ROLLBACK_DIR/frappe-monitor"
+        HAD_PREVIOUS_BINARY=1
+    fi
+    if [ -f "$OPT_DIR/deploy/docker-compose.prod.yml" ]; then
+        install -m 0644 "$OPT_DIR/deploy/docker-compose.prod.yml" "$ROLLBACK_DIR/docker-compose.prod.yml"
+        HAD_PREVIOUS_COMPOSE=1
+    fi
+    if [ -f "$SYSTEMD_DIR/frappe-monitor.service" ]; then
+        install -m 0644 "$SYSTEMD_DIR/frappe-monitor.service" "$ROLLBACK_DIR/frappe-monitor.service"
+        HAD_PREVIOUS_MONITOR_UNIT=1
+    fi
+    if [ -f "$SYSTEMD_DIR/frappe-monitor-stack.service" ]; then
+        install -m 0644 "$SYSTEMD_DIR/frappe-monitor-stack.service" "$ROLLBACK_DIR/frappe-monitor-stack.service"
+        HAD_PREVIOUS_STACK_UNIT=1
+    fi
+    if systemctl is-active --quiet frappe-monitor.service 2>/dev/null; then
+        PREVIOUS_MONITOR_ACTIVE=1
+    fi
+    if systemctl is-enabled --quiet frappe-monitor.service 2>/dev/null; then
+        PREVIOUS_MONITOR_ENABLED=1
+    fi
+    if systemctl is-active --quiet frappe-monitor-stack.service 2>/dev/null; then
+        PREVIOUS_STACK_ACTIVE=1
+    fi
+    if systemctl is-enabled --quiet frappe-monitor-stack.service 2>/dev/null; then
+        PREVIOUS_STACK_ENABLED=1
+    fi
+}
+
+restore_unit_state() {
+    local unit="$1" had_unit="$2" was_enabled="$3" was_active="$4"
+
+    if [ "$had_unit" != "1" ]; then
+        systemctl disable "$unit" >/dev/null 2>&1 || true
+        systemctl stop "$unit" >/dev/null 2>&1 || true
+        systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+        return
+    fi
+
+    if [ "$was_enabled" = "1" ]; then
+        systemctl enable "$unit" >/dev/null 2>&1 || true
+    else
+        systemctl disable "$unit" >/dev/null 2>&1 || true
+    fi
+    if [ "$was_active" = "1" ]; then
+        systemctl restart "$unit" >/dev/null 2>&1 || true
+    else
+        systemctl stop "$unit" >/dev/null 2>&1 || true
+    fi
+}
+
+rollback_install() {
+    local cause="$1"
+    note "upgrade failed: $cause"
+    note "restoring last known-good installation"
+    set +e
+
+    # Stop only the candidate services that this install path may have
+    # started. Their exact pre-upgrade states are restored below.
+    systemctl stop frappe-monitor.service >/dev/null 2>&1 || true
+    if [ "$SKIP_STACK" = "0" ]; then
+        systemctl stop frappe-monitor-stack.service >/dev/null 2>&1 || true
+    fi
+
+    if [ "$HAD_PREVIOUS_BINARY" = "1" ]; then
+        install -m 0755 "$ROLLBACK_DIR/frappe-monitor" "$BIN_DST.restore"
+        mv -f "$BIN_DST.restore" "$BIN_DST"
+    else
+        rm -f "$BIN_DST" "$BIN_DST.restore"
+    fi
+    if [ "$HAD_PREVIOUS_COMPOSE" = "1" ]; then
+        install -m 0644 "$ROLLBACK_DIR/docker-compose.prod.yml" "$OPT_DIR/deploy/docker-compose.prod.yml"
+    else
+        rm -f "$OPT_DIR/deploy/docker-compose.prod.yml"
+    fi
+    if [ "$HAD_PREVIOUS_MONITOR_UNIT" = "1" ]; then
+        install -m 0644 "$ROLLBACK_DIR/frappe-monitor.service" "$SYSTEMD_DIR/frappe-monitor.service"
+    else
+        rm -f "$SYSTEMD_DIR/frappe-monitor.service"
+    fi
+    if [ "$HAD_PREVIOUS_STACK_UNIT" = "1" ]; then
+        install -m 0644 "$ROLLBACK_DIR/frappe-monitor-stack.service" "$SYSTEMD_DIR/frappe-monitor-stack.service"
+    else
+        rm -f "$SYSTEMD_DIR/frappe-monitor-stack.service"
+    fi
+
+    systemctl daemon-reload
+    if [ "$SKIP_STACK" = "0" ]; then
+        restore_unit_state frappe-monitor-stack.service "$HAD_PREVIOUS_STACK_UNIT" \
+            "$PREVIOUS_STACK_ENABLED" "$PREVIOUS_STACK_ACTIVE"
+    fi
+    restore_unit_state frappe-monitor.service "$HAD_PREVIOUS_MONITOR_UNIT" \
+        "$PREVIOUS_MONITOR_ENABLED" "$PREVIOUS_MONITOR_ACTIVE"
+    set -e
+    note "rollback attempted; inspect systemctl status and journalctl before retrying"
+}
+
+configured_health_url() {
+    local listen_addr
+    listen_addr=$(awk '
+        /^server:[[:space:]]*$/ { in_server=1; next }
+        in_server && /^[^[:space:]]/ { in_server=0 }
+        in_server && /^[[:space:]]+listen_addr:/ {
+            sub(/^[[:space:]]+listen_addr:[[:space:]]*/, "")
+            gsub(/^["\047 ]+|["\047 ]+$/, "")
+            print
+            exit
+        }
+    ' "$ETC_DIR/monitor.yaml")
+    case "$listen_addr" in
+        :*) printf 'http://127.0.0.1:%s/healthz' "${listen_addr#:}" ;;
+        0.0.0.0:*|\[::\]:*) printf 'http://127.0.0.1:%s/healthz' "${listen_addr##*:}" ;;
+        \[*\]:*) printf 'http://%s/healthz' "$listen_addr" ;;
+        *:*) printf 'http://%s/healthz' "$listen_addr" ;;
+        *) return 1 ;;
+    esac
+}
+
+trim() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+# Telegram accepts numeric user/group/channel IDs. Validate the first-run
+# answers here instead of installing a config that will make systemd restart
+# forever. The runtime performs the same validation for edited configs.
+validate_telegram_credentials() {
+    local token raw_id chat_id normalized=""
+    local -A seen=()
+
+    token=$(trim "$MONITOR_TELEGRAM_BOT_TOKEN")
+    if [[ ! "$token" =~ ^[0-9]{6,}:[A-Za-z0-9_-]{20,}$ ]]; then
+        TELEGRAM_VALIDATION_ERROR="bot token must look like 123456789:ABC... (copy it from @BotFather)"
+        return 1
+    fi
+
+    IFS=',' read -ra _chat_ids <<< "$MONITOR_TELEGRAM_CHAT_IDS"
+    for raw_id in "${_chat_ids[@]}"; do
+        chat_id=$(trim "$raw_id")
+        if [ -z "$chat_id" ]; then
+            TELEGRAM_VALIDATION_ERROR="chat IDs must not contain empty entries"
+            return 1
+        fi
+        if [[ ! "$chat_id" =~ ^-?[0-9]+$ ]]; then
+            TELEGRAM_VALIDATION_ERROR="chat ID '$chat_id' is not numeric (groups usually start with -100)"
+            return 1
+        fi
+        if [[ -n "${seen[$chat_id]+present}" ]]; then
+            TELEGRAM_VALIDATION_ERROR="chat ID '$chat_id' is duplicated"
+            return 1
+        fi
+        seen["$chat_id"]=1
+        if [ -n "$normalized" ]; then normalized+=","; fi
+        normalized+="$chat_id"
+    done
+    if [ -z "$normalized" ]; then
+        TELEGRAM_VALIDATION_ERROR="at least one Telegram chat ID is required"
+        return 1
+    fi
+
+    MONITOR_TELEGRAM_BOT_TOKEN="$token"
+    MONITOR_TELEGRAM_CHAT_IDS="$normalized"
+    return 0
+}
 
 [ "$(id -u)" -eq 0 ] || fail "must run as root (use sudo)"
 
@@ -182,18 +364,34 @@ EOF
     fi
 }
 
-require_cmd go    "https://go.dev/doc/install — frappe-monitor needs Go ≥ 1.25"
-require_cmd node  "your distro's package manager — Node ≥ 20"
+require_cmd go    "https://go.dev/doc/install — frappe-monitor needs Go ≥ 1.26.5"
+require_cmd node  "your distro's package manager — Node ≥ 20.19"
 require_cmd npm   "ships with Node"
-require_cmd docker "https://docs.docker.com/engine/install/"
-docker compose version >/dev/null 2>&1 || fail "docker compose plugin missing — apt install docker-compose-plugin (or your distro's equivalent)"
+require_cmd curl  "your distro's curl package"
+require_cmd openssl "your distro's openssl package"
+require_cmd ssh-keygen "your distro's OpenSSH client package"
+if [ "$SKIP_STACK" = "0" ]; then
+    require_cmd docker "https://docs.docker.com/engine/install/"
+    docker compose version >/dev/null 2>&1 || fail "docker compose plugin missing — apt install docker-compose-plugin (or your distro's equivalent)"
+    docker info >/dev/null 2>&1 || fail "Docker CLI is installed but the daemon is unavailable. Start it with 'systemctl enable --now docker' (apt/upstream) or 'snap start docker' (Snap), then retry"
+fi
 require_cmd systemctl "this script targets systemd Linux; bail otherwise"
 
 GO_VERSION=$(go env GOVERSION 2>/dev/null | sed 's/^go//')
 [ -n "$GO_VERSION" ] || fail "go env GOVERSION returned empty"
-MAJOR_MINOR=$(echo "$GO_VERSION" | awk -F. '{print $1"."$2}')
-awk -v v="$MAJOR_MINOR" 'BEGIN { exit !(v+0 >= 1.25) }' || fail "Go $GO_VERSION too old — need ≥ 1.25"
-ok "go $GO_VERSION, node $(node --version), docker $(docker --version | awk '{print $3}' | tr -d ,)"
+version_at_least() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
+version_at_least "$GO_VERSION" "1.26.5" || fail "Go $GO_VERSION too old — need ≥ 1.26.5"
+NODE_VERSION=$(node --version | sed 's/^v//')
+version_at_least "$NODE_VERSION" "20.19.0" || fail "Node $NODE_VERSION too old — need ≥ 20.19"
+if [ "$SKIP_STACK" = "0" ]; then
+    DOCKER_VERSION=$(docker version --format '{{.Server.Version}}' 2>/dev/null)
+    COMPOSE_VERSION=$(docker compose version --short 2>/dev/null | sed 's/^v//')
+    version_at_least "$DOCKER_VERSION" "24.0.0" || fail "Docker $DOCKER_VERSION too old — need ≥ 24"
+    version_at_least "$COMPOSE_VERSION" "2.23.1" || fail "Docker Compose $COMPOSE_VERSION too old — need ≥ 2.23.1 (embedded Loki config support)"
+    ok "go $GO_VERSION, node $(node --version), docker $DOCKER_VERSION, compose $COMPOSE_VERSION"
+else
+    ok "go $GO_VERSION, node $(node --version), external metrics/logs tier (--no-stack)"
+fi
 
 # ---------------------------------------------------------------------------
 # Step 1.5: collect credentials BEFORE the long build, so the operator
@@ -212,7 +410,8 @@ if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
             echo "  network access to this host can see all monitored servers."
             echo "  Press Enter alone to auto-generate a 32-char random password."
             echo
-            read -r -p "  Dashboard password: " MONITOR_PASSWORD
+            read -r -s -p "  Dashboard password: " MONITOR_PASSWORD
+            echo
             echo
         fi
         if [ -z "$MONITOR_PASSWORD" ]; then
@@ -236,18 +435,32 @@ if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
         fi
     fi
 
+    case "$MONITOR_ALERTS_ENABLED" in
+        true|false) ;;
+        *) fail "MONITOR_ALERTS_ENABLED must be 'true' or 'false', got '$MONITOR_ALERTS_ENABLED'" ;;
+    esac
+
     if [ "$MONITOR_ALERTS_ENABLED" = "true" ]; then
-        if [ -z "$MONITOR_TELEGRAM_BOT_TOKEN" ] && [ -t 0 ] && [ -t 1 ]; then
-            read -r -p "  Telegram bot token (from @BotFather): " MONITOR_TELEGRAM_BOT_TOKEN
-        fi
-        if [ -z "$MONITOR_TELEGRAM_CHAT_IDS" ] && [ -t 0 ] && [ -t 1 ]; then
-            read -r -p "  Telegram chat IDs (comma-separated): " MONITOR_TELEGRAM_CHAT_IDS
-        fi
-        if [ -z "$MONITOR_TELEGRAM_BOT_TOKEN" ] || [ -z "$MONITOR_TELEGRAM_CHAT_IDS" ]; then
-            note "alerts requested but bot_token or chat_ids missing — leaving disabled."
-            note "   set them later by editing $ETC_DIR/monitor.yaml; restart frappe-monitor."
-            MONITOR_ALERTS_ENABLED=false
-        fi
+        while true; do
+            if [ -z "$MONITOR_TELEGRAM_BOT_TOKEN" ] && [ -t 0 ] && [ -t 1 ]; then
+                read -r -s -p "  Telegram bot token (from @BotFather): " MONITOR_TELEGRAM_BOT_TOKEN
+                echo
+            fi
+            if [ -z "$MONITOR_TELEGRAM_CHAT_IDS" ] && [ -t 0 ] && [ -t 1 ]; then
+                read -r -p "  Telegram chat IDs (comma-separated): " MONITOR_TELEGRAM_CHAT_IDS
+            fi
+            if validate_telegram_credentials; then
+                break
+            fi
+            if [ -t 0 ] && [ -t 1 ]; then
+                note "invalid Telegram settings: $TELEGRAM_VALIDATION_ERROR"
+                note "enter them again, or press Ctrl-C and rerun with --no-alerts"
+                MONITOR_TELEGRAM_BOT_TOKEN=""
+                MONITOR_TELEGRAM_CHAT_IDS=""
+            else
+                fail "invalid Telegram settings: $TELEGRAM_VALIDATION_ERROR"
+            fi
+        done
     fi
     ok "credentials collected"
 fi
@@ -286,20 +499,38 @@ else
 fi
 
 install -d -o "$INSTALL_USER" -g "$INSTALL_GROUP" -m 0750 "$STATE_DIR"
-install -d -o root            -g "$INSTALL_GROUP" -m 0750 "$ETC_DIR"
+install -d -o "$INSTALL_USER" -g "$INSTALL_GROUP" -m 0700 "$STATE_DIR/.ssh"
+if [ ! -f "$STATE_DIR/.ssh/known_hosts" ]; then
+    install -o "$INSTALL_USER" -g "$INSTALL_GROUP" -m 0600 /dev/null "$STATE_DIR/.ssh/known_hosts"
+fi
+MONITOR_KEY_PATH="$STATE_DIR/.ssh/id_ed25519"
+if [ ! -f "$MONITOR_KEY_PATH" ]; then
+    # A dedicated identity avoids exposing an operator's personal ~/.ssh to
+    # the locked-down service (ProtectHome=true). It is not authorized on any
+    # target automatically; the operator copies only the .pub key there.
+    (umask 077; ssh-keygen -q -t ed25519 -N "" -C "$INSTALL_USER" -f "$MONITOR_KEY_PATH")
+    chown "$INSTALL_USER:$INSTALL_GROUP" "$MONITOR_KEY_PATH" "$MONITOR_KEY_PATH.pub"
+    chmod 0600 "$MONITOR_KEY_PATH"
+    chmod 0644 "$MONITOR_KEY_PATH.pub"
+    ok "generated dedicated SSH identity at $MONITOR_KEY_PATH"
+else
+    chown "$INSTALL_USER:$INSTALL_GROUP" "$MONITOR_KEY_PATH"
+    chmod 0600 "$MONITOR_KEY_PATH"
+    ok "preserving dedicated SSH identity at $MONITOR_KEY_PATH"
+fi
+# The authenticated Settings UI atomically rewrites monitor.yaml and its .bak
+# sibling. Keep ownership rooted while granting only the service group write
+# access to this one configuration directory.
+install -d -o root            -g "$INSTALL_GROUP" -m 0770 "$ETC_DIR"
 install -d -o root            -g root             -m 0755 "$OPT_DIR"
 ok "directories laid out: $STATE_DIR (data), $ETC_DIR (config), $OPT_DIR (compose)"
 
 # ---------------------------------------------------------------------------
-# Step 4: install binary, config, compose, systemd units
+# Step 4: install config, validate it, then atomically install files
 # ---------------------------------------------------------------------------
 echo "==> install files"
 
-# Atomic binary swap so an in-flight upgrade can't half-deploy.
-install -m 0755 "$REPO_ROOT/bin/monitor-server" "$BIN_DST.new"
-mv -f "$BIN_DST.new" "$BIN_DST"
-ok "installed $BIN_DST"
-
+CONFIG_CREATED=0
 if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
     # Escape values for embedding in a double-quoted YAML string:
     # backslash and double-quote become \\ and \" respectively.
@@ -307,6 +538,11 @@ if [ ! -f "$ETC_DIR/monitor.yaml" ]; then
 
     PW_YAML=$(yaml_dq "$MONITOR_PASSWORD")
     BOT_YAML=$(yaml_dq "$MONITOR_TELEGRAM_BOT_TOKEN")
+	MONITOR_TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null || true)
+	if [ -z "$MONITOR_TIMEZONE" ] || { [ "$MONITOR_TIMEZONE" != "UTC" ] && [ ! -r "/usr/share/zoneinfo/$MONITOR_TIMEZONE" ]; }; then
+		MONITOR_TIMEZONE="UTC"
+	fi
+	TIMEZONE_YAML=$(yaml_dq "$MONITOR_TIMEZONE")
 
     # Build the chat_ids YAML array from the comma-separated input.
     CHAT_IDS_YAML="[]"
@@ -338,6 +574,10 @@ server:
   listen_addr: ":8080"
   read_timeout_seconds: 15
   write_timeout_seconds: 15
+  trusted_proxy_cidrs: ["127.0.0.1/32", "::1/128"]
+
+display:
+  timezone: "$TIMEZONE_YAML"
 
 database:
   path: "$STATE_DIR/monitor.db"
@@ -346,6 +586,7 @@ ssh:
   dial_timeout_seconds: 10
   command_timeout_seconds: 30
   max_connections_per_host: 2
+  known_hosts_path: "$STATE_DIR/.ssh/known_hosts"
 
 log:
   level: "info"
@@ -362,9 +603,20 @@ logs:
   query_timeout_seconds: 15
 
 scheduler:
-  default_interval_seconds: 900
+  default_interval_seconds: 60
   max_parallel: 10
-  per_job_timeout_seconds: 30
+  per_job_timeout_seconds: 45
+
+public_probes:
+  enabled: false
+  auto_discover: true
+  default_scheme: "https"
+  path: "/api/method/ping"
+  timeout_seconds: 5
+  max_parallel: 10
+  allow_private_targets: false
+  require_pong: true
+  targets: []
 
 # Set during install (sudo ./deploy/install.sh prompts for these).
 # Re-prompt by deleting this file or running 'sudo ./deploy/install.sh --purge'.
@@ -383,23 +635,72 @@ alerts:
     send_timeout_seconds: 5
   disable_defaults: false
   rules: []
+
+# Deploy collector installs the stream script too. Configure files and set
+# enabled=true when live Loki ingestion is wanted.
+streaming:
+  enabled: false
+  monitor_id: ""
+  script_path: ".frappe-monitor/frappe-monitor-stream.sh"
+  files: []
+  flush_interval_seconds: 1
+  max_batch_lines: 500
+  max_buffered_lines: 5000
+  max_buffered_bytes: 33554432
+  push_timeout_seconds: 10
+  min_backoff_seconds: 1
+  max_backoff_seconds: 60
 EOF
     chmod 0640 "$ETC_DIR/monitor.yaml"
     chown root:"$INSTALL_GROUP" "$ETC_DIR/monitor.yaml"
+    CONFIG_CREATED=1
     ok "wrote $ETC_DIR/monitor.yaml (auth + alerts populated from your answers)"
 else
     ok "preserving existing $ETC_DIR/monitor.yaml"
 fi
 
+# Validate with the candidate binary before replacing the known-good binary or
+# touching systemd. This has no database, scheduler, network, or SSH side effects.
+if ! _config_check=$("$REPO_ROOT/bin/monitor-server" --config "$ETC_DIR/monitor.yaml" --check-config 2>&1); then
+    if [ "$CONFIG_CREATED" = "1" ]; then
+        rm -f "$ETC_DIR/monitor.yaml"
+        note "removed the invalid newly generated config; the next run will prompt again"
+    fi
+    fail "configuration validation failed: $_config_check"
+fi
+ok "configuration preflight passed"
+
+# Preserve the exact files currently running before replacing any of them.
+# This is intentionally after candidate build/config validation: failed
+# preflight work should not disturb the last rollback snapshot.
+backup_install_state
+if [ "$HAD_PREVIOUS_BINARY" = "1" ]; then
+    ok "saved last known-good installation in $ROLLBACK_DIR"
+fi
+
+# Atomic binary swap so an in-flight upgrade can't half-deploy.
+if ! install -m 0755 "$REPO_ROOT/bin/monitor-server" "$BIN_DST.new" \
+    || ! mv -f "$BIN_DST.new" "$BIN_DST"; then
+    rollback_install "candidate binary installation"
+    fail "could not install candidate binary; previous installation restored"
+fi
+ok "installed $BIN_DST"
+
 # Compose file goes under /opt so the systemd unit's WorkingDirectory
 # matches whether or not the original repo checkout still exists.
-install -d -m 0755 "$OPT_DIR/deploy"
-install -m 0644 "$REPO_ROOT/deploy/docker-compose.prod.yml" "$OPT_DIR/deploy/docker-compose.prod.yml"
-ok "installed compose to $OPT_DIR/deploy/docker-compose.prod.yml"
+if ! install -d -m 0755 "$OPT_DIR/deploy" \
+    || ! install -m 0644 "$REPO_ROOT/deploy/docker-compose.prod.yml" "$OPT_DIR/deploy/docker-compose.prod.yml"; then
+    rollback_install "backing-stack configuration installation"
+    fail "could not install backing-stack configuration; previous installation restored"
+fi
+ok "installed bounded VM/Loki configuration to $OPT_DIR/deploy/docker-compose.prod.yml"
 
-install -m 0644 "$REPO_ROOT/deploy/systemd/frappe-monitor.service"       "$SYSTEMD_DIR/frappe-monitor.service"
-install -m 0644 "$REPO_ROOT/deploy/systemd/frappe-monitor-stack.service" "$SYSTEMD_DIR/frappe-monitor-stack.service"
-systemctl daemon-reload
+if ! install -m 0644 "$REPO_ROOT/deploy/systemd/frappe-monitor.service" "$SYSTEMD_DIR/frappe-monitor.service" \
+    || ! install -m 0644 "$REPO_ROOT/deploy/systemd/frappe-monitor-stack.service" "$SYSTEMD_DIR/frappe-monitor-stack.service" \
+    || ! systemctl daemon-reload; then
+    rollback_install "systemd unit installation"
+    fail "could not install systemd units; previous installation restored"
+fi
 ok "installed systemd units"
 
 # ---------------------------------------------------------------------------
@@ -408,8 +709,11 @@ ok "installed systemd units"
 echo "==> services"
 
 if [ "$SKIP_STACK" = "0" ]; then
-    systemctl enable frappe-monitor-stack.service >/dev/null
-    systemctl restart frappe-monitor-stack.service
+    if ! systemctl enable frappe-monitor-stack.service >/dev/null \
+        || ! systemctl restart frappe-monitor-stack.service; then
+        rollback_install "backing stack restart"
+        fail "frappe-monitor-stack.service did not restart; previous installation restored"
+    fi
     ok "frappe-monitor-stack.service (VM + Loki) started"
 
     # Wait for VM + Loki to become healthy before starting the monitor
@@ -421,22 +725,37 @@ if [ "$SKIP_STACK" = "0" ]; then
         fi
         sleep 1
     done
-    curl -fsS http://127.0.0.1:8428/health >/dev/null 2>&1 || fail "VM health check never succeeded"
-    curl -fsS http://127.0.0.1:3100/ready  >/dev/null 2>&1 || fail "Loki readiness never succeeded"
+    if ! curl -fsS http://127.0.0.1:8428/health >/dev/null 2>&1 \
+        || ! curl -fsS http://127.0.0.1:3100/ready >/dev/null 2>&1; then
+        rollback_install "backing stack health check"
+        fail "VM/Loki health check failed; previous installation restored"
+    fi
     ok "VM + Loki healthy"
 else
     note "--no-stack: skipped VM+Loki bring-up. Configure metrics.vm_url + logs.loki_url in $ETC_DIR/monitor.yaml to point at your existing tier."
 fi
 
-systemctl enable frappe-monitor.service >/dev/null
-systemctl restart frappe-monitor.service
-sleep 1
-if systemctl is-active --quiet frappe-monitor.service; then
-    ok "frappe-monitor.service is active"
-else
-    journalctl -u frappe-monitor --no-pager -n 30 >&2
-    fail "frappe-monitor.service did not start — see journalctl above"
+if ! systemctl enable frappe-monitor.service >/dev/null \
+    || ! systemctl restart frappe-monitor.service; then
+    rollback_install "monitor service restart"
+    fail "frappe-monitor.service did not restart; previous installation restored"
 fi
+MONITOR_HEALTH_URL=$(configured_health_url) \
+    || { rollback_install "invalid server.listen_addr health endpoint"; fail "could not derive health endpoint from YAML server.listen_addr"; }
+for _ in $(seq 1 15); do
+    if systemctl is-active --quiet frappe-monitor.service \
+        && curl -fsS --max-time 2 "$MONITOR_HEALTH_URL" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+if ! systemctl is-active --quiet frappe-monitor.service \
+    || ! curl -fsS --max-time 2 "$MONITOR_HEALTH_URL" >/dev/null 2>&1; then
+    journalctl -u frappe-monitor --no-pager -n 30 >&2
+    rollback_install "monitor service health check"
+    fail "frappe-monitor.service did not become healthy at the YAML listen_addr; previous installation restored"
+fi
+ok "frappe-monitor.service is active and healthy"
 
 # ---------------------------------------------------------------------------
 # Step 6: post-install summary
@@ -448,12 +767,19 @@ echo "  Binary:    $BIN_DST"
 echo "  Config:    $ETC_DIR/monitor.yaml"
 echo "  Data:      $STATE_DIR/"
 echo "  Compose:   $OPT_DIR/deploy/docker-compose.prod.yml"
+echo "  SSH key:   $MONITOR_KEY_PATH (authorize $MONITOR_KEY_PATH.pub on each target)"
 echo
 echo "  Status:    sudo systemctl status frappe-monitor"
 echo "  Logs:      sudo journalctl -u frappe-monitor -f"
 echo "  Stop:      sudo systemctl stop frappe-monitor frappe-monitor-stack"
 echo "  Start:     sudo systemctl start frappe-monitor-stack frappe-monitor"
 echo
-echo "  Dashboard: http://$(hostname):$(grep -E '^\s*listen_addr:' "$ETC_DIR/monitor.yaml" | head -1 | sed 's/.*"\(:[0-9]*\)".*/\1/' | tr -d ':')"
+listen_addr=$(awk '$1 == "listen_addr:" { value=$2; gsub(/["\047]/, "", value); print value; exit }' "$ETC_DIR/monitor.yaml")
+case "$listen_addr" in
+    :*) dashboard_addr="$(hostname):${listen_addr#:}" ;;
+    0.0.0.0:*|\[::\]:*) dashboard_addr="$(hostname):${listen_addr##*:}" ;;
+    *) dashboard_addr="$listen_addr" ;;
+esac
+echo "  Dashboard: http://$dashboard_addr"
 echo
 echo "  Next: read docs/guide/usage.md to add your first bench server."

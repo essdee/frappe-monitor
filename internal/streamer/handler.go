@@ -17,15 +17,19 @@ import (
 type Handler interface {
 	// OnVersion is called once at session start with the version line
 	// the bench-side script declared. Handlers can compare against
-	// scripts.StreamerVersion() and decide to redeploy on mismatch.
+	// scripts.StreamerVersion() and diagnose a rolling-version mismatch.
 	OnVersion(ctx context.Context, serverID int, version string)
+
+	// OnOffset establishes the absolute cursor origin for one file. The
+	// streamer emits it on initial attach, rotation, and copy-truncation.
+	OnOffset(ctx context.Context, serverID int, fileID, fileIdentity string, offset int64)
 
 	// OnLine is called for each EventLine. observedAt is the
 	// monitor's wall clock when the line arrived — used as the Loki
 	// entry timestamp since the bash streamer doesn't emit per-line
-	// timestamps. byteLen is len(Content)+1 (LF), the number of
-	// source-file bytes this line represents.
-	OnLine(ctx context.Context, serverID int, fileID, content string, observedAt time.Time, byteLen int)
+	// timestamps. endOffset is the exclusive absolute byte position after
+	// this line in the identified source file.
+	OnLine(ctx context.Context, serverID int, fileID, fileIdentity string, endOffset int64, content string, observedAt time.Time)
 
 	// OnFileError is called when the bash script emits a per-file
 	// error sentinel (e.g. ##F=web ##E=MISSING). The session keeps

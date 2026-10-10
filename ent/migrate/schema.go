@@ -8,6 +8,38 @@ import (
 )
 
 var (
+	// AlertIncidentsColumns holds the columns for the "alert_incidents" table.
+	AlertIncidentsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "rule_name", Type: field.TypeString},
+		{Name: "fingerprint", Type: field.TypeString},
+		{Name: "severity", Type: field.TypeString, Default: "warning"},
+		{Name: "labels", Type: field.TypeJSON, Nullable: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"firing", "resolved"}, Default: "firing"},
+		{Name: "value", Type: field.TypeFloat64, Default: 0},
+		{Name: "started_at", Type: field.TypeTime},
+		{Name: "resolved_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_notified_at", Type: field.TypeTime, Nullable: true},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// AlertIncidentsTable holds the schema information for the "alert_incidents" table.
+	AlertIncidentsTable = &schema.Table{
+		Name:       "alert_incidents",
+		Columns:    AlertIncidentsColumns,
+		PrimaryKey: []*schema.Column{AlertIncidentsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "alertincident_status_started_at",
+				Unique:  false,
+				Columns: []*schema.Column{AlertIncidentsColumns[5], AlertIncidentsColumns[7]},
+			},
+			{
+				Name:    "alertincident_rule_name_fingerprint_status",
+				Unique:  false,
+				Columns: []*schema.Column{AlertIncidentsColumns[1], AlertIncidentsColumns[2], AlertIncidentsColumns[5]},
+			},
+		},
+	}
 	// AlertStatesColumns holds the columns for the "alert_states" table.
 	AlertStatesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -37,6 +69,7 @@ var (
 	LogCursorsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
 		{Name: "log_path", Type: field.TypeString},
+		{Name: "file_identity", Type: field.TypeString, Default: ""},
 		{Name: "byte_offset", Type: field.TypeInt64, Default: 0},
 		{Name: "last_seen_at", Type: field.TypeTime},
 		{Name: "server_log_cursors", Type: field.TypeInt},
@@ -49,23 +82,23 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "log_cursors_servers_log_cursors",
-				Columns:    []*schema.Column{LogCursorsColumns[4]},
+				Columns:    []*schema.Column{LogCursorsColumns[5]},
 				RefColumns: []*schema.Column{ServersColumns[0]},
-				OnDelete:   schema.NoAction,
+				OnDelete:   schema.Cascade,
 			},
 		},
 		Indexes: []*schema.Index{
 			{
 				Name:    "logcursor_log_path_server_log_cursors",
 				Unique:  true,
-				Columns: []*schema.Column{LogCursorsColumns[1], LogCursorsColumns[4]},
+				Columns: []*schema.Column{LogCursorsColumns[1], LogCursorsColumns[5]},
 			},
 		},
 	}
 	// ServersColumns holds the columns for the "servers" table.
 	ServersColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "name", Type: field.TypeString},
+		{Name: "name", Type: field.TypeString, Unique: true},
 		{Name: "hostname", Type: field.TypeString, Unique: true},
 		{Name: "ssh_user", Type: field.TypeString, Default: "monitor"},
 		{Name: "ssh_port", Type: field.TypeInt, Default: 22},
@@ -102,12 +135,13 @@ var (
 				Symbol:     "system_snapshots_servers_system_snapshot",
 				Columns:    []*schema.Column{SystemSnapshotsColumns[4]},
 				RefColumns: []*schema.Column{ServersColumns[0]},
-				OnDelete:   schema.NoAction,
+				OnDelete:   schema.Cascade,
 			},
 		},
 	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
+		AlertIncidentsTable,
 		AlertStatesTable,
 		LogCursorsTable,
 		ServersTable,

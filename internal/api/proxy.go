@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -56,6 +57,13 @@ func (h *proxyHandlers) logsQuery(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(q.Get("query")) == "" {
 		writeErr(w, http.StatusBadRequest, "missing 'query' parameter")
 		return
+	}
+	if raw := q.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 1000 {
+			writeErr(w, http.StatusBadRequest, "limit must be between 1 and 1000")
+			return
+		}
 	}
 	upstream := h.logsBaseURL + "/loki/api/v1/query_range?" + r.URL.RawQuery
 	h.proxy(w, r, h.logsClient, upstream, "logs")

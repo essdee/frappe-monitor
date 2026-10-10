@@ -1,36 +1,38 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { RouterView, RouterLink, useRoute } from 'vue-router'
+import { computed, ref } from 'vue'
+import { RouterLink, RouterView, useRoute } from 'vue-router'
 import {
-  Server,
+  Activity,
+  Bell,
   Boxes,
   Globe,
-  Bell,
-  Activity,
+	FileSearch,
+  LayoutDashboard,
   LogOut,
+  Server,
+  Settings,
+  ShieldCheck,
 } from 'lucide-vue-next'
 import TimelineFilter from './components/TimelineFilter.vue'
 import { logout } from './api'
+import { authEnabled, markAuthenticated } from './authState'
+import { displayTimezone } from './timeDisplay'
 
 const route = useRoute()
 const bare = computed(() => route.meta.layout === 'bare')
+const pageTitle = computed(() => String(route.meta.title ?? 'Overview'))
+const logoutError = ref('')
 
 async function handleLogout() {
-  // Confirm so a misclick on a phone (where the button sits next to
-  // nav links) doesn't drop the operator out of the dashboard mid-task.
-  if (!window.confirm('Sign out of frappe-monitor?')) return
+  if (!window.confirm('Sign out of Frappe Monitor?')) return
+  logoutError.value = ''
   try {
     await logout()
-  } catch {
-    // Server-side cookie-clear failed; we still tear down the local
-    // view and route to /login. Login.vue's ?signed_out=1 branch
-    // suppresses the auto-redirect so a stale-but-valid cookie can't
-    // bounce the user back into the dashboard.
+		markAuthenticated(false)
+    window.location.assign('/login?signed_out=1')
+  } catch (e) {
+    logoutError.value = e instanceof Error ? e.message : String(e)
   }
-  // Hard navigation so SPA state (cached fetch promises, in-flight
-  // refresh timers) is dropped; routing inside the SPA would leave
-  // those alive.
-  window.location.assign('/login?signed_out=1')
 }
 </script>
 
@@ -38,38 +40,67 @@ async function handleLogout() {
   <RouterView v-if="bare" />
   <div v-else class="app-shell">
     <aside class="sidebar">
-      <div class="brand">
-        <Activity :size="22" :stroke-width="2.25" class="brand-icon" />
-        <div class="brand-text">
-          <h1>frappe-monitor</h1>
-          <span class="brand-sub">production</span>
-        </div>
-      </div>
-      <nav>
+      <RouterLink to="/" class="brand" aria-label="Frappe Monitor overview">
+        <span class="brand-mark"><Activity :size="21" :stroke-width="2.4" /></span>
+        <span class="brand-copy">
+          <strong>Frappe Monitor</strong>
+          <small>Read-only observability</small>
+        </span>
+      </RouterLink>
+
+      <nav aria-label="Primary navigation">
+        <span class="nav-group">Monitor</span>
+        <RouterLink to="/" class="nav-link" exact-active-class="router-link-active">
+          <LayoutDashboard :size="18" />
+          <span>Overview</span>
+        </RouterLink>
         <RouterLink to="/servers" class="nav-link">
-          <Server :size="18" :stroke-width="2" />
+          <Server :size="18" />
           <span>Servers</span>
         </RouterLink>
+        <span class="nav-group workloads">Workloads</span>
         <RouterLink to="/benches" class="nav-link">
-          <Boxes :size="18" :stroke-width="2" />
+          <Boxes :size="18" />
           <span>Benches</span>
         </RouterLink>
         <RouterLink to="/sites" class="nav-link">
-          <Globe :size="18" :stroke-width="2" />
+          <Globe :size="18" />
           <span>Sites</span>
         </RouterLink>
+				<RouterLink to="/logs" class="nav-link">
+					<FileSearch :size="18" />
+					<span>Logs</span>
+				</RouterLink>
         <RouterLink to="/alerts" class="nav-link">
-          <Bell :size="18" :stroke-width="2" />
-          <span>Alerts</span>
+          <Bell :size="18" />
+          <span>Incidents</span>
+        </RouterLink>
+        <span class="nav-group workloads">Administration</span>
+        <RouterLink to="/settings" class="nav-link">
+          <Settings :size="18" />
+          <span>Settings</span>
         </RouterLink>
       </nav>
-      <button class="nav-link logout" type="button" @click="handleLogout">
-        <LogOut :size="18" :stroke-width="2" />
-        <span>Sign out</span>
-      </button>
+
+      <div class="sidebar-footer">
+        <div class="control-plane">
+          <ShieldCheck :size="16" />
+          <span><strong>SSH telemetry</strong><small>Read-only · {{ displayTimezone }}</small></span>
+        </div>
+        <button v-if="authEnabled" class="nav-link logout" type="button" @click="handleLogout">
+          <LogOut :size="17" />
+          <span>Sign out</span>
+        </button>
+        <p v-if="logoutError" class="logout-error">{{ logoutError }}</p>
+      </div>
     </aside>
-    <div class="main">
-      <header class="header">
+
+    <div class="main-column">
+      <header class="topbar">
+        <div class="current-page">
+          <span>Monitor</span>
+          <strong>{{ pageTitle }}</strong>
+        </div>
         <TimelineFilter />
       </header>
       <main class="content">
@@ -82,245 +113,149 @@ async function handleLogout() {
 <style scoped>
 .app-shell {
   display: grid;
-  grid-template-columns: 232px 1fr;
+  grid-template-columns: 248px minmax(0, 1fr);
   min-height: 100vh;
-  /* Defense against any descendant (chart canvas, long monospace
-     hostname, oversized table) bleeding past the viewport on phones.
-     `clip` is the modern variant of `hidden` that doesn't establish
-     a containing block for sticky/fixed elements, so the sticky
-     sidebar + sticky header still work. Falls back to `hidden`
-     anywhere `clip` isn't supported yet. */
-  overflow-x: hidden;
-  overflow-x: clip;
-  /* Cap the shell at the viewport width so nothing horizontally
-     escapes into "empty space to the right" territory. */
-  max-width: 100vw;
 }
+
 .sidebar {
-  background: var(--sidebar-bg);
-  color: var(--sidebar-fg);
-  padding: 1.25rem 0.75rem;
-  border-right: 1px solid var(--card-border);
-  display: flex;
-  flex-direction: column;
   position: sticky;
   top: 0;
   height: 100vh;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--sidebar-bg) 94%, transparent);
+  border-right: 1px solid var(--card-border);
+  display: flex;
+  flex-direction: column;
+  z-index: 30;
 }
+
 .brand {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0 0.6rem 1.5rem 0.6rem;
+  gap: 0.7rem;
+  color: var(--fg-strong);
+  padding: 0.45rem 0.45rem 1.2rem;
+  margin-bottom: 0.85rem;
   border-bottom: 1px solid var(--card-border);
-  margin-bottom: 1rem;
 }
-.brand-icon {
-  color: var(--accent);
+.brand:hover { color: var(--fg-strong); }
+.brand-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  color: white;
+  background: linear-gradient(145deg, var(--accent-strong), var(--accent));
+  box-shadow: 0 8px 26px color-mix(in srgb, var(--accent) 28%, transparent);
 }
-.brand-text h1 {
-  font-size: 1rem;
-  margin: 0;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-.brand-sub {
-  font-size: 0.7rem;
-  color: var(--muted);
+.brand-copy { display: flex; flex-direction: column; min-width: 0; }
+.brand-copy strong { font-size: 0.93rem; letter-spacing: -0.015em; }
+.brand-copy small { color: var(--muted); font-size: 0.69rem; margin-top: 0.1rem; }
+
+nav { display: flex; flex-direction: column; gap: 0.2rem; }
+.nav-group {
+  padding: 0.7rem 0.65rem 0.35rem;
+  color: var(--muted-2);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
+.nav-group.workloads { margin-top: 0.35rem; }
 .nav-link {
+  min-height: 42px;
   display: flex;
   align-items: center;
   gap: 0.7rem;
   padding: 0.55rem 0.7rem;
-  border-radius: 6px;
+  border-radius: 9px;
   color: var(--muted);
-  text-decoration: none;
-  font-size: 0.92rem;
-  font-weight: 500;
-  transition: background 120ms ease, color 120ms ease;
+  font-size: 0.9rem;
+  font-weight: 560;
+  transition: color 140ms ease, background 140ms ease, transform 140ms ease;
 }
-.nav-link:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
+.nav-link:hover { color: var(--fg); background: var(--bg-hover); }
 .nav-link.router-link-active {
-  background: var(--sidebar-active);
-  color: var(--accent-strong);
+  color: var(--fg-strong);
+  background: linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 42%, transparent));
+  box-shadow: inset 2px 0 0 var(--accent);
 }
-.logout {
-  margin-top: auto;        /* shove to the bottom of the sidebar */
-  background: transparent;
-  border: 1px solid var(--card-border);
-  cursor: pointer;
-  width: 100%;
-  text-align: left;
-}
-.logout:hover {
-  border-color: var(--accent);
-  color: var(--fg);
-}
-.main {
+.sidebar-footer { margin-top: auto; }
+.control-plane {
   display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  /* Without min-width:0 a flex/grid child whose content (echarts canvas,
-     long monospace hostname) is wider than the column still claims its
-     intrinsic width, pushing the whole page horizontally on phones.
-     Forcing 0 lets the content scroll inside the column instead. */
-  min-width: 0;
-  overflow-x: hidden;
-  overflow-x: clip;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem;
+  margin-bottom: 0.55rem;
+  color: var(--status-reachable);
+  border: 1px solid color-mix(in srgb, var(--status-reachable) 18%, var(--card-border));
+  background: color-mix(in srgb, var(--status-reachable) 5%, var(--card-bg));
+  border-radius: 10px;
 }
-.content {
-  /* Same shrink guard for the inner content column. Per-view tables
-     opt back into horizontal-scroll where they need it (they wrap a
-     scrollable <table>, not the whole page). */
-  min-width: 0;
-  max-width: 100%;
-}
-.header {
-  padding: 0.75rem 2rem;
-  border-bottom: 1px solid var(--card-border);
-  background: var(--bg);
+.control-plane span { display: flex; flex-direction: column; }
+.control-plane strong { color: var(--fg); font-size: 0.77rem; }
+.control-plane small { font-size: 0.68rem; margin-top: 0.05rem; }
+.logout { width: 100%; border: 0; background: transparent; cursor: pointer; text-align: left; }
+.logout-error { color: var(--status-unreachable); font-size: 0.72rem; padding: 0 0.65rem; }
+
+.main-column { min-width: 0; min-height: 100vh; }
+.topbar {
+  min-height: 72px;
+  padding: 0.8rem clamp(1rem, 2.4vw, 2.5rem);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 20;
+  border-bottom: 1px solid var(--card-border);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(16px);
 }
+.current-page { display: flex; flex-direction: column; flex: 0 0 auto; }
+.current-page span { color: var(--muted-2); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; }
+.current-page strong { font-size: 0.93rem; margin-top: 0.08rem; }
 .content {
-  padding: 1.75rem 2rem;
-  flex: 1;
+  width: 100%;
+  max-width: 1680px;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 2.5vw, 2.5rem);
 }
 
-/* ----- Tablet (≤ 1024px) ------------------------------------------ */
-@media (max-width: 1024px) {
-  .app-shell { grid-template-columns: 200px 1fr; }
-  .content   { padding: 1.25rem 1.25rem; }
-  .header    { padding: 0.75rem 1.25rem; }
+@media (max-width: 940px) {
+  .app-shell { grid-template-columns: 210px minmax(0, 1fr); }
+  .topbar { align-items: flex-start; flex-direction: column; gap: 0.5rem; position: static; }
+  .current-page { display: none; }
 }
 
-/* ----- Mobile (≤ 720px): sidebar collapses to a sticky top bar ----- */
 @media (max-width: 720px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr;
-  }
+  .app-shell { display: block; padding-bottom: 68px; }
   .sidebar {
-    position: sticky;
-    top: 0;
-    height: auto;
-    z-index: 20;
-    border-right: none;
-    border-bottom: 1px solid var(--card-border);
-    padding: 0.6rem 0.85rem;
-    flex-direction: row;
-    align-items: center;
-    gap: 0.6rem;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+    position: fixed;
+    inset: auto 0 0 0;
+    width: 100%;
+    height: 68px;
+    padding: 0.45rem 0.5rem max(0.45rem, env(safe-area-inset-bottom));
+    border: 0;
+    border-top: 1px solid var(--card-border);
+    background: color-mix(in srgb, var(--sidebar-bg) 94%, transparent);
+    backdrop-filter: blur(18px);
   }
-  .brand {
-    border-bottom: none;
-    padding: 0;
-    margin-bottom: 0;
-    flex-shrink: 0;
-  }
-  .brand-text h1 { font-size: 0.92rem; }
-  .brand-sub { display: none; }
-  nav {
-    flex-direction: row;
-    gap: 0.25rem;
-    flex: 1;
-    justify-content: flex-end;
-  }
+  .brand, .nav-group, .sidebar-footer { display: none; }
+  nav { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); align-items: center; height: 100%; }
   .nav-link {
-    /* Comfortable thumb-size targets — anything smaller than ~40px
-       wide is finicky on a phone and people fat-finger Sign-out
-       when reaching for Servers. */
-    padding: 0.5rem 0.65rem;
-    min-width: 40px;
+    min-width: 0;
+    min-height: 50px;
+    padding: 0.4rem 0.35rem;
+    flex-direction: column;
     justify-content: center;
-    font-size: 0.85rem;
-    flex-shrink: 0;
-  }
-  .nav-link span { display: none; }   /* icons only on mobile */
-  .nav-link.router-link-active {
-    background: var(--accent-soft);
-  }
-  /* Sign-out on mobile: same size as the other nav icons. The
-     desktop styles set width:100% + text-align:left for the
-     bottom-of-sidebar pinned button — both have to be unset here
-     or the button claims the whole horizontal flex row and looks
-     comically huge next to the other icons. */
-  .logout {
-    margin-top: 0;
-    margin-left: 0.35rem;
-    padding: 0.45rem 0.55rem;
-    width: auto;
-    text-align: center;
-    border: 1px solid var(--card-border);
-    border-radius: 6px;
-    flex-shrink: 0;
-  }
-  .logout:hover {
-    background: color-mix(in srgb, var(--status-unreachable) 12%, transparent);
-    color: var(--status-unreachable);
-    border-color: color-mix(in srgb, var(--status-unreachable) 50%, var(--card-border));
-  }
-  .header { padding: 0.5rem 1rem; position: static; }
-  .content { padding: 1rem; }
-}
-
-/* ----- Phone (≤ 480px): sidebar wraps to two rows so brand + nav
-        don't horizontally scroll on narrow handsets. ------------- */
-@media (max-width: 480px) {
-  .sidebar {
-    flex-wrap: wrap;
-    overflow-x: visible;
-    /* Box-sizing belt-and-braces: padding shouldn't bleed past 100vw. */
-    max-width: 100%;
-  }
-  .brand {
-    flex: 1 1 100%;
-    justify-content: flex-start;
-    padding-bottom: 0.4rem;
-    margin-bottom: 0.35rem;
-    border-bottom: 1px solid var(--card-border);
-    min-width: 0;
-  }
-  .brand-text { min-width: 0; overflow: hidden; }
-  .brand-text h1 {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  nav {
-    flex: 1 1 0;
-    min-width: 0;
-    justify-content: flex-start;
     gap: 0.15rem;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+    font-size: 0.61rem;
   }
-  nav::-webkit-scrollbar { display: none; }
-  .nav-link {
-    /* Tighter taps on a 360px wide phone so 4 routes + sign-out
-       fit. Still ≥40px wide for thumb comfort. */
-    min-width: 40px;
-    padding: 0.45rem 0.55rem;
-  }
-  .logout {
-    margin-left: 0.35rem;
-    padding: 0.45rem 0.55rem;
-    flex-shrink: 0;
-  }
+  .nav-link.router-link-active { box-shadow: inset 0 2px 0 var(--accent); }
+  .topbar { min-height: auto; padding: 0.65rem 0.85rem; }
+  .content { padding: 1rem 0.85rem 1.5rem; }
 }
 </style>

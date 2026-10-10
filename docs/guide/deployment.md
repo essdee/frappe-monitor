@@ -44,12 +44,13 @@ The install script verifies all of these and bails with copy-pasteable hints if 
 
 | Tool | Version | Install |
 |---|---|---|
-| Go | ≥ 1.25 | `https://go.dev/doc/install` |
-| Node | ≥ 20 | distro package or nodesource |
+| Go | ≥ 1.26.5 | `https://go.dev/doc/install` |
+| Node | ≥ 20.19 | distro package or nodesource |
 | npm | ships with Node | — |
-| Docker Engine | ≥ 24 | `https://docs.docker.com/engine/install/` |
-| Docker compose plugin | ≥ 2.20 | `apt install docker-compose-plugin` (or distro equivalent) |
+| Docker Engine | ≥ 24 | apt/upstream Docker or Canonical's Snap package |
+| Docker compose plugin | ≥ 2.23.1 | `apt install docker-compose-plugin` (or distro equivalent); required for the embedded Loki config |
 | systemd | any modern version | already on every supported distro |
+| OpenSSH client tools | any modern version | provides `ssh-keygen`, `ssh-keyscan`, and `ssh-keygen -l` |
 
 ## One-shot install
 
@@ -67,18 +68,20 @@ sudo make install
 
 That's it. The script:
 
-1. Verifies Go, Node, Docker.
+1. Verifies Go, Node, Docker Compose, and that the Docker daemon is reachable.
 2. **Prompts for credentials** on first install (skipped if `monitor.yaml` already exists):
    - Dashboard password (Enter to auto-generate a random one — printed for you to save).
    - Whether to enable Telegram alerts; if yes, prompts for bot token + chat IDs.
 3. Runs `make build` (npm install + Vite build + Go build with `-tags=embed_dist`).
-4. Creates the `frappe-monitor` system user (no shell, no home).
+4. Creates the `frappe-monitor` system user (no login shell; state home at `/var/lib/frappe-monitor`).
 5. Lays out `/etc/frappe-monitor/`, `/var/lib/frappe-monitor/`, `/opt/frappe-monitor/`.
-6. Atomically installs the binary at `/usr/local/bin/frappe-monitor`.
-7. Writes `/etc/frappe-monitor/monitor.yaml` with the values you supplied (mode 0640, owner `root:frappe-monitor`).
-8. Installs two systemd units: `frappe-monitor.service` (the binary) and `frappe-monitor-stack.service` (VM + Loki via docker compose).
-9. Enables and starts both.
-10. Prints status + dashboard URL.
+6. Generates a dedicated Ed25519 identity at `/var/lib/frappe-monitor/.ssh/id_ed25519` if it does not already exist. Reinstalls and upgrades preserve it.
+7. Writes `/etc/frappe-monitor/monitor.yaml` with the values you supplied (mode 0640, owner `root:frappe-monitor`). Telegram tokens and chat IDs are validated while prompting.
+8. Runs the candidate binary's configuration preflight. An invalid config cannot replace the installed binary or start a systemd restart loop.
+9. Atomically installs the binary at `/usr/local/bin/frappe-monitor`.
+10. Installs two systemd units: `frappe-monitor.service` (the binary) and `frappe-monitor-stack.service` (VM + Loki via docker compose).
+11. Enables and starts both, then verifies `/healthz` at the address derived from `server.listen_addr` in YAML.
+12. If an upgraded service fails startup or health checks, atomically restores the previous binary, Compose file, units, and their enabled/running states.
 
 After it finishes, the dashboard is at `http://<host>:8080` — log in with any username and the password you set. Move the cloned repo (`/tmp/frappe-monitor-src`) wherever you keep source — the installer copied everything it needs into `/opt/frappe-monitor/deploy/`.
 
@@ -101,8 +104,11 @@ If `--password` and `MONITOR_PASSWORD` are both empty and stdin isn't a TTY, the
 |---|---|---|
 | `/usr/local/bin/frappe-monitor` | root:root 0755 | The binary (CGO=0, embedded SPA). |
 | `/etc/frappe-monitor/monitor.yaml` | root:frappe-monitor 0640 | Config. Edit this and `systemctl restart frappe-monitor`. |
-| `/var/lib/frappe-monitor/monitor.db` | frappe-monitor:frappe-monitor 0640 | SQLite: server registry + per-file log cursors. |
-| `/opt/frappe-monitor/deploy/docker-compose.prod.yml` | root:root 0644 | VM + Loki compose, used by the stack unit. |
+| `/var/lib/frappe-monitor/monitor.db` | frappe-monitor:frappe-monitor 0640 | SQLite: registry, snapshots, stream cursors, and alert state. |
+| `/var/lib/frappe-monitor/install-rollback/` | root:root 0700 | Last known-good binary and service files used by automatic upgrade rollback. |
+| `/var/lib/frappe-monitor/.ssh/id_ed25519` | frappe-monitor:frappe-monitor 0600 | Dedicated private identity generated once and preserved on upgrades. |
+| `/var/lib/frappe-monitor/.ssh/known_hosts` | frappe-monitor:frappe-monitor 0600 | Strict host-key trust store. |
+| `/opt/frappe-monitor/deploy/docker-compose.prod.yml` | root:root 0644 | VM + Loki compose, including Loki's local TSDB/filesystem configuration and 30-day compactor retention. |
 | `/etc/systemd/system/frappe-monitor.service` | root:root 0644 | The binary's unit. |
 | `/etc/systemd/system/frappe-monitor-stack.service` | root:root 0644 | VM + Loki's unit. |
 
@@ -110,14 +116,9 @@ VM and Loki data live in named Docker volumes: `frappe-monitor-vm-data` and `fra
 
 ## Configure SSH access to your bench servers
 
-The monitor binary runs as the `frappe-monitor` user and opens SSH connections to every server you register. You need a key on the monitor host that's authorized on each bench server.
+The monitor binary runs as the `frappe-monitor` user and opens SSH connections to every server you register. The installer generates its dedicated key automatically. Print the public half and authorize it on each bench server:
 
 ```bash
-# 1. Generate a key as the frappe-monitor user.
-sudo -u frappe-monitor ssh-keygen -t ed25519 -N "" \
-    -f /var/lib/frappe-monitor/.ssh/id_ed25519 -C frappe-monitor
-
-# 2. Copy the public key.
 sudo cat /var/lib/frappe-monitor/.ssh/id_ed25519.pub
 ```
 
@@ -132,6 +133,20 @@ sudo -u frappe chmod 600 /home/frappe/.ssh/authorized_keys
 
 The key path you'll use when registering each server is `/var/lib/frappe-monitor/.ssh/id_ed25519`. See [`usage.md`](usage.md) for the registration call.
 
+The installer also creates an empty strict host-key store at `/var/lib/frappe-monitor/.ssh/known_hosts`. Before the app connects to a bench, obtain its key and verify the fingerprint through the bench console or another trusted channel:
+
+```bash
+ssh-keyscan -p 22 -H bench1.example.com > /tmp/bench1.known-host
+ssh-keygen -lf /tmp/bench1.known-host
+# Only after the fingerprint matches the bench:
+sudo tee -a /var/lib/frappe-monitor/.ssh/known_hosts < /tmp/bench1.known-host >/dev/null
+sudo chown frappe-monitor:frappe-monitor /var/lib/frappe-monitor/.ssh/known_hosts
+sudo chmod 600 /var/lib/frappe-monitor/.ssh/known_hosts
+rm /tmp/bench1.known-host
+```
+
+Unknown and changed keys are rejected. `ssh-keyscan` alone is discovery, not identity verification.
+
 ## Changing the password later
 
 The installer collects the password on first install and writes it to `/etc/frappe-monitor/monitor.yaml`. To change it later:
@@ -142,7 +157,7 @@ sudoedit /etc/frappe-monitor/monitor.yaml
 sudo systemctl restart frappe-monitor
 ```
 
-Browsers prompt for credentials on first request and cache them per session. Username is ignored — any value works as long as the password matches. `/healthz` stays open so external probes (load balancer, uptime monitor) work without credentials.
+Changing the password invalidates every existing signed session. The dashboard presents its own login view; sessions last seven days. HTTP basic auth remains available for curl/CI (username ignored). `/healthz` stays open for external probes.
 
 ## Optional: TLS via Caddy
 
@@ -165,7 +180,7 @@ sudo systemctl reload caddy
 
 Caddy provisions Let's Encrypt automatically. Open ports 80 + 443 on the host firewall and point your DNS at it.
 
-> **Auth caveat:** until Phase 7 ships built-in auth, the dashboard has no login. Restrict access by IP in the Caddyfile (the example shows the pattern) or only expose it on a private network / VPN.
+Set `auth.password` before exposing the service. A VPN or source-IP restriction in Caddy is still recommended as defense in depth. Keep `server.trusted_proxy_cidrs` limited to the actual proxy address/subnet so clients cannot spoof forwarding headers or the Secure-cookie decision.
 
 ## Upgrades
 
@@ -175,7 +190,22 @@ git pull
 sudo ./deploy/install.sh      # idempotent; rebuilds + restarts
 ```
 
-The script rebuilds the binary, atomically replaces `/usr/local/bin/frappe-monitor`, and `systemctl restart`s the service. Config and data are untouched. Downtime is one restart cycle (≤ 15s for clean shutdown + cold start).
+The script rebuilds the binary, atomically replaces `/usr/local/bin/frappe-monitor`, and restarts the service. Config and data are untouched. The post-start check calls `/healthz` on the port from `server.listen_addr`; there is no runtime port argument. If the candidate stack or monitor fails, the installer restores the last known-good service files and prior systemd state automatically. SQLite schema migrations are forward-only, so a database backup is still recommended before a major-version upgrade.
+
+The existing config is validated by the newly built candidate before the
+installed binary or units are replaced. You can run the same read-only check
+yourself:
+
+```bash
+sudo /usr/local/bin/frappe-monitor \
+  --config /etc/frappe-monitor/monitor.yaml --check-config
+```
+
+Generate a credential-safe, read-only production report before and after an upgrade:
+
+```bash
+sudo bash deploy/diagnose.sh | tee frappe-monitor-diagnostic.txt
+```
 
 ## Uninstall
 
@@ -208,6 +238,12 @@ The `frappe-monitor-stack.service` unit is still installed but disabled. The mon
 curl -s http://your-vm-host:8428/health
 curl -s http://your-loki-host:3100/ready
 ```
+
+This is also the smallest-footprint deployment: the monitor remains one
+CGO-free Go process with SQLite, while VictoriaMetrics and Loki run on an
+existing shared host. The normal all-in-one deployment is still bounded: the
+binary usually uses tens of megabytes and both backend containers have explicit
+CPU and memory caps. No process or agent is installed on monitored servers.
 
 ## What's next
 

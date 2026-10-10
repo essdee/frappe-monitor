@@ -23,6 +23,13 @@ MONITOR_PID=""
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok: $*"; }
 
+# Canonical's confined Docker Snap cannot open Compose files below arbitrary
+# source directories such as /mnt. The shell can, so feed the YAML over stdin
+# from its own directory. Relative bind mounts still resolve to this directory.
+compose_dev() {
+    (cd "$REPO_ROOT/deploy" && docker compose --project-name frappe-monitor -f - "$@" < docker-compose.dev.yml)
+}
+
 cleanup() {
     echo
     echo "==> tearing down"
@@ -36,7 +43,7 @@ cleanup() {
         wait "$MONITOR_PID" 2>/dev/null || true
     fi
     if [ "${KEEP_BACKENDS:-0}" != "1" ]; then
-        (cd "$REPO_ROOT" && docker compose -f deploy/docker-compose.dev.yml down >/dev/null 2>&1 || true)
+        compose_dev down >/dev/null 2>&1 || true
         echo "  ok: VM + Loki stopped (data volumes preserved)"
     else
         echo "  >> KEEP_BACKENDS=1 — left VM + Loki running"
@@ -53,7 +60,7 @@ echo "==> checking prerequisites"
 require() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 not found — install: $2"
 }
-require go     "https://go.dev/doc/install (need Go 1.25+)"
+require go     "https://go.dev/doc/install (need Go 1.26.5+)"
 require node   "https://nodejs.org or your distro (need 20+)"
 require npm    "ships with Node"
 require docker "https://www.docker.com/products/docker-desktop/ (or colima/orbstack on macOS)"
@@ -63,9 +70,12 @@ require curl   "your distro's package manager"
 require python3 "your distro's package manager (used to generate JSON for seeded log lines)"
 
 GO_VERSION=$(go env GOVERSION 2>/dev/null | sed 's/^go//')
-MAJOR_MINOR=$(echo "$GO_VERSION" | awk -F. '{print $1"."$2}')
-awk -v v="$MAJOR_MINOR" 'BEGIN { exit !(v+0 >= 1.25) }' \
-    || fail "Go $GO_VERSION too old — need ≥ 1.25"
+version_at_least() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
+version_at_least "$GO_VERSION" "1.26.5" \
+    || fail "Go $GO_VERSION too old — need ≥ 1.26.5"
+NODE_VERSION=$(node --version | sed 's/^v//')
+version_at_least "$NODE_VERSION" "20.19.0" \
+    || fail "Node $NODE_VERSION too old — need ≥ 20.19"
 ok "go $GO_VERSION, node $(node --version), docker $(docker --version | awk '{print $3}' | tr -d ,)"
 
 # ---------------------------------------------------------------------------
@@ -83,8 +93,8 @@ ok "binary at bin/monitor-server ($(du -h bin/monitor-server | cut -f1))"
 # 3) VictoriaMetrics + Loki
 # ---------------------------------------------------------------------------
 echo "==> starting VictoriaMetrics + Loki via docker compose"
-docker compose -f deploy/docker-compose.dev.yml up -d >/dev/null 2>&1 \
-    || fail "docker compose up failed; try 'docker compose -f deploy/docker-compose.dev.yml up' to see the error"
+compose_dev up -d >/dev/null 2>&1 \
+    || fail "docker compose up failed; run 'make vm-up' to see the error"
 
 for _ in $(seq 1 60); do
     if curl -fsS http://127.0.0.1:8428/health >/dev/null 2>&1 \
@@ -93,8 +103,8 @@ for _ in $(seq 1 60); do
     fi
     sleep 1
 done
-curl -fsS http://127.0.0.1:8428/health >/dev/null 2>&1 || fail "VictoriaMetrics never came up — try: docker compose -f deploy/docker-compose.dev.yml logs victoriametrics"
-curl -fsS http://127.0.0.1:3100/ready  >/dev/null 2>&1 || fail "Loki never came up — try: docker compose -f deploy/docker-compose.dev.yml logs loki"
+curl -fsS http://127.0.0.1:8428/health >/dev/null 2>&1 || fail "VictoriaMetrics never came up — run: make vm-logs"
+curl -fsS http://127.0.0.1:3100/ready  >/dev/null 2>&1 || fail "Loki never came up — run: make loki-logs"
 ok "VM (127.0.0.1:8428) + Loki (127.0.0.1:3100) healthy"
 
 # ---------------------------------------------------------------------------
@@ -127,7 +137,7 @@ logs:
 scheduler:
   default_interval_seconds: 86400
   max_parallel: 10
-  per_job_timeout_seconds: 30
+  per_job_timeout_seconds: 45
 EOF
 ok "hermetic config + DB at $TMPDIR/"
 

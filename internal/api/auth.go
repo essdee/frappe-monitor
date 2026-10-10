@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
 )
@@ -17,22 +18,11 @@ func authGate(password string) func(http.Handler) http.Handler {
 	if password == "" {
 		return func(next http.Handler) http.Handler { return next }
 	}
-	pwBytes := []byte(password)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 1. Cookie session (preferred — set by /login).
-			if c, err := r.Cookie(sessionCookieName); err == nil {
-				if validateSession(c.Value, password) {
-					next.ServeHTTP(w, r)
-					return
-				}
-			}
-			// 2. HTTP basic auth (for curl + automation).
-			if _, got, ok := r.BasicAuth(); ok {
-				if subtle.ConstantTimeCompare([]byte(got), pwBytes) == 1 {
-					next.ServeHTTP(w, r)
-					return
-				}
+			if requestAuthenticated(r, password) {
+				next.ServeHTTP(w, r)
+				return
 			}
 			// 3. Reject — JSON response, NO WWW-Authenticate so the
 			//    browser does not pop a dialog. SPA's fetch wrapper
@@ -42,6 +32,27 @@ func authGate(password string) func(http.Handler) http.Handler {
 			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 		})
 	}
+}
+
+func requestAuthenticated(r *http.Request, password string) bool {
+	if password == "" {
+		return true
+	}
+	// Cookie session is preferred; Basic auth remains available for CLI/API
+	// automation and for the public authentication-state endpoint.
+	if c, err := r.Cookie(sessionCookieName); err == nil && validateSession(c.Value, password) {
+		return true
+	}
+	if _, got, ok := r.BasicAuth(); ok && securePasswordEqual(got, password) {
+		return true
+	}
+	return false
+}
+
+func securePasswordEqual(got, want string) bool {
+	gotHash := sha256.Sum256([]byte(got))
+	wantHash := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(gotHash[:], wantHash[:]) == 1
 }
 
 // basicAuth is kept for backwards compatibility with existing tests.
